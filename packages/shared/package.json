@@ -1,0 +1,13 @@
+{
+  "name": "@fabtyna/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./money": "./src/money.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.6"
+  }
+}

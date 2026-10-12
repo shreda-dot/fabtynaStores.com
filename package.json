@@ -1,0 +1,13 @@
+{
+  "name": "fabtyna-stores",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.15.1",
+  "scripts": {
+    "build": "pnpm --filter @fabtyna/web build",
+    "dev": "pnpm --filter @fabtyna/web dev",
+    "lint": "pnpm --filter @fabtyna/web lint",
+    "test": "pnpm --filter @fabtyna/api test",
+    "typecheck": "pnpm -r typecheck"
+  }
+}

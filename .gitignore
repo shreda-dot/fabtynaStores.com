@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+**/node_modules/
+apps/api/generated/prisma/
+apps/web/.next/
+apps/web/out/
+coverage/
+*.tsbuildinfo
+*next/
+*dist 
+*apps/api/generated
+

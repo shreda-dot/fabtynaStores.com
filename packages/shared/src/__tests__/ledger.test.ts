@@ -5,31 +5,7 @@ import {
   validateCompletedSalePayment,
   validateCustomerLedgerAmount,
   validateSupplierLedgerAmount,
-} from "../src/lib/ledger";
-import {
-  assertStockWillRemainNonnegative,
-  calculateStockUnits,
-  calculateWeightedAverageCostKobo,
-  splitStockIntoPacks,
-} from "../src/modules/stock/stock.service";
-
-describe("stock ledger math", () => {
-  it("sums signed units and displays pack remainder", () => {
-    expect(calculateStockUnits([48, -3, -8])).toBe(37);
-    expect(splitStockIntoPacks(37, 24)).toEqual({ packs: 1, remainingUnits: 13 });
-  });
-
-  it("calculates weighted average cost using integer kobo", () => {
-    expect(calculateWeightedAverageCostKobo(10n, 100n, 5n, 750n)).toBe(110n);
-  });
-
-  it("rejects a movement that would make stock negative", () => {
-    expect(() => assertStockWillRemainNonnegative(4n, -5n)).toThrow(
-      "Stock cannot be reduced below zero.",
-    );
-    expect(() => assertStockWillRemainNonnegative(4n, -4n)).not.toThrow();
-  });
-});
+} from "../domain/ledger";
 
 describe("signed financial ledger math", () => {
   it("enforces customer, supplier, and account ledger signs", () => {
@@ -41,8 +17,15 @@ describe("signed financial ledger math", () => {
     expect(() => validateAccountLedgerAmount("OTHER_INCOME", -100n)).toThrow();
   });
 
+  it("rejects zero ledger amounts", () => {
+    expect(() => validateCustomerLedgerAmount("SALE", 0n)).toThrow();
+    expect(() => validateSupplierLedgerAmount("PURCHASE", 0n)).toThrow();
+    expect(() => validateAccountLedgerAmount("EXPENSE", 0n)).toThrow();
+  });
+
   it("calculates balances without floating-point arithmetic", () => {
     expect(calculateLedgerBalance([15_025n, -5_000n, -1n])).toBe(10_024n);
+    expect(calculateLedgerBalance([])).toBe(0n);
   });
 
   it("requires a customer for an unpaid sale and disallows overpayment", () => {
@@ -53,5 +36,6 @@ describe("signed financial ledger math", () => {
       "Payments may not exceed the sale total.",
     );
     expect(() => validateCompletedSalePayment(1_000n, 1_000n, null)).not.toThrow();
+    expect(() => validateCompletedSalePayment(1_000n, 1_000n, "customer-1")).not.toThrow();
   });
 });

@@ -106,17 +106,6 @@ enum StockAdjustmentStatus {
   VOIDED
 }
 
-enum StocktakeStatus {
-  DRAFT
-  COMPLETED
-  VOIDED
-}
-
-enum ContainerMovementDirection {
-  IN
-  OUT
-}
-
 // All money fields are integer kobo. Convert to naira only for display.
 // Customer ledger amounts are signed: SALE +, PAYMENT -, RETURN -.
 // Supplier ledger amounts are signed: PURCHASE +, PAYMENT -.
@@ -135,8 +124,6 @@ model AdminUser {
   sales              Sale[]
   stockTransfers     StockTransfer[]
   stockAdjustments   StockAdjustment[]
-  stocktakes         Stocktake[]
-  containerTransfers ContainerTransfer[]
   auditLogs          AuditLog[]
 
   @@map("admin_users")
@@ -162,8 +149,6 @@ model Product {
   transferLines      StockTransferLine[]
   adjustmentLines    StockAdjustmentLine[]
   returnLines        SaleReturnLine[]
-  stocktakeLines     StocktakeLine[]
-  containerTypes     ContainerType[]
 
   // A matching partial unique index on (sku) WHERE deletedAt IS NULL is
   // created in a hand-written SQL migration; Prisma cannot express it here.
@@ -186,7 +171,6 @@ model Supplier {
   purchases          Purchase[]
   payments           SupplierPayment[]
   ledgerEntries      SupplierLedgerEntry[]
-  containerMovements ContainerMovement[]
 
   @@index([name])
   @@index([deletedAt])
@@ -334,7 +318,6 @@ model StockMovement {
   productId        String
   location         StockLocation
   type             StockMovementType
-  direction        TransferDirection?
   quantityUnits    Int
   unitCostKobo     BigInt
   purchaseLineId   String?
@@ -342,7 +325,6 @@ model StockMovement {
   transferLegId    String?
   adjustmentLineId String?
   returnLineId     String?
-  stocktakeLineId  String?
   reversesEntryId  String?
   occurredAt       DateTime             @default(now())
   createdAt        DateTime             @default(now())
@@ -352,7 +334,6 @@ model StockMovement {
   transferLeg      StockTransferLeg?    @relation(fields: [transferLegId], references: [id], onDelete: Restrict)
   adjustmentLine   StockAdjustmentLine? @relation(fields: [adjustmentLineId], references: [id], onDelete: Restrict)
   returnLine       SaleReturnLine?      @relation(fields: [returnLineId], references: [id], onDelete: Restrict)
-  stocktakeLine    StocktakeLine?       @relation(fields: [stocktakeLineId], references: [id], onDelete: Restrict)
   reversesEntry    StockMovement?       @relation("StockMovementReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
   reversedBy       StockMovement[]      @relation("StockMovementReversals")
 
@@ -363,7 +344,6 @@ model StockMovement {
   @@index([transferLegId])
   @@index([adjustmentLineId])
   @@index([returnLineId])
-  @@index([stocktakeLineId])
   @@index([reversesEntryId])
   @@map("stock_movements")
 }
@@ -387,7 +367,6 @@ model Sale {
   payments              SalePayment[]
   customerLedgerEntries CustomerLedgerEntry[]
   returns               SaleReturn[]
-  containerMovements    ContainerMovement[]
 
   // At completion, payment total must not exceed totalKobo. If it is less,
   // customerId is required. This is a transactional service rule, not a
@@ -567,7 +546,6 @@ model AccountLedgerEntry {
   expenseId         String?
   otherIncomeId     String?
   accountTransferId String?
-  transferDirection TransferDirection?
   customerRefundId  String?
   reversesEntryId   String?
   note              String?
@@ -589,7 +567,7 @@ model AccountLedgerEntry {
   @@index([supplierPaymentId])
   @@index([expenseId])
   @@index([otherIncomeId])
-  @@index([accountTransferId, transferDirection])
+  @@index([accountTransferId])
   @@index([customerRefundId])
   @@index([reversesEntryId])
   @@map("account_ledger_entries")
@@ -700,7 +678,6 @@ model SaleReturn {
   lines                 SaleReturnLine[]
   customerLedgerEntries CustomerLedgerEntry[]
   refunds               CustomerRefund[]
-  containerMovements    ContainerMovement[]
 
   @@index([returnedAt])
   @@map("sale_returns")
@@ -739,85 +716,6 @@ model Counter {
   // Invoice and purchase references are allocated atomically in the same
   // transaction as the corresponding document.
   @@map("counters")
-}
-
-model Stocktake {
-  id          String          @id @default(cuid())
-  createdById String
-  status      StocktakeStatus @default(DRAFT)
-  notes       String?
-  startedAt   DateTime        @default(now())
-  completedAt DateTime?
-  createdBy   AdminUser       @relation(fields: [createdById], references: [id], onDelete: Restrict)
-  lines       StocktakeLine[]
-
-  @@index([startedAt])
-  @@map("stocktakes")
-}
-
-model StocktakeLine {
-  id              String          @id @default(cuid())
-  stocktakeId     String
-  productId       String
-  location        StockLocation
-  expectedUnits   Int
-  countedUnits    Int
-  differenceUnits Int
-  stocktake       Stocktake       @relation(fields: [stocktakeId], references: [id], onDelete: Restrict)
-  product         Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
-  stockMovements  StockMovement[]
-
-  @@unique([stocktakeId, productId, location])
-  @@index([productId, location])
-  @@map("stocktake_lines")
-}
-
-model ContainerType {
-  id                 String              @id @default(cuid())
-  productId          String
-  name               String
-  unit               Unit
-  depositPerUnitKobo BigInt              @default(0)
-  product            Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
-  movements          ContainerMovement[]
-
-  @@unique([productId, name])
-  @@map("container_types")
-}
-
-model ContainerTransfer {
-  id            String              @id @default(cuid())
-  createdById   String
-  from          StockLocation
-  to            StockLocation
-  transferredAt DateTime            @default(now())
-  createdBy     AdminUser           @relation(fields: [createdById], references: [id], onDelete: Restrict)
-  movements     ContainerMovement[]
-
-  @@index([transferredAt])
-  @@map("container_transfers")
-}
-
-model ContainerMovement {
-  id              String                     @id @default(cuid())
-  containerTypeId String
-  location        StockLocation
-  quantity        Int
-  direction       ContainerMovementDirection
-  supplierId      String?
-  saleId          String?
-  saleReturnId    String?
-  transferId      String?
-  occurredAt      DateTime                   @default(now())
-  containerType   ContainerType              @relation(fields: [containerTypeId], references: [id], onDelete: Restrict)
-  supplier        Supplier?                  @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  sale            Sale?                      @relation(fields: [saleId], references: [id], onDelete: Restrict)
-  saleReturn      SaleReturn?                @relation(fields: [saleReturnId], references: [id], onDelete: Restrict)
-  transfer        ContainerTransfer?         @relation(fields: [transferId], references: [id], onDelete: Restrict)
-
-  @@index([containerTypeId, location, occurredAt])
-  @@index([supplierId])
-  @@map("container_movements")
 }
 
 model AuditLog {

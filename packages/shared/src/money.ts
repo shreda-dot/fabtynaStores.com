@@ -18,5 +18,33 @@ export function formatNaira(amountKobo: KoboAmount, locale = "en-NG"): string {
       ?.value ?? ".";
   const formattedNaira = parts.map((part) => part.value).join("");
 
-  return `${formattedNaira}${decimalSeparator}${fraction}`;
+  const signedNaira = negative && naira === 0n ? `-${formattedNaira}` : formattedNaira;
+  return `${signedNaira}${decimalSeparator}${fraction}`;
+}
+
+const MONEY_INPUT_PATTERN =
+  /^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$|^\.\d{1,2}$/;
+
+export function parseMoneyInputToKobo(input: string): string {
+  const trimmed = input.trim();
+
+  if (trimmed === "") {
+    throw new RangeError("Amount must not be empty.");
+  }
+  if (trimmed.includes("-")) {
+    throw new RangeError("Amount must not be negative.");
+  }
+  if (!MONEY_INPUT_PATTERN.test(trimmed)) {
+    throw new RangeError(
+      "Amount must be a valid number with at most 2 decimal places.",
+    );
+  }
+
+  const withoutCommas = trimmed.replace(/,/g, "");
+  const [nairaPart, fractionPart = ""] = withoutCommas.split(".");
+  const naira = nairaPart === "" ? 0n : BigInt(nairaPart);
+  const fraction = BigInt(fractionPart.padEnd(2, "0").slice(0, 2));
+  const kobo = naira * 100n + fraction;
+
+  return kobo.toString();
 }

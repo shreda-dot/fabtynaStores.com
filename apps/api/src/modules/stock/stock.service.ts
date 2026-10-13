@@ -1,58 +1,17 @@
 import type { Prisma } from "../../../generated/prisma/client";
+import {
+  assertStockWillRemainNonnegative,
+  calculateStockUnits,
+  calculateWeightedAverageCostKobo,
+  splitStockIntoPacks,
+} from "@fabtyna/shared";
 
-export function calculateStockUnits(movementQuantities: readonly number[]): number {
-  return movementQuantities.reduce((stock, quantity) => stock + quantity, 0);
-}
-
-export function splitStockIntoPacks(
-  stockUnits: number,
-  unitsPerPack: number,
-): { packs: number; remainingUnits: number } {
-  if (!Number.isSafeInteger(stockUnits) || stockUnits < 0) {
-    throw new RangeError("Stock units must be a nonnegative safe integer.");
-  }
-  if (!Number.isSafeInteger(unitsPerPack) || unitsPerPack <= 0) {
-    throw new RangeError("Units per pack must be a positive safe integer.");
-  }
-
-  return {
-    packs: Math.floor(stockUnits / unitsPerPack),
-    remainingUnits: stockUnits % unitsPerPack,
-  };
-}
-
-export function calculateWeightedAverageCostKobo(
-  existingUnits: bigint,
-  existingAverageCostKobo: bigint,
-  receivedUnits: bigint,
-  receivedTotalCostKobo: bigint,
-): bigint {
-  if (
-    existingUnits < 0n ||
-    existingAverageCostKobo < 0n ||
-    receivedUnits <= 0n ||
-    receivedTotalCostKobo < 0n
-  ) {
-    throw new RangeError("Weighted-average cost inputs are outside their valid ranges.");
-  }
-
-  const totalUnits = existingUnits + receivedUnits;
-  const totalCost =
-    existingUnits * existingAverageCostKobo + receivedTotalCostKobo;
-  return (totalCost + totalUnits / 2n) / totalUnits;
-}
-
-export function assertStockWillRemainNonnegative(
-  currentUnits: bigint,
-  quantityDeltaUnits: bigint,
-): void {
-  if (quantityDeltaUnits === 0n) {
-    throw new RangeError("Stock movements must change stock by a nonzero quantity.");
-  }
-  if (currentUnits + quantityDeltaUnits < 0n) {
-    throw new RangeError("Stock cannot be reduced below zero.");
-  }
-}
+export {
+  assertStockWillRemainNonnegative,
+  calculateStockUnits,
+  calculateWeightedAverageCostKobo,
+  splitStockIntoPacks,
+};
 
 // The caller must invoke this inside the same transaction that writes the
 // movement. Locking the product row serializes stock changes for that product;

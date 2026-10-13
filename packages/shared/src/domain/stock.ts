@@ -1,7 +1,7 @@
-import type { StockLocation, StockMovement } from "./types";
+import type { StockLocation, StockMovement } from "./types.js";
 
 export function calculateStockUnits(
-  movements: readonly Array<Pick<StockMovement, "quantityUnits">>,
+  movements: ReadonlyArray<Pick<StockMovement, "quantityUnits">>,
 ): number {
   return movements.reduce((stock, movement) => stock + movement.quantityUnits, 0);
 }

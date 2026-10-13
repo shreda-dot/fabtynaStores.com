@@ -8,10 +8,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./money": "./src/money.ts",
-    "./domain": "./src/domain/index.ts",
-    "./lagos-time": "./src/lagos-time.ts"
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "zod": "^4.6.6"

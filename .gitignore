@@ -14,3 +14,4 @@ apps/api/.agents/
 apps/api/.claude/
 apps/api/.windsurf/
 apps/api/skills-lock.json
+docs/PROJECT_RULES.md

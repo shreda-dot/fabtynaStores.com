@@ -1,7 +1,7 @@
 import type {
   CustomerLedgerEntryType,
   SupplierLedgerEntryType,
-} from "./types";
+} from "./types.js";
 
 export type AccountLedgerType =
   | "SALE_PAYMENT"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatNaira, parseMoneyInputToKobo } from "../money";
+import { formatNaira, parseMoneyInputToKobo } from "../money.js";
 
 describe("parseMoneyInputToKobo", () => {
   it("parses whole naira into kobo", () => {

@@ -1,5 +1,16 @@
 import type { StockLocation, StockMovement } from "./types.js";
 
+export type StockMovementReversal = Omit<
+  StockMovement,
+  "id" | "quantityUnits" | "reversesEntryId" | "occurredAt" | "createdAt"
+> & {
+  id: string;
+  quantityUnits: number;
+  reversesEntryId: string;
+  occurredAt: Date;
+  createdAt: Date;
+};
+
 export function calculateStockUnits(
   movements: ReadonlyArray<Pick<StockMovement, "quantityUnits">>,
 ): number {
@@ -97,5 +108,38 @@ export function createTransferLegPair(
   return {
     out: { location: from, direction: "OUT" },
     in: { location: to, direction: "IN" },
+  };
+}
+
+export function buildStockMovementReversal(
+  target: StockMovement,
+  existingRows: readonly StockMovement[],
+  reversalId: string,
+  reversedAt: Date,
+): StockMovementReversal {
+  if (target.reversesEntryId !== null) {
+    throw new RangeError("A reversal movement cannot itself be reversed.");
+  }
+  if (existingRows.some((movement) => movement.reversesEntryId === target.id)) {
+    throw new RangeError("This stock movement has already been reversed.");
+  }
+  if (
+    !reversalId ||
+    reversalId === target.id ||
+    existingRows.some((movement) => movement.id === reversalId)
+  ) {
+    throw new RangeError("Reversal id must be nonempty and unique.");
+  }
+  if (!Number.isFinite(reversedAt.getTime())) {
+    throw new RangeError("Reversal date must be valid.");
+  }
+
+  return {
+    ...target,
+    id: reversalId,
+    quantityUnits: -target.quantityUnits,
+    reversesEntryId: target.id,
+    occurredAt: reversedAt,
+    createdAt: reversedAt,
   };
 }

@@ -30,7 +30,6 @@ enum StockMovementType {
   TRANSFER
   ADJUSTMENT
   RETURN
-  STOCKTAKE
 }
 
 enum TransferDirection {
@@ -107,9 +106,11 @@ enum StockAdjustmentStatus {
 }
 
 // All money fields are integer kobo. Convert to naira only for display.
-// Customer ledger amounts are signed: SALE +, PAYMENT -, RETURN -.
+// Customer ledger amounts are signed: SALE +, PAYMENT -, RETURN -,
+// CUSTOMER_REFUND +. A customer refund increases the customer's balance owed.
 // Supplier ledger amounts are signed: PURCHASE +, PAYMENT -.
-// Account ledger amounts are signed: money in +, money out -.
+// Account ledger amounts are signed: money in +, money out -, including
+// CUSTOMER_REFUND as money out.
 //
 // Partial unique indexes, sign/source CHECK constraints, and immutable-ledger
 // triggers are intentionally installed by hand-written SQL migrations. No
@@ -436,6 +437,9 @@ model CustomerPayment {
   @@map("customer_payments")
 }
 
+// A reversal row has the same type and source ids as the original, and the
+// exact negated amount; reversesEntryId points to that original. Each row can
+// be reversed at most once, and a reversal cannot itself be reversed.
 model CustomerLedgerEntry {
   id                String                  @id @default(cuid())
   customerId        String
@@ -490,6 +494,9 @@ model SupplierPayment {
   @@map("supplier_payments")
 }
 
+// Reversal convention: keep type and source ids, negate amount exactly, and
+// set reversesEntryId to the original. A row can be reversed once only; a
+// reversal cannot itself be reversed.
 model SupplierLedgerEntry {
   id                String                  @id @default(cuid())
   supplierId        String
@@ -535,6 +542,9 @@ model Account {
   @@map("accounts")
 }
 
+// Reversal convention: keep type and source ids, negate amount exactly, and
+// set reversesEntryId to the original. A row can be reversed once only; a
+// reversal cannot itself be reversed.
 model AccountLedgerEntry {
   id                String               @id @default(cuid())
   accountId         String

@@ -9,14 +9,15 @@ export type StockMovementType =
   | "SALE"
   | "TRANSFER"
   | "ADJUSTMENT"
-  | "RETURN"
-  | "STOCKTAKE";
+  | "RETURN";
 
 export type TransferDirection = "IN" | "OUT";
 
 export type PurchaseStatus = "DRAFT" | "RECEIVED" | "VOIDED";
 
 export type SaleStatus = "DRAFT" | "COMPLETED" | "VOIDED";
+
+export type CustomerType = "WHOLESALE" | "RETAIL";
 
 export type SupplierLedgerEntryType = "PURCHASE" | "PAYMENT" | "ADJUSTMENT";
 
@@ -27,12 +28,25 @@ export type CustomerLedgerEntryType =
   | "CUSTOMER_REFUND"
   | "ADJUSTMENT";
 
+export type AccountEntryType =
+  | "SALE_PAYMENT"
+  | "CUSTOMER_PAYMENT"
+  | "SUPPLIER_PAYMENT"
+  | "EXPENSE"
+  | "CUSTOMER_REFUND"
+  | "TRANSFER_IN"
+  | "TRANSFER_OUT"
+  | "OWNER_CAPITAL"
+  | "OWNER_DRAWING"
+  | "OTHER_INCOME"
+  | "BANK_OR_POS_CHARGE"
+  | "ADJUSTMENT";
+
 export type StockAdjustmentStatus = "COMPLETED" | "VOIDED";
 
-export interface AdminUser {
+export interface AdminUserPublic {
   id: string;
   email: string;
-  passwordHash: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -68,7 +82,7 @@ export interface Supplier {
 export interface Customer {
   id: string;
   name: string;
-  type: "WHOLESALE" | "RETAIL";
+  type: CustomerType;
   creditLimitKobo: bigint;
   phone: string | null;
   email: string | null;
@@ -174,5 +188,49 @@ export interface SupplierLedgerEntry {
   supplierPaymentId: string | null;
   reversesEntryId: string | null;
   note: string | null;
+  occurredAt: Date;
+}
+
+export interface CustomerLedgerEntry {
+  id: string;
+  customerId: string;
+  type: CustomerLedgerEntryType;
+  amountKobo: bigint;
+  saleId: string | null;
+  salePaymentId: string | null;
+  customerPaymentId: string | null;
+  saleReturnId: string | null;
+  customerRefundId: string | null;
+  reversesEntryId: string | null;
+  note: string | null;
+  occurredAt: Date;
+}
+
+export interface AccountLedgerEntry {
+  id: string;
+  accountId: string;
+  type: AccountEntryType;
+  amountKobo: bigint;
+  salePaymentId: string | null;
+  customerPaymentId: string | null;
+  supplierPaymentId: string | null;
+  expenseId: string | null;
+  otherIncomeId: string | null;
+  accountTransferId: string | null;
+  customerRefundId: string | null;
+  reversesEntryId: string | null;
+  note: string | null;
+  occurredAt: Date;
+}
+
+export interface AuditLog {
+  id: string;
+  actorId: string | null;
+  action: string;
+  entityType: string;
+  entityId: string;
+  beforeData: unknown | null;
+  afterData: unknown | null;
+  metadata: unknown | null;
   occurredAt: Date;
 }

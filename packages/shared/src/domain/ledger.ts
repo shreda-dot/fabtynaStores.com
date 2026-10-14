@@ -1,21 +1,13 @@
 import type {
+  AccountEntryType,
   CustomerLedgerEntryType,
+  CustomerLedgerEntry,
+  AccountLedgerEntry,
+  SupplierLedgerEntry,
   SupplierLedgerEntryType,
 } from "./types.js";
 
-export type AccountLedgerType =
-  | "SALE_PAYMENT"
-  | "CUSTOMER_PAYMENT"
-  | "SUPPLIER_PAYMENT"
-  | "EXPENSE"
-  | "CUSTOMER_REFUND"
-  | "TRANSFER_IN"
-  | "TRANSFER_OUT"
-  | "OWNER_CAPITAL"
-  | "OWNER_DRAWING"
-  | "OTHER_INCOME"
-  | "BANK_OR_POS_CHARGE"
-  | "ADJUSTMENT";
+export type AccountLedgerType = AccountEntryType;
 
 type SignRule = "positive" | "negative" | "either";
 
@@ -23,7 +15,7 @@ const customerLedgerSigns: Record<CustomerLedgerEntryType, SignRule> = {
   SALE: "positive",
   PAYMENT: "negative",
   RETURN: "negative",
-  CUSTOMER_REFUND: "negative",
+  CUSTOMER_REFUND: "positive",
   ADJUSTMENT: "either",
 };
 
@@ -103,4 +95,51 @@ export function validateCompletedSalePayment(
   if (paidKobo < totalKobo && !customerId) {
     throw new RangeError("A customer is required when a sale is not fully paid.");
   }
+}
+
+type LedgerReversalTarget =
+  | CustomerLedgerEntry
+  | SupplierLedgerEntry
+  | AccountLedgerEntry;
+
+type LedgerReversal<T extends LedgerReversalTarget> = Omit<
+  T,
+  "id" | "amountKobo" | "reversesEntryId" | "occurredAt"
+> & {
+  id: string;
+  amountKobo: bigint;
+  reversesEntryId: string;
+  occurredAt: Date;
+};
+
+export function buildLedgerReversal<T extends LedgerReversalTarget>(
+  target: T,
+  existingRows: readonly LedgerReversalTarget[],
+  reversalId: string,
+  occurredAt: Date,
+): LedgerReversal<T> {
+  if (target.reversesEntryId !== null) {
+    throw new RangeError("A reversal entry cannot itself be reversed.");
+  }
+  if (existingRows.some((entry) => entry.reversesEntryId === target.id)) {
+    throw new RangeError("This ledger entry has already been reversed.");
+  }
+  if (
+    !reversalId ||
+    reversalId === target.id ||
+    existingRows.some((entry) => entry.id === reversalId)
+  ) {
+    throw new RangeError("Reversal id must be nonempty and unique.");
+  }
+  if (!Number.isFinite(occurredAt.getTime())) {
+    throw new RangeError("Reversal date must be valid.");
+  }
+
+  return {
+    ...target,
+    id: reversalId,
+    amountKobo: -target.amountKobo,
+    reversesEntryId: target.id,
+    occurredAt,
+  };
 }

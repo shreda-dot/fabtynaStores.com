@@ -1,6 +1,5 @@
 import { z } from "zod";
-import type { StockMovementDto } from "../dtos.js";
-import { idSchema, isoDateTimeSchema, nonnegativeKoboStringSchema } from "./common.js";
+import { idSchema, isoDateTimeSchema, nonnegativeKoboStringSchema } from "./common.ts";
 
 export const stockLocationSchema = z.enum([
   "WAREHOUSE",
@@ -16,7 +15,7 @@ export const stockMovementTypeSchema = z.enum([
   "RETURN",
 ]);
 
-export const stockMovementDtoSchema: z.ZodType<StockMovementDto> = z
+export const stockMovementDtoSchema = z
   .object({
     id: idSchema,
     productId: idSchema,

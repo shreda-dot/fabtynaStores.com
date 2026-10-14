@@ -1,21 +1,12 @@
 import { z } from "zod";
-import type {
-  AdminUserPublicDto,
-  AuditLogDto,
-  StockAdjustmentDto,
-  StockAdjustmentLineDto,
-  StockTransferDto,
-  StockTransferLineDto,
-  StockTransferLegDto,
-} from "../dtos.js";
 import {
   idSchema,
   isoDateTimeSchema,
   nonnegativeKoboStringSchema,
-} from "./common.js";
-import { stockLocationSchema } from "./stock.js";
+} from "./common.ts";
+import { stockLocationSchema } from "./stock.ts";
 
-export const adminUserPublicDtoSchema: z.ZodType<AdminUserPublicDto> = z
+export const adminUserPublicDtoSchema = z
   .object({
     id: idSchema,
     email: z.string().email(),
@@ -24,21 +15,21 @@ export const adminUserPublicDtoSchema: z.ZodType<AdminUserPublicDto> = z
   })
   .strict();
 
-export const auditLogDtoSchema: z.ZodType<AuditLogDto> = z
+export const auditLogDtoSchema = z
   .object({
     id: idSchema,
     actorId: idSchema.nullable(),
     action: z.string(),
     entityType: z.string(),
     entityId: idSchema,
-    beforeData: z.unknown().nullable(),
-    afterData: z.unknown().nullable(),
-    metadata: z.unknown().nullable(),
+    beforeData: z.unknown(),
+    afterData: z.unknown(),
+    metadata: z.unknown(),
     occurredAt: isoDateTimeSchema,
   })
   .strict();
 
-export const stockTransferDtoSchema: z.ZodType<StockTransferDto> = z
+export const stockTransferDtoSchema = z
   .object({
     id: idSchema,
     createdById: idSchema,
@@ -50,7 +41,7 @@ export const stockTransferDtoSchema: z.ZodType<StockTransferDto> = z
   })
   .strict();
 
-export const stockTransferLineDtoSchema: z.ZodType<StockTransferLineDto> = z
+export const stockTransferLineDtoSchema = z
   .object({
     id: idSchema,
     transferId: idSchema,
@@ -59,7 +50,7 @@ export const stockTransferLineDtoSchema: z.ZodType<StockTransferLineDto> = z
   })
   .strict();
 
-export const stockTransferLegDtoSchema: z.ZodType<StockTransferLegDto> = z
+export const stockTransferLegDtoSchema = z
   .object({
     id: idSchema,
     transferLineId: idSchema,
@@ -68,7 +59,7 @@ export const stockTransferLegDtoSchema: z.ZodType<StockTransferLegDto> = z
   })
   .strict();
 
-export const stockAdjustmentDtoSchema: z.ZodType<StockAdjustmentDto> = z
+export const stockAdjustmentDtoSchema = z
   .object({
     id: idSchema,
     createdById: idSchema,
@@ -79,7 +70,7 @@ export const stockAdjustmentDtoSchema: z.ZodType<StockAdjustmentDto> = z
   })
   .strict();
 
-export const stockAdjustmentLineDtoSchema: z.ZodType<StockAdjustmentLineDto> = z
+export const stockAdjustmentLineDtoSchema = z
   .object({
     id: idSchema,
     adjustmentId: idSchema,

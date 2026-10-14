@@ -229,8 +229,8 @@ export interface AuditLog {
   action: string;
   entityType: string;
   entityId: string;
-  beforeData: unknown | null;
-  afterData: unknown | null;
-  metadata: unknown | null;
+  beforeData: unknown;
+  afterData: unknown;
   occurredAt: Date;
+  metadata: unknown;
 }

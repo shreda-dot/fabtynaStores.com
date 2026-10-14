@@ -1,14 +1,5 @@
 import { z } from "zod";
-import type {
-  AccountLedgerEntryDto,
-  CustomerLedgerEntryDto,
-  SupplierLedgerEntryDto,
-} from "../dtos.js";
-import {
-  idSchema,
-  isoDateTimeSchema,
-  signedKoboStringSchema,
-} from "./common.js";
+import { idSchema, isoDateTimeSchema, signedKoboStringSchema } from "./common.ts";
 
 export const customerLedgerEntryTypeSchema = z.enum([
   "SALE",
@@ -39,7 +30,7 @@ export const accountLedgerEntryTypeSchema = z.enum([
   "ADJUSTMENT",
 ]);
 
-export const customerLedgerEntryDtoSchema: z.ZodType<CustomerLedgerEntryDto> = z
+export const customerLedgerEntryDtoSchema = z
   .object({
     id: idSchema,
     customerId: idSchema,
@@ -56,7 +47,7 @@ export const customerLedgerEntryDtoSchema: z.ZodType<CustomerLedgerEntryDto> = z
   })
   .strict();
 
-export const supplierLedgerEntryDtoSchema: z.ZodType<SupplierLedgerEntryDto> = z
+export const supplierLedgerEntryDtoSchema = z
   .object({
     id: idSchema,
     supplierId: idSchema,
@@ -70,7 +61,7 @@ export const supplierLedgerEntryDtoSchema: z.ZodType<SupplierLedgerEntryDto> = z
   })
   .strict();
 
-export const accountLedgerEntryDtoSchema: z.ZodType<AccountLedgerEntryDto> = z
+export const accountLedgerEntryDtoSchema = z
   .object({
     id: idSchema,
     accountId: idSchema,

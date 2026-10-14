@@ -1,14 +1,13 @@
 import { z } from "zod";
-import type { ProductDto } from "../dtos.js";
 import {
   idSchema,
   isoDateTimeSchema,
   nonnegativeKoboStringSchema,
-} from "./common.js";
+} from "./common.ts";
 
 export const productCategorySchema = z.enum(["BEER", "SOFT_DRINK", "OTHER"]);
 
-export const productDtoSchema: z.ZodType<ProductDto> = z
+export const productDtoSchema = z
   .object({
     id: idSchema,
     name: z.string(),

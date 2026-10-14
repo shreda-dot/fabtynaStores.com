@@ -5,6 +5,7 @@ import { Menu, Moon, Sun } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useUIStore } from "@/stores/ui-store";
 import { navItems } from "./nav-items";
+import { DemoDataReset } from "./demo-data-reset";
 
 export function TopBar() {
   const { resolvedTheme, setTheme } = useTheme();
@@ -30,6 +31,7 @@ export function TopBar() {
       </h1>
 
       <div className="flex shrink-0 items-center gap-2">
+        <DemoDataReset />
         <button
           type="button"
           onClick={() => setTheme(isDark ? "light" : "dark")}

@@ -4,9 +4,9 @@ import type {
   CustomerLedgerEntry,
   StockMovement,
   SupplierLedgerEntry,
-} from "../domain/types.js";
-import { buildLedgerReversal } from "../domain/ledger.js";
-import { buildStockMovementReversal } from "../domain/stock.js";
+} from "../domain/types.ts";
+import { buildLedgerReversal } from "../domain/ledger.ts";
+import { buildStockMovementReversal } from "../domain/stock.ts";
 
 const originalAt = new Date("2026-10-13T10:00:00.000Z");
 const reversedAt = new Date("2026-10-13T11:00:00.000Z");

@@ -1,9 +1,10 @@
-export { formatNaira, parseMoneyInputToKobo } from "./money.js";
-export type { KoboAmount } from "./money.js";
+export { formatNaira, parseMoneyInputToKobo } from "./money.ts";
+export type { KoboAmount } from "./money.ts";
 
-export * from "./domain/types.js";
-export * from "./domain/stock.js";
-export * from "./domain/ledger.js";
-export * from "./lagos-time.js";
-export * from "./dtos.js";
-export * from "./schemas/index.js";
+export * from "./domain/types.ts";
+export * from "./domain/stock.ts";
+export * from "./domain/ledger.ts";
+export * from "./lagos-time.ts";
+export * from "./dtos.ts";
+export * from "./dto-conversions.ts";
+export * from "./schemas/index.ts";

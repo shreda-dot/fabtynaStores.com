@@ -1,70 +1,42 @@
-import type {
-  AccountLedgerEntry,
-  AdminUserPublic,
-  AuditLog,
-  Customer,
-  CustomerLedgerEntry,
-  Product,
-  Purchase,
-  PurchaseLine,
-  StockAdjustment,
-  StockAdjustmentLine,
-  StockMovement,
-  StockTransfer,
-  StockTransferLine,
-  StockTransferLeg,
-  Supplier,
-  SupplierLedgerEntry,
-} from "./domain/types.js";
+import type { z } from "zod";
+import {
+  accountLedgerEntryDtoSchema,
+  adminUserPublicDtoSchema,
+  auditLogDtoSchema,
+  customerDtoSchema,
+  customerLedgerEntryDtoSchema,
+  productDtoSchema,
+  purchaseDtoSchema,
+  purchaseLineDtoSchema,
+  purchaseReceiveDtoSchema,
+  stockAdjustmentDtoSchema,
+  stockAdjustmentLineDtoSchema,
+  stockMovementDtoSchema,
+  stockTransferDtoSchema,
+  stockTransferLegDtoSchema,
+  stockTransferLineDtoSchema,
+  supplierDtoSchema,
+  supplierLedgerEntryDtoSchema,
+  createProductDtoSchema,
+  createSupplierDtoSchema,
+} from "./schemas/index.ts";
 
-export type SerializedDto<T> = {
-  [Key in keyof T]: T[Key] extends bigint
-    ? string
-    : T[Key] extends Date | null
-      ? string | Exclude<T[Key], Date>
-      : T[Key];
-};
-
-export type AdminUserPublicDto = SerializedDto<AdminUserPublic>;
-export type AuditLogDto = SerializedDto<AuditLog>;
-export type ProductDto = SerializedDto<Product>;
-export type SupplierDto = SerializedDto<Supplier>;
-export type CustomerDto = SerializedDto<Customer>;
-export type PurchaseDto = SerializedDto<Purchase>;
-export type PurchaseLineDto = SerializedDto<PurchaseLine>;
-export type StockTransferDto = SerializedDto<StockTransfer>;
-export type StockTransferLineDto = SerializedDto<StockTransferLine>;
-export type StockTransferLegDto = SerializedDto<StockTransferLeg>;
-export type StockAdjustmentDto = SerializedDto<StockAdjustment>;
-export type StockAdjustmentLineDto = SerializedDto<StockAdjustmentLine>;
-export type StockMovementDto = SerializedDto<StockMovement>;
-export type CustomerLedgerEntryDto = SerializedDto<CustomerLedgerEntry>;
-export type SupplierLedgerEntryDto = SerializedDto<SupplierLedgerEntry>;
-export type AccountLedgerEntryDto = SerializedDto<AccountLedgerEntry>;
-
-export type CreateProductDto = {
-  name: string;
-  sku: string | null;
-  category: Product["category"];
-  packName: string;
-  unitsPerPack: number;
-  retailPriceKobo: string;
-  wholesalePriceKobo: string;
-  reorderLevelUnits: number;
-};
-
-export type CreateSupplierDto = Pick<
-  Supplier,
-  "name" | "phone" | "email" | "address" | "notes"
->;
-
-export type PurchaseReceiveLineDto = {
-  purchaseLineId: string;
-  quantityUnits: number;
-  lineTotalKobo: string;
-};
-
-export type PurchaseReceiveDto = {
-  lines: PurchaseReceiveLineDto[];
-  receivedAt?: string;
-};
+export type AdminUserPublicDto = z.infer<typeof adminUserPublicDtoSchema>;
+export type AuditLogDto = z.infer<typeof auditLogDtoSchema>;
+export type ProductDto = z.infer<typeof productDtoSchema>;
+export type SupplierDto = z.infer<typeof supplierDtoSchema>;
+export type CustomerDto = z.infer<typeof customerDtoSchema>;
+export type PurchaseDto = z.infer<typeof purchaseDtoSchema>;
+export type PurchaseLineDto = z.infer<typeof purchaseLineDtoSchema>;
+export type StockTransferDto = z.infer<typeof stockTransferDtoSchema>;
+export type StockTransferLineDto = z.infer<typeof stockTransferLineDtoSchema>;
+export type StockTransferLegDto = z.infer<typeof stockTransferLegDtoSchema>;
+export type StockAdjustmentDto = z.infer<typeof stockAdjustmentDtoSchema>;
+export type StockAdjustmentLineDto = z.infer<typeof stockAdjustmentLineDtoSchema>;
+export type StockMovementDto = z.infer<typeof stockMovementDtoSchema>;
+export type CustomerLedgerEntryDto = z.infer<typeof customerLedgerEntryDtoSchema>;
+export type SupplierLedgerEntryDto = z.infer<typeof supplierLedgerEntryDtoSchema>;
+export type AccountLedgerEntryDto = z.infer<typeof accountLedgerEntryDtoSchema>;
+export type PurchaseReceiveDto = z.infer<typeof purchaseReceiveDtoSchema>;
+export type CreateProductDto = z.infer<typeof createProductDtoSchema>;
+export type CreateSupplierDto = z.infer<typeof createSupplierDtoSchema>;

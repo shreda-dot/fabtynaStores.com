@@ -7,7 +7,7 @@ import {
   formatStockUnits,
   splitStockIntoPacks,
   validateAdjustmentLine,
-} from "../domain/stock.js";
+} from "../domain/stock.ts";
 
 describe("stock levels from movements", () => {
   it("sums signed units across movements", () => {

@@ -5,7 +5,7 @@ import {
   validateCompletedSalePayment,
   validateCustomerLedgerAmount,
   validateSupplierLedgerAmount,
-} from "../domain/ledger.js";
+} from "../domain/ledger.ts";
 
 describe("signed financial ledger math", () => {
   it("enforces customer, supplier, and account ledger signs", () => {

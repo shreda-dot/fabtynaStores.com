@@ -1,4 +1,4 @@
-import type { StockLocation, StockMovement } from "./types.js";
+import type { StockLocation, StockMovement } from "./types.ts";
 
 export type StockMovementReversal = Omit<
   StockMovement,

@@ -5,7 +5,7 @@ import type {
   AccountLedgerEntry,
   SupplierLedgerEntry,
   SupplierLedgerEntryType,
-} from "./types.js";
+} from "./types.ts";
 
 export type AccountLedgerType = AccountEntryType;
 

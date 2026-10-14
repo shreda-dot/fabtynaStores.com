@@ -1,8 +1,7 @@
 import { z } from "zod";
-import type { SupplierDto } from "../dtos.js";
-import { idSchema, isoDateTimeSchema } from "./common.js";
+import { idSchema, isoDateTimeSchema } from "./common.ts";
 
-export const supplierDtoSchema: z.ZodType<SupplierDto> = z
+export const supplierDtoSchema = z
   .object({
     id: idSchema,
     name: z.string(),

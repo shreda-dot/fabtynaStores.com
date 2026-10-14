@@ -1,11 +1,10 @@
 import { z } from "zod";
-import type { PurchaseDto, PurchaseLineDto, PurchaseReceiveDto } from "../dtos.js";
-import { idSchema, isoDateTimeSchema, nonnegativeKoboStringSchema } from "./common.js";
+import { idSchema, isoDateTimeSchema, nonnegativeKoboStringSchema } from "./common.ts";
 
 export const purchaseStatusSchema = z.enum(["DRAFT", "RECEIVED", "VOIDED"]);
 export const unitSchema = z.enum(["UNIT", "PACK"]);
 
-export const purchaseLineDtoSchema: z.ZodType<PurchaseLineDto> = z
+export const purchaseLineDtoSchema = z
   .object({
     id: idSchema,
     purchaseId: idSchema,
@@ -19,7 +18,7 @@ export const purchaseLineDtoSchema: z.ZodType<PurchaseLineDto> = z
   })
   .strict();
 
-export const purchaseDtoSchema: z.ZodType<PurchaseDto> = z
+export const purchaseDtoSchema = z
   .object({
     id: idSchema,
     supplierId: idSchema.nullable(),
@@ -35,7 +34,7 @@ export const purchaseDtoSchema: z.ZodType<PurchaseDto> = z
   })
   .strict();
 
-export const purchaseReceiveDtoSchema: z.ZodType<PurchaseReceiveDto> = z
+export const purchaseReceiveDtoSchema = z
   .object({
     lines: z
       .array(

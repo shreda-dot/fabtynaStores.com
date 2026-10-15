@@ -2,10 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { formatNaira, getLagosBusinessDayRange } from "@fabtyna/shared";
+import {
+  formatNaira,
+  getLagosBusinessDate,
+  getLagosBusinessDayRange,
+} from "@fabtyna/shared";
 import { ListLoading } from "@/components/list-feedback";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
-import { reportsApi, stockApi } from "@/lib/api";
+import { reportsApi, salesApi, stockApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -14,6 +18,10 @@ export default function DashboardPage() {
   const stock = useQuery({
     queryKey: queryKeys.stock.list,
     queryFn: () => stockApi.list(),
+  });
+  const sales = useQuery({
+    queryKey: queryKeys.sales.list,
+    queryFn: () => salesApi.list(),
   });
 
   // "Today" is the Lagos (Africa/Lagos) business day, not the device day.
@@ -29,8 +37,8 @@ export default function DashboardPage() {
 
   const report = useQuery({
     queryKey: queryKeys.reports.salesSummary(
-      reportFrom.toISOString().slice(0, 10),
-      dayEnd.toISOString().slice(0, 10),
+      getLagosBusinessDate(reportFrom),
+      getLagosBusinessDate(new Date(dayEnd.getTime() - 1)),
     ),
     queryFn: () => reportsApi.salesSummary(reportFrom, dayEnd),
   });
@@ -49,14 +57,31 @@ export default function DashboardPage() {
       0n,
     ) ?? 0n;
 
+  const outstandingDebt = useMemo(() => {
+    let retail = 0n;
+    let wholesale = 0n;
+    for (const sale of sales.data ?? []) {
+      if (sale.status === "VOIDED") continue;
+      if (getLagosBusinessDate(new Date(sale.soldAt)) !== viewDate) continue;
+      const owed = BigInt(sale.totalKobo) - BigInt(sale.paidKobo);
+      if (owed <= 0n) continue;
+      if (sale.channel === "RETAIL") {
+        retail += owed;
+      } else {
+        wholesale += owed;
+      }
+    }
+    return { retail, wholesale };
+  }, [sales.data, viewDate]);
+
   const retailSupposed = BigInt(today?.retailSupposedRevenueKobo ?? "0");
   const retailGotten = BigInt(today?.retailRevenueGottenKobo ?? "0");
   const wholesaleSupposed = BigInt(today?.wholesaleSupposedRevenueKobo ?? "0");
   const wholesaleGotten = BigInt(today?.wholesaleRevenueGottenKobo ?? "0");
   const todayNetProfit = BigInt(today?.totalNetProfitKobo ?? "0");
   const todayExpenses = BigInt(today?.totalExpensesKobo ?? "0");
-  const retailDebt = retailSupposed - retailGotten;
-  const wholesaleDebt = wholesaleSupposed - wholesaleGotten;
+  const retailDebt = outstandingDebt.retail;
+  const wholesaleDebt = outstandingDebt.wholesale;
 
   return (
     <div className="space-y-6">
@@ -98,7 +123,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {stock.isPending || report.isPending ? (
+      {stock.isPending || report.isPending || sales.isPending ? (
         <ListLoading />
       ) : (
         <div className="space-y-6">
@@ -205,8 +230,10 @@ export default function DashboardPage() {
             </h2>
             <p className="text-sm text-muted-foreground">
               Supposed revenue is what was billed. Revenue gotten is cash
-              received on that day. The gap is made up of unpaid debts,
-              discounts given below the standard price, and expenses.
+              received on that day. Outstanding debt below shows the current
+              unpaid balance for sales from this business date. The gap is made
+              up of unpaid debts, discounts given below the standard price, and
+              expenses.
             </p>
             <ul className="space-y-2 text-sm">
               <li className="flex items-center justify-between gap-4">

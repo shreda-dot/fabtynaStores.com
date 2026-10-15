@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatNaira } from "@fabtyna/shared";
+import { formatLagosDateTime, formatNaira } from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
@@ -98,7 +98,7 @@ export default function SaleDetailPage() {
               Sale {s.reference ?? s.id.slice(0, 8)}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {new Date(s.soldAt).toLocaleString("en-NG")} ·{" "}
+              {formatLagosDateTime(s.soldAt)} ·{" "}
               <span
                 className={
                   s.status === "VOIDED"
@@ -203,9 +203,7 @@ export default function SaleDetailPage() {
             <tbody>
               {s.payments.map((p) => (
                 <tr key={p.id} className="border-b border-border/50">
-                  <td className="py-2 pr-4">
-                    {new Date(p.paidAt).toLocaleString("en-NG")}
-                  </td>
+                  <td className="py-2 pr-4">{formatLagosDateTime(p.paidAt)}</td>
                   <td className="py-2 pr-4 font-medium text-green-700 dark:text-green-400">
                     {formatNaira(p.amountKobo)}
                   </td>

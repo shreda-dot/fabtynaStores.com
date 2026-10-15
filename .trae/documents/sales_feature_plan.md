@@ -227,3 +227,24 @@ A sale made on credit should not count as revenue until the customer actually pa
 ### Transfer reference
 - `StockTransfer` has an optional `reference` field. If left blank on creation, the mock auto-generates `TRF-XXXXXX`.
 - Shown in the transfers list (as a link to the detail page) and on the transfer detail header.
+
+## Follow-up: cash-basis fixes, business day, edits & UX (implemented)
+
+### Revenue recognition bugs fixed
+- **Money taken at the till wasn't counted**: `recordSale` set `sale.paidKobo` but created no `SalePayment`, so `salesSummary` (which sums `SalePayment.amountKobo`) reported ₦0 revenue. Fixed by creating the initial `SalePayment` inside `recordSale` and persisting it in `sales.mock.ts`, plus a fallback in `salesSummary` for legacy sales with `paidKobo > 0` and no payment rows.
+- **Voided sales leaked revenue**: `salesSummary` now builds a `salesById` map over all sales and skips payments whose sale is missing or `VOIDED`.
+- **Gross profit stuck at 0** after the two-loop split: gross profit is now computed from `revenueGotten − COGS` in the final loop.
+- **Debtors hidden for walk-ins**: both Sales and Debtors pages now filter only by "not voided" and `totalKobo > paidKobo`, so walk-in sales (no `customerId`/`customerName`) with a balance appear.
+
+### Lagos business day
+- `useLagosBusinessDate()` (30s interval) + `getLagosBusinessDayRange()` drive all "today/yesterday" math on the Dashboard and Sales pages, so figures reset at Lagos midnight regardless of device timezone.
+- The Dashboard gained a business-date picker (default today, `max` today, "Today" button) for next-day accounting.
+
+### Editable documents (immutable amend)
+- `SalesApi.update(id, input)` and `PurchasesApi.update(id, input)` void the original and record a corrected replacement (reversal movements/ledger + fresh document + audit row).
+- New routes `/sales/[id]/edit` and `/purchases/[id]/edit`; Edit buttons on both detail pages.
+
+### UX
+- `MoneyInput` adds thousand separators, clears `0.00` on focus, restores on blur if empty.
+- Sales page has a customer/reference search bar.
+- Customer detail page shows Paid / Unpaid per sale for multiple concurrent debts.

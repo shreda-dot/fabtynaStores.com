@@ -6,6 +6,8 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  createLagosDateTime,
+  getLagosBusinessDate,
   type CreateExpenseDto,
   type ExpenseCategory,
   type SaleChannel,
@@ -39,9 +41,7 @@ export default function NewExpensePage() {
   const [category, setCategory] = useState<ExpenseCategory>("OTHER");
   const [description, setDescription] = useState("");
   const [amountKobo, setAmountKobo] = useState("");
-  const [expenseDate, setExpenseDate] = useState(
-    new Date().toISOString().slice(0, 10),
-  );
+  const [expenseDate, setExpenseDate] = useState(() => getLagosBusinessDate());
   const [error, setError] = useState("");
 
   const createMutation = useMutation({
@@ -64,7 +64,7 @@ export default function NewExpensePage() {
       setError("Enter a description.");
       return;
     }
-    const dateIso = new Date(`${expenseDate}T12:00:00+01:00`).toISOString();
+    const dateIso = createLagosDateTime(expenseDate).toISOString();
     createMutation.mutate({
       channel,
       category,

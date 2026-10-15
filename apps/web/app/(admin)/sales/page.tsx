@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { HandCoins, Plus, Receipt, Search } from "lucide-react";
 import Link from "next/link";
 import {
+  formatLagosDate,
   formatNaira,
   getLagosBusinessDayRange,
   type SaleChannel,
@@ -162,7 +163,7 @@ export default function SalesPage() {
   const columns: ResponsiveTableColumn<SaleListItemDto>[] = [
     {
       header: "Date",
-      render: (sale) => new Date(sale.soldAt).toLocaleDateString("en-NG"),
+      render: (sale) => formatLagosDate(sale.soldAt),
     },
     {
       header: "Reference",
@@ -312,7 +313,7 @@ export default function SalesPage() {
                         : e.channel === "WHOLESALE"
                           ? "Wholesale"
                           : "Both"}{" "}
-                      · {new Date(e.expenseDate).toLocaleDateString("en-NG")}
+                      · {formatLagosDate(e.expenseDate)}
                     </p>
                   </div>
                   <span className="shrink-0 font-medium">
@@ -432,7 +433,7 @@ export default function SalesPage() {
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {s.channel === "RETAIL" ? "Retail" : "Wholesale"} ·{" "}
-                        {new Date(s.soldAt).toLocaleDateString("en-NG")}
+                        {formatLagosDate(s.soldAt)}
                       </p>
                     </div>
                     <div className="shrink-0 text-right">

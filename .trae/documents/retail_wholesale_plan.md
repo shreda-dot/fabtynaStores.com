@@ -102,3 +102,32 @@ The dashboard and sales report show this breakdown.
 - Immutable stock movements and ledgers; corrections via reversals.
 - Complete files, not diffs.
 - Tailwind only, no custom CSS.
+
+## 7. Session updates (business day, edits, payment tracking)
+
+### 7.1 Lagos business day & automatic rollover
+
+- `packages/shared/src/lagos-time.ts`: `getLagosBusinessDate()` (YYYY-MM-DD in `Africa/Lagos`) and `getLagosBusinessDayRange(date)` (start `T00:00:00+01:00`, 24h end).
+- `apps/web/hooks/use-lagos-business-date.ts`: returns the current Lagos business date and re-checks every 30s, so "today" figures reset to zero at Lagos midnight **without a page reload** and are independent of the device timezone.
+- Dashboard and Sales page use the hook for all "today / yesterday" math (replacing `new Date()`-based boundaries).
+- Because accounts are reconciled the next day, the **dashboard has a business-date picker** (default = current Lagos day, `max` = today, plus a "Today" button). `viewDate = selectedDate ?? businessDate` is a derived value (no `setState` inside an effect).
+
+### 7.2 Cash-basis revenue (fixed)
+
+- `recordSale()` now creates the initial **`SalePayment`** row when `paidKobo > 0`, so money taken at the till is visible to `salesSummary` immediately. `apps/web/lib/api/sales.mock.ts` persists it.
+- `salesSummary` recognizes revenue from `SalePayment.amountKobo` bucketed by `paidAt`; **payments for missing or `VOIDED` sales are skipped**. Legacy sales with `paidKobo > 0` and no payment rows fall back to an implicit payment on the sale date.
+- `grossProfit = revenueGotten − COGS`; `netProfit = grossProfit − expenses`.
+
+### 7.3 Immutable edits (void-and-replace)
+
+- `PurchasesApi.update(id, input)` and `SalesApi.update(id, input)` were added (real-API stubs return `notImplemented()`).
+- Each `update` voids the original (`status = "VOIDED"`), pushes the reversal stock movements + reversal ledger entries, records a corrected replacement via `receivePurchase` / `recordSale`, recomputes weighted-average cost, and appends an audit row (`PURCHASE_AMENDED` / `SALE_AMENDED`).
+- New routes: `/purchases/[id]/edit` and `/sales/[id]/edit`. The **Edit** button was added to both detail pages.
+- Sale edit consolidates existing payments into the single "Amount received" field. New-sale and new-purchase date fields default to `getLagosBusinessDate()`.
+
+### 7.4 Number input & search UX
+
+- `MoneyInput` adds **thousand separators** while typing, clears the `0.00` placeholder on focus, and restores it on blur if left empty.
+- Sales page has a **search bar** filtering by customer name or reference.
+- Customer detail page has explicit **Paid / Unpaid** columns so multiple concurrent debts per customer are visible.
+- Debtors / Sales debtors filter by financial balance only (`totalKobo > paidKobo`), so retail **walk-ins** with no `customerId`/`customerName` are included; voided sales are excluded.

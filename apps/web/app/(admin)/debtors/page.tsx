@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2 } from "lucide-react";
-import { formatNaira } from "@fabtyna/shared";
+import { formatLagosDate, formatNaira } from "@fabtyna/shared";
 import { MoneyInput } from "@/components/money-input";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import { salesApi } from "@/lib/api";
@@ -21,7 +21,9 @@ type DebtorGroup = {
   sales: DebtorSale[];
 };
 
-function amountOwed(sale: Pick<SaleListItemDto, "totalKobo" | "paidKobo">): bigint {
+function amountOwed(
+  sale: Pick<SaleListItemDto, "totalKobo" | "paidKobo">,
+): bigint {
   return BigInt(sale.totalKobo) - BigInt(sale.paidKobo);
 }
 
@@ -44,7 +46,9 @@ export default function DebtorsPage() {
   const detailsQuery = useQuery({
     queryKey: ["sales", "debtor-details", unpaidIds],
     queryFn: async () => {
-      const details = await Promise.all(unpaidSales.map((s) => salesApi.getById(s.id)));
+      const details = await Promise.all(
+        unpaidSales.map((s) => salesApi.getById(s.id)),
+      );
       return details;
     },
     enabled: unpaidSales.length > 0,
@@ -56,8 +60,10 @@ export default function DebtorsPage() {
     for (const detail of details) {
       const owed = BigInt(detail.totalKobo) - BigInt(detail.paidKobo);
       if (owed <= 0n) continue;
-      const groupKey = detail.customer?.id ?? `adhoc:${detail.customerName ?? detail.id}`;
-      const displayName = detail.customer?.name ?? detail.customerName ?? "Walk-in";
+      const groupKey =
+        detail.customer?.id ?? `adhoc:${detail.customerName ?? detail.id}`;
+      const displayName =
+        detail.customer?.name ?? detail.customerName ?? "Walk-in";
       const existing = map.get(groupKey);
       const debtorSale: DebtorSale = { ...detail, amountOwedKobo: owed };
       if (existing) {
@@ -88,14 +94,13 @@ export default function DebtorsPage() {
     }: {
       saleId: string;
       amountKobo: string;
-    }) =>
-      salesApi.recordPayment(
-        saleId,
-        amountKobo,
-        new Date().toISOString(),
-      ),
+    }) => salesApi.recordPayment(saleId, amountKobo, new Date().toISOString()),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.customers.all,
+      });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
       setPayingSaleId(null);
       setPaymentKobo("");
       setPaymentError("");
@@ -145,7 +150,10 @@ export default function DebtorsPage() {
       {isLoading ? (
         <ListLoading />
       ) : isError ? (
-        <ListError message="Could not load debtors." retry={() => void salesQuery.refetch()} />
+        <ListError
+          message="Could not load debtors."
+          retry={() => void salesQuery.refetch()}
+        />
       ) : debtorGroups.length === 0 ? (
         <ListEmpty message="All customer sales are fully paid." />
       ) : (
@@ -157,7 +165,9 @@ export default function DebtorsPage() {
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h2 className="text-lg font-semibold">{group.customerName}</h2>
+                  <h2 className="text-lg font-semibold">
+                    {group.customerName}
+                  </h2>
                   <p className="text-sm text-muted-foreground">
                     Total owed: {formatNaira(group.totalOwedKobo)}
                   </p>
@@ -178,8 +188,7 @@ export default function DebtorsPage() {
                           <span className="font-medium">{channelLabel}</span>
                           <span className="text-muted-foreground">
                             {" "}
-                            ·{" "}
-                            {new Date(sale.soldAt).toLocaleDateString("en-NG")}
+                            · {formatLagosDate(sale.soldAt)}
                           </span>
                         </div>
                         <div className="text-sm font-medium">
@@ -205,7 +214,10 @@ export default function DebtorsPage() {
                             onKoboChange={setPaymentKobo}
                           />
                           {paymentError && (
-                            <p role="alert" className="text-sm text-destructive">
+                            <p
+                              role="alert"
+                              className="text-sm text-destructive"
+                            >
                               {paymentError}
                             </p>
                           )}
@@ -234,7 +246,9 @@ export default function DebtorsPage() {
                       ) : (
                         <button
                           type="button"
-                          onClick={() => startPayment(sale.id, sale.amountOwedKobo)}
+                          onClick={() =>
+                            startPayment(sale.id, sale.amountOwedKobo)
+                          }
                           className="mt-3 rounded-md border border-primary px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10"
                         >
                           Record Payment

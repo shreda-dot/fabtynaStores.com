@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatStockUnits } from "@fabtyna/shared";
+import { formatLagosDateTime, formatStockUnits } from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import { productsApi, transfersApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
@@ -80,7 +80,7 @@ export default function TransferDetailPage() {
             <div>
               <p className="text-xs text-muted-foreground">Date</p>
               <p className="mt-1 font-medium">
-                {new Date(transfer.data.transferredAt).toLocaleDateString("en-NG")}
+                {formatLagosDateTime(transfer.data.transferredAt)}
               </p>
             </div>
             <div>

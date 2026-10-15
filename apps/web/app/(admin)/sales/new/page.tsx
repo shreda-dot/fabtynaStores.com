@@ -6,6 +6,7 @@ import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  createLagosDateTime,
   formatNaira,
   getLagosBusinessDate,
   type CreateSaleDto,
@@ -164,7 +165,7 @@ export default function NewSalePage() {
           : null,
       channel,
       location,
-      soldAt: new Date(soldAt).toISOString(),
+      soldAt: createLagosDateTime(soldAt).toISOString(),
       notes: notes.trim() === "" ? null : notes.trim(),
       reference: reference.trim() === "" ? null : reference.trim(),
       paidKobo,

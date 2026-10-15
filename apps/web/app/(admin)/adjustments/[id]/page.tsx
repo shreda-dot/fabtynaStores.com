@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatNaira } from "@fabtyna/shared";
+import { formatLagosDateTime, formatNaira } from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
@@ -94,7 +94,7 @@ export default function AdjustmentDetailPage() {
               Adjustment {a.id.slice(0, 8)}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {new Date(a.adjustedAt).toLocaleDateString("en-NG")} ·{" "}
+              {formatLagosDateTime(a.adjustedAt)} ·{" "}
               <span className={a.status === "VOIDED" ? "text-destructive" : ""}>
                 {a.status}
               </span>

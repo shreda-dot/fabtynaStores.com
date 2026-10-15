@@ -6,6 +6,7 @@ import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
+  createLagosDateTime,
   formatNaira,
   getLagosBusinessDate,
   type CreateSaleDto,
@@ -65,7 +66,9 @@ export default function EditSalePage() {
     );
   if (!sale.data) return <ListEmpty message="Sale not found." />;
   if (sale.data.status === "VOIDED")
-    return <ListEmpty message="This sale was voided and can no longer be edited." />;
+    return (
+      <ListEmpty message="This sale was voided and can no longer be edited." />
+    );
 
   return <SaleEditForm sale={sale.data} />;
 }
@@ -183,14 +186,15 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
     }
 
     updateMutation.mutate({
-      customerId: channel === "WHOLESALE" && customerId !== "" ? customerId : null,
+      customerId:
+        channel === "WHOLESALE" && customerId !== "" ? customerId : null,
       customerName:
         channel === "RETAIL" && customerName.trim() !== ""
           ? customerName.trim()
           : null,
       channel,
       location,
-      soldAt: new Date(soldAt).toISOString(),
+      soldAt: createLagosDateTime(soldAt).toISOString(),
       notes: notes.trim() === "" ? null : notes.trim(),
       reference: reference.trim() === "" ? null : reference.trim(),
       paidKobo,
@@ -393,7 +397,10 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
                       >
                         <option value="">Select product</option>
                         {productsQuery.data?.map((productOption) => (
-                          <option key={productOption.id} value={productOption.id}>
+                          <option
+                            key={productOption.id}
+                            value={productOption.id}
+                          >
                             {productOption.name}
                           </option>
                         ))}
@@ -412,7 +419,11 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
                           updateLine(line.id, { quantity: event.target.value })
                         }
                         className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        placeholder={defaultUnit === "UNIT" ? "e.g. 6" : "e.g. 0.5, 0.75, 1"}
+                        placeholder={
+                          defaultUnit === "UNIT"
+                            ? "e.g. 6"
+                            : "e.g. 0.5, 0.75, 1"
+                        }
                       />
                       {defaultUnit === "PACK" && product && (
                         <p className="text-xs text-muted-foreground">

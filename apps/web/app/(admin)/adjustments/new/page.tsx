@@ -5,7 +5,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type StockLocation } from "@fabtyna/shared";
+import {
+  createLagosDateTime,
+  getLagosBusinessDate,
+  type StockLocation,
+} from "@fabtyna/shared";
 import { MoneyInput } from "@/components/money-input";
 import { adjustmentsApi, productsApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
@@ -31,8 +35,8 @@ export default function NewAdjustmentPage() {
   const queryClient = useQueryClient();
 
   const [reason, setReason] = useState<string>("");
-  const [adjustedAt, setAdjustedAt] = useState<string>(
-    new Date().toISOString().slice(0, 10),
+  const [adjustedAt, setAdjustedAt] = useState<string>(() =>
+    getLagosBusinessDate(),
   );
   const [lines, setLines] = useState<AdjustmentLineDraft[]>([
     {
@@ -130,7 +134,7 @@ export default function NewAdjustmentPage() {
 
     createMutation.mutate({
       reason: reason.trim(),
-      adjustedAt: new Date(adjustedAt).toISOString(),
+      adjustedAt: createLagosDateTime(adjustedAt).toISOString(),
       lines: validLines,
     });
   }

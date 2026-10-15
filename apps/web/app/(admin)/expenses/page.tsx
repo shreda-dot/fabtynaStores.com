@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import {
+  formatLagosDate,
   formatNaira,
   type ExpenseCategory,
   type ExpenseDto,
@@ -43,13 +44,14 @@ export default function ExpensesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => expensesApi.remove(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses.all }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.expenses.all }),
   });
 
   const columns: ResponsiveTableColumn<ExpenseDto>[] = [
     {
       header: "Date",
-      render: (e) => new Date(e.expenseDate).toLocaleDateString("en-NG"),
+      render: (e) => formatLagosDate(e.expenseDate),
     },
     {
       header: "Channel",
@@ -115,7 +117,10 @@ export default function ExpensesPage() {
       {expenses.isLoading ? (
         <ListLoading />
       ) : expenses.isError ? (
-        <ListError message="Could not load expenses." retry={() => void expenses.refetch()} />
+        <ListError
+          message="Could not load expenses."
+          retry={() => void expenses.refetch()}
+        />
       ) : expenses.data && expenses.data.length > 0 ? (
         <ResponsiveTable
           columns={columns}

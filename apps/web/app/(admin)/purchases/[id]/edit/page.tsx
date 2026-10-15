@@ -6,6 +6,7 @@ import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
+  createLagosDateTime,
   formatNaira,
   getLagosBusinessDate,
   type CreatePurchaseDto,
@@ -97,9 +98,7 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
   const [purchasedAt, setPurchasedAt] = useState<string>(() =>
     getLagosBusinessDate(new Date(purchase.purchasedAt)),
   );
-  const [reference, setReference] = useState<string>(
-    purchase.reference ?? "",
-  );
+  const [reference, setReference] = useState<string>(purchase.reference ?? "");
   const [notes, setNotes] = useState<string>(purchase.notes ?? "");
   const [lines, setLines] = useState<PurchaseLineDraft[]>(() =>
     toLineDrafts(purchase),
@@ -192,7 +191,7 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
     updateMutation.mutate({
       supplierId: supplierId === "" ? null : supplierId,
       location,
-      purchasedAt: new Date(purchasedAt).toISOString(),
+      purchasedAt: createLagosDateTime(purchasedAt).toISOString(),
       notes: notes.trim() === "" ? null : notes.trim(),
       reference: reference.trim() === "" ? null : reference.trim(),
       lines: validLines,
@@ -214,7 +213,8 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
             Edit purchase
           </h1>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Correct a mistake on {purchase.reference ?? purchase.id.slice(0, 8)}.
+            Correct a mistake on {purchase.reference ?? purchase.id.slice(0, 8)}
+            .
           </p>
         </div>
       </div>
@@ -229,7 +229,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
         <section className="space-y-4 rounded-xl border border-border/60 bg-card p-4 shadow-sm sm:p-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <label htmlFor="supplier" className="block text-xs font-medium text-foreground">
+              <label
+                htmlFor="supplier"
+                className="block text-xs font-medium text-foreground"
+              >
                 Supplier (optional)
               </label>
               <select
@@ -248,7 +251,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="location" className="block text-xs font-medium text-foreground">
+              <label
+                htmlFor="location"
+                className="block text-xs font-medium text-foreground"
+              >
                 Receiving location
               </label>
               <select
@@ -268,7 +274,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="date" className="block text-xs font-medium text-foreground">
+              <label
+                htmlFor="date"
+                className="block text-xs font-medium text-foreground"
+              >
                 Date
               </label>
               <input
@@ -281,7 +290,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="reference" className="block text-xs font-medium text-foreground">
+              <label
+                htmlFor="reference"
+                className="block text-xs font-medium text-foreground"
+              >
                 Reference
               </label>
               <input
@@ -296,7 +308,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="notes" className="block text-xs font-medium text-foreground">
+            <label
+              htmlFor="notes"
+              className="block text-xs font-medium text-foreground"
+            >
               Notes
             </label>
             <textarea
@@ -365,14 +380,19 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
                       >
                         <option value="">Select product</option>
                         {productsQuery.data?.map((productOption) => (
-                          <option key={productOption.id} value={productOption.id}>
+                          <option
+                            key={productOption.id}
+                            value={productOption.id}
+                          >
                             {productOption.name}
                           </option>
                         ))}
                       </select>
                     </div>
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-medium text-foreground">Unit</label>
+                      <label className="block text-xs font-medium text-foreground">
+                        Unit
+                      </label>
                       <select
                         value={line.unit}
                         onChange={(event) =>
@@ -382,7 +402,9 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
                         }
                         className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
-                        <option value="PACK">Pack ({unitsPerPack} units)</option>
+                        <option value="PACK">
+                          Pack ({unitsPerPack} units)
+                        </option>
                         <option value="UNIT">Single unit</option>
                       </select>
                     </div>

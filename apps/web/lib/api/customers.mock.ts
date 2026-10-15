@@ -39,6 +39,17 @@ function findCustomer(customers: Customer[], id: string): Customer {
   return customer;
 }
 
+function customerOutstandingDebtKobo(
+  store: ReturnType<typeof readMockStore>,
+  customerId: string,
+): bigint {
+  return store.sales.reduce((sum, sale) => {
+    if (sale.customerId !== customerId || sale.status === "VOIDED") return sum;
+    const owed = sale.totalKobo - sale.paidKobo;
+    return owed > 0n ? sum + owed : sum;
+  }, 0n);
+}
+
 function audit(
   draft: ReturnType<typeof readMockStore>,
   action: string,
@@ -158,6 +169,12 @@ export const customersMockApi: CustomersApi = {
     const result = transactMockStore((draft) => {
       const customer = findCustomer(draft.customers, id);
       if (customer.deletedAt !== null) throw new Error("Customer is already deleted.");
+      const outstandingDebtKobo = customerOutstandingDebtKobo(draft, id);
+      if (outstandingDebtKobo > 0n) {
+        throw new Error(
+          "Customer cannot be deleted while they still owe an unpaid balance.",
+        );
+      }
       const before = toCustomerDto(customer);
       customer.deletedAt = new Date();
       customer.updatedAt = customer.deletedAt;

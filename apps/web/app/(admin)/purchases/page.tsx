@@ -1,14 +1,14 @@
 "use client";
 
-import {
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import Link from "next/link";
-import { formatNaira } from "@fabtyna/shared";
+import { formatLagosDate, formatNaira } from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
-import { ResponsiveTable, type ResponsiveTableColumn } from "@/components/responsive-table";
+import {
+  ResponsiveTable,
+  type ResponsiveTableColumn,
+} from "@/components/responsive-table";
 import { purchasesApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import type { PurchaseListItemDto } from "@/lib/api/purchases.api";
@@ -40,8 +40,7 @@ export default function PurchasesPage() {
     },
     {
       header: "Date",
-      render: (purchase) =>
-        new Date(purchase.purchasedAt).toLocaleDateString("en-NG"),
+      render: (purchase) => formatLagosDate(purchase.purchasedAt),
     },
     {
       header: "Lines",
@@ -103,7 +102,9 @@ export default function PurchasesPage() {
           <ListLoading />
         ) : purchases.isError ? (
           <ListError
-            message={purchases.error.message || "Purchases could not be loaded."}
+            message={
+              purchases.error.message || "Purchases could not be loaded."
+            }
             retry={() => void purchases.refetch()}
           />
         ) : purchases.data.length === 0 ? (

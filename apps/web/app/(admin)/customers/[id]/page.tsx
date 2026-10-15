@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatNaira } from "@fabtyna/shared";
+import { formatLagosDate, formatNaira } from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
@@ -42,7 +42,7 @@ export default function CustomerDetailPage() {
   const ledgerColumns: ResponsiveTableColumn<CustomerLedgerEntryDto>[] = [
     {
       header: "Date",
-      render: (entry) => new Date(entry.occurredAt).toLocaleDateString("en-NG"),
+      render: (entry) => formatLagosDate(entry.occurredAt),
     },
     {
       header: "Type",
@@ -67,7 +67,7 @@ export default function CustomerDetailPage() {
   const saleColumns: ResponsiveTableColumn<SaleDto>[] = [
     {
       header: "Date",
-      render: (sale) => new Date(sale.soldAt).toLocaleDateString("en-NG"),
+      render: (sale) => formatLagosDate(sale.soldAt),
     },
     {
       header: "Channel",

@@ -7,6 +7,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import {
+  formatLagosDateTime,
   formatNaira,
   formatStockUnits,
   type StockLocation,
@@ -133,7 +134,7 @@ export default function StockPage() {
   const movementColumns: ResponsiveTableColumn<StockMovementDto>[] = [
     {
       header: "Date",
-      render: (m) => new Date(m.occurredAt).toLocaleString("en-NG"),
+      render: (m) => formatLagosDateTime(m.occurredAt),
     },
     {
       header: "Product",

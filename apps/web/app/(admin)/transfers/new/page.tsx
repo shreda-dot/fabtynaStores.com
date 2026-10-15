@@ -5,7 +5,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { formatStockUnits, type StockLocation } from "@fabtyna/shared";
+import {
+  createLagosDateTime,
+  formatStockUnits,
+  getLagosBusinessDate,
+  type StockLocation,
+} from "@fabtyna/shared";
 import { productsApi, stockApi, transfersApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 
@@ -31,8 +36,8 @@ export default function NewTransferPage() {
   const [to, setTo] = useState<StockLocation>("RETAIL_SHELF");
   const [reason, setReason] = useState<string>("");
   const [reference, setReference] = useState<string>("");
-  const [transferredAt, setTransferredAt] = useState<string>(
-    new Date().toISOString().slice(0, 10),
+  const [transferredAt, setTransferredAt] = useState<string>(() =>
+    getLagosBusinessDate(),
   );
   const [lines, setLines] = useState<TransferLineDraft[]>([
     { id: newLineId(), productId: "", quantityUnits: "" },
@@ -141,7 +146,7 @@ export default function NewTransferPage() {
       to,
       reason: reason.trim() === "" ? null : reason.trim(),
       reference: reference.trim() === "" ? null : reference.trim(),
-      transferredAt: new Date(transferredAt).toISOString(),
+      transferredAt: createLagosDateTime(transferredAt).toISOString(),
       lines: validLines,
     });
   }

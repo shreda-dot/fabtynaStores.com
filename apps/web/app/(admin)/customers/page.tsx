@@ -9,10 +9,17 @@ import {
 } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";
 import Link from "next/link";
-import { formatNaira, type CreateCustomerDto, type CustomerDto } from "@fabtyna/shared";
+import {
+  formatNaira,
+  type CreateCustomerDto,
+  type CustomerDto,
+} from "@fabtyna/shared";
 import { FormModal } from "@/components/form-modal";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
-import { ResponsiveTable, type ResponsiveTableColumn } from "@/components/responsive-table";
+import {
+  ResponsiveTable,
+  type ResponsiveTableColumn,
+} from "@/components/responsive-table";
 import { CustomerForm } from "@/components/customers/customer-form";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { customersApi } from "@/lib/api";
@@ -33,28 +40,37 @@ export default function CustomersPage() {
   const customers = useQuery({
     queryKey: queryKeys.customers.list(debouncedSearch, showDeleted),
     queryFn: () =>
-      customersApi.list({ search: debouncedSearch, includeDeleted: showDeleted }),
+      customersApi.list({
+        search: debouncedSearch,
+        includeDeleted: showDeleted,
+      }),
     placeholderData: keepPreviousData,
   });
 
   const saveMutation = useMutation({
-    mutationFn: ({
-      id,
-      input,
-    }: {
-      id?: string;
-      input: CreateCustomerDto;
-    }) => (id ? customersApi.update(id, input) : customersApi.create(input)),
+    mutationFn: ({ id, input }: { id?: string; input: CreateCustomerDto }) =>
+      id ? customersApi.update(id, input) : customersApi.create(input),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.customers.all,
+      });
       closeForm();
     },
   });
 
   const actionMutation = useMutation({
-    mutationFn: ({ action, id }: { action: "delete" | "restore"; id: string }) =>
-      action === "delete" ? customersApi.softDelete(id) : customersApi.restore(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.customers.all }),
+    mutationFn: ({
+      action,
+      id,
+    }: {
+      action: "delete" | "restore";
+      id: string;
+    }) =>
+      action === "delete"
+        ? customersApi.softDelete(id)
+        : customersApi.restore(id),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.customers.all }),
   });
 
   function closeForm() {
@@ -79,7 +95,15 @@ export default function CustomersPage() {
     await saveMutation.mutateAsync({ id: editingCustomer?.id, input });
   }
 
-  function deleteCustomer(customer: CustomerDto) {
+  async function deleteCustomer(customer: CustomerDto) {
+    const detail = await customersApi.getById(customer.id);
+    if (BigInt(detail.balanceOwedKobo) > 0n) {
+      actionMutation.reset();
+      window.alert(
+        `${customer.name} still owes money and cannot be deleted until the debt is fully paid.`,
+      );
+      return;
+    }
     if (
       !window.confirm(
         `Delete ${customer.name}? It will be hidden from lists and can be restored later.`,
@@ -186,7 +210,9 @@ export default function CustomersPage() {
             <input
               type="search"
               value={search}
-              onChange={(event) => setFilter("customersSearch", event.target.value)}
+              onChange={(event) =>
+                setFilter("customersSearch", event.target.value)
+              }
               placeholder="Search by name, phone or email..."
               className="h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
@@ -214,7 +240,9 @@ export default function CustomersPage() {
           <ListLoading />
         ) : customers.isError ? (
           <ListError
-            message={customers.error.message || "Customers could not be loaded."}
+            message={
+              customers.error.message || "Customers could not be loaded."
+            }
             retry={() => void customers.refetch()}
           />
         ) : customers.data.length === 0 ? (

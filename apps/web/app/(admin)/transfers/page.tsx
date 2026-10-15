@@ -3,9 +3,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import Link from "next/link";
-import { formatNaira } from "@fabtyna/shared";
+import { formatLagosDate, formatNaira } from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
-import { ResponsiveTable, type ResponsiveTableColumn } from "@/components/responsive-table";
+import {
+  ResponsiveTable,
+  type ResponsiveTableColumn,
+} from "@/components/responsive-table";
 import { stockApi, transfersApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import type { StockTransferDto } from "@fabtyna/shared";
@@ -43,8 +46,7 @@ export default function TransfersPage() {
     },
     {
       header: "Date",
-      render: (transfer) =>
-        new Date(transfer.transferredAt).toLocaleDateString("en-NG"),
+      render: (transfer) => formatLagosDate(transfer.transferredAt),
     },
     {
       header: "Reason",
@@ -63,10 +65,9 @@ export default function TransfersPage() {
     },
   ];
 
-  const totalWorth = stock.data?.reduce(
-    (sum, row) => sum + BigInt(row.worthAtCostKobo),
-    0n,
-  ) ?? 0n;
+  const totalWorth =
+    stock.data?.reduce((sum, row) => sum + BigInt(row.worthAtCostKobo), 0n) ??
+    0n;
 
   return (
     <div className="space-y-6">
@@ -75,7 +76,9 @@ export default function TransfersPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Transfers</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Move stock between locations. Current stock value at cost:{" "}
-            <span className="font-medium">{formatNaira(totalWorth.toString())}</span>
+            <span className="font-medium">
+              {formatNaira(totalWorth.toString())}
+            </span>
           </p>
         </div>
         <Link
@@ -92,7 +95,9 @@ export default function TransfersPage() {
           <ListLoading />
         ) : transfers.isError ? (
           <ListError
-            message={transfers.error.message || "Transfers could not be loaded."}
+            message={
+              transfers.error.message || "Transfers could not be loaded."
+            }
             retry={() => void transfers.refetch()}
           />
         ) : transfers.data.length === 0 ? (

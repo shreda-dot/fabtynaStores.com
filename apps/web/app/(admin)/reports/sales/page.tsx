@@ -2,7 +2,12 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { formatNaira } from "@fabtyna/shared";
+import {
+  formatLagosDate,
+  formatNaira,
+  getLagosBusinessDate,
+  getLagosBusinessDayRange,
+} from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
@@ -12,19 +17,15 @@ import { reportsApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import type { SalesSummaryDayDto } from "@/lib/api/reports.api";
 
-function toDateInput(date: Date): string {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
 export default function SalesReportPage() {
-  const today = new Date();
-  const sevenDaysAgo = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000);
+  const today = getLagosBusinessDate();
+  const { start: todayStart } = getLagosBusinessDayRange(today);
+  const sevenDaysAgo = getLagosBusinessDate(
+    new Date(todayStart.getTime() - 6 * 24 * 60 * 60 * 1000),
+  );
 
-  const [from, setFrom] = useState<string>(toDateInput(sevenDaysAgo));
-  const [to, setTo] = useState<string>(toDateInput(today));
+  const [from, setFrom] = useState<string>(sevenDaysAgo);
+  const [to, setTo] = useState<string>(today);
 
   const fromDate = new Date(`${from}T00:00:00+01:00`);
   const toDate = new Date(`${to}T23:59:59+01:00`);
@@ -37,7 +38,7 @@ export default function SalesReportPage() {
   const columns: ResponsiveTableColumn<SalesSummaryDayDto>[] = [
     {
       header: "Date",
-      render: (day) => new Date(day.date).toLocaleDateString("en-NG"),
+      render: (day) => formatLagosDate(day.date),
     },
     {
       header: "Retail supposed",
@@ -213,9 +214,7 @@ export default function SalesReportPage() {
             </p>
             <ul className="space-y-2 text-sm">
               <li className="flex items-center justify-between gap-4">
-                <span>
-                  Outstanding debts (supposed minus gotten)
-                </span>
+                <span>Outstanding debts (supposed minus gotten)</span>
                 <span
                   className={`font-medium ${
                     debt > 0n ? "text-destructive" : ""
@@ -225,9 +224,7 @@ export default function SalesReportPage() {
                 </span>
               </li>
               <li className="flex items-center justify-between gap-4">
-                <span>
-                  Discounts given (standard price minus supposed)
-                </span>
+                <span>Discounts given (standard price minus supposed)</span>
                 <span
                   className={`font-medium ${
                     discount > 0n ? "text-destructive" : ""

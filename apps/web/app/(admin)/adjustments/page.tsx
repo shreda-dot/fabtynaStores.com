@@ -3,8 +3,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import Link from "next/link";
+import { formatLagosDate } from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
-import { ResponsiveTable, type ResponsiveTableColumn } from "@/components/responsive-table";
+import {
+  ResponsiveTable,
+  type ResponsiveTableColumn,
+} from "@/components/responsive-table";
 import { adjustmentsApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import type { StockAdjustmentDto } from "@fabtyna/shared";
@@ -18,7 +22,7 @@ export default function AdjustmentsPage() {
   const columns: ResponsiveTableColumn<StockAdjustmentDto>[] = [
     {
       header: "Date",
-      render: (a) => new Date(a.adjustedAt).toLocaleDateString("en-NG"),
+      render: (a) => formatLagosDate(a.adjustedAt),
     },
     {
       header: "Reason",
@@ -68,7 +72,9 @@ export default function AdjustmentsPage() {
           <ListLoading />
         ) : adjustments.isError ? (
           <ListError
-            message={adjustments.error.message || "Adjustments could not be loaded."}
+            message={
+              adjustments.error.message || "Adjustments could not be loaded."
+            }
             retry={() => void adjustments.refetch()}
           />
         ) : adjustments.data.length === 0 ? (

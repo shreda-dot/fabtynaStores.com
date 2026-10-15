@@ -6,6 +6,7 @@ import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  createLagosDateTime,
   formatNaira,
   getLagosBusinessDate,
   type CreatePurchaseDto,
@@ -146,7 +147,7 @@ export default function NewPurchasePage() {
     const input: CreatePurchaseDto = {
       supplierId: supplierId === "" ? null : supplierId,
       location,
-      purchasedAt: new Date(purchasedAt).toISOString(),
+      purchasedAt: createLagosDateTime(purchasedAt).toISOString(),
       notes: notes.trim() === "" ? null : notes.trim(),
       reference: reference.trim() === "" ? null : reference.trim(),
       lines: validLines,

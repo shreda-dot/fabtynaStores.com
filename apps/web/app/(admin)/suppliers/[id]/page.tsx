@@ -4,9 +4,12 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatNaira } from "@fabtyna/shared";
+import { formatLagosDate, formatNaira } from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
-import { ResponsiveTable, type ResponsiveTableColumn } from "@/components/responsive-table";
+import {
+  ResponsiveTable,
+  type ResponsiveTableColumn,
+} from "@/components/responsive-table";
 import { suppliersApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import type { SupplierLedgerEntryDto, PurchaseDto } from "@fabtyna/shared";
@@ -35,7 +38,7 @@ export default function SupplierDetailPage() {
   const ledgerColumns: ResponsiveTableColumn<SupplierLedgerEntryDto>[] = [
     {
       header: "Date",
-      render: (entry) => new Date(entry.occurredAt).toLocaleDateString("en-NG"),
+      render: (entry) => formatLagosDate(entry.occurredAt),
     },
     {
       header: "Type",
@@ -44,7 +47,9 @@ export default function SupplierDetailPage() {
     {
       header: "Amount",
       render: (entry) => (
-        <span className={entry.amountKobo.startsWith("-") ? "text-destructive" : ""}>
+        <span
+          className={entry.amountKobo.startsWith("-") ? "text-destructive" : ""}
+        >
           {formatNaira(entry.amountKobo)}
         </span>
       ),
@@ -58,8 +63,7 @@ export default function SupplierDetailPage() {
   const purchaseColumns: ResponsiveTableColumn<PurchaseDto>[] = [
     {
       header: "Date",
-      render: (purchase) =>
-        new Date(purchase.purchasedAt).toLocaleDateString("en-NG"),
+      render: (purchase) => formatLagosDate(purchase.purchasedAt),
     },
     {
       header: "Reference",

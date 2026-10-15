@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatNaira } from "@fabtyna/shared";
+import { formatLagosDateTime, formatNaira } from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
@@ -96,7 +96,7 @@ export default function PurchaseDetailPage() {
               Purchase {p.reference ?? p.id.slice(0, 8)}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {new Date(p.purchasedAt).toLocaleDateString("en-NG")} ·{" "}
+              {formatLagosDateTime(p.purchasedAt)} ·{" "}
               <span
                 className={
                   p.status === "VOIDED"

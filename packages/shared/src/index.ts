@@ -4,6 +4,8 @@ export type { KoboAmount } from "./money.ts";
 export * from "./domain/types.ts";
 export * from "./domain/stock.ts";
 export * from "./domain/ledger.ts";
+export * from "./domain/invariants.ts";
+export * from "./domain/operations.ts";
 export * from "./lagos-time.ts";
 export * from "./dtos.ts";
 export * from "./dto-conversions.ts";

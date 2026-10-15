@@ -9,8 +9,10 @@ type UIState = {
   filters: {
     productsSearch: string;
     suppliersSearch: string;
+    customersSearch: string;
     productsShowDeleted: boolean;
     suppliersShowDeleted: boolean;
+    customersShowDeleted: boolean;
   };
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
@@ -30,8 +32,10 @@ export const useUIStore = create<UIState>((set) => ({
   filters: {
     productsSearch: "",
     suppliersSearch: "",
+    customersSearch: "",
     productsShowDeleted: false,
     suppliersShowDeleted: false,
+    customersShowDeleted: false,
   },
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),

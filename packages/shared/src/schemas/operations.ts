@@ -4,7 +4,8 @@ import {
   isoDateTimeSchema,
   nonnegativeKoboStringSchema,
 } from "./common.ts";
-import { stockLocationSchema } from "./stock.ts";
+import { stockLocationSchema, stockMovementTypeSchema } from "./stock.ts";
+import { unitSchema } from "./purchase.ts";
 
 export const adminUserPublicDtoSchema = z
   .object({
@@ -36,6 +37,7 @@ export const stockTransferDtoSchema = z
     from: stockLocationSchema,
     to: stockLocationSchema,
     reason: z.string().nullable(),
+    reference: z.string().trim().nullable(),
     transferredAt: isoDateTimeSchema,
     createdAt: isoDateTimeSchema,
   })
@@ -79,5 +81,68 @@ export const stockAdjustmentLineDtoSchema = z
     quantityDeltaUnits: z.number().int().refine((value) => value !== 0),
     unitCostKobo: nonnegativeKoboStringSchema,
     reason: z.string().nullable(),
+  })
+  .strict();
+
+export const createPurchaseLineDtoSchema = z
+  .object({
+    productId: idSchema,
+    unit: unitSchema,
+    quantity: z.number().int().positive(),
+    lineTotalKobo: nonnegativeKoboStringSchema,
+  })
+  .strict();
+
+export const createPurchaseDtoSchema = z
+  .object({
+    supplierId: idSchema.nullable(),
+    location: stockLocationSchema,
+    purchasedAt: isoDateTimeSchema,
+    notes: z.string().trim().nullable(),
+    reference: z.string().trim().nullable(),
+    lines: z.array(createPurchaseLineDtoSchema).min(1),
+  })
+  .strict();
+
+export const createTransferLineDtoSchema = z
+  .object({
+    productId: idSchema,
+    quantityUnits: z.number().int().positive(),
+  })
+  .strict();
+
+export const createTransferDtoSchema = z
+  .object({
+    from: stockLocationSchema,
+    to: stockLocationSchema,
+    reason: z.string().trim().nullable(),
+    reference: z.string().trim().nullable().optional(),
+    transferredAt: isoDateTimeSchema,
+    lines: z.array(createTransferLineDtoSchema).min(1),
+  })
+  .strict();
+
+export const createAdjustmentLineDtoSchema = z
+  .object({
+    productId: idSchema,
+    location: stockLocationSchema,
+    quantityDeltaUnits: z.number().int().refine((value) => value !== 0),
+    unitCostKobo: nonnegativeKoboStringSchema.optional(),
+  })
+  .strict();
+
+export const createAdjustmentDtoSchema = z
+  .object({
+    reason: z.string().trim().min(1),
+    adjustedAt: isoDateTimeSchema,
+    lines: z.array(createAdjustmentLineDtoSchema).min(1),
+  })
+  .strict();
+
+export const stockMovementFilterDtoSchema = z
+  .object({
+    productId: idSchema.optional(),
+    location: stockLocationSchema.optional(),
+    type: stockMovementTypeSchema.optional(),
   })
   .strict();

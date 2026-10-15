@@ -1,5 +1,7 @@
 export type ProductCategory = "BEER" | "SOFT_DRINK" | "OTHER";
 
+export type SaleChannel = "RETAIL" | "WHOLESALE" | "BOTH";
+
 export type Unit = "UNIT" | "PACK";
 
 export type StockLocation = "WAREHOUSE" | "RETAIL_SHELF" | "MARKET";
@@ -18,6 +20,16 @@ export type PurchaseStatus = "DRAFT" | "RECEIVED" | "VOIDED";
 export type SaleStatus = "DRAFT" | "COMPLETED" | "VOIDED";
 
 export type CustomerType = "WHOLESALE" | "RETAIL";
+
+export type ExpenseCategory =
+  | "RENT"
+  | "UTILITY"
+  | "SALARY"
+  | "TRANSPORT"
+  | "MAINTENANCE"
+  | "SUPPLIES"
+  | "MARKETING"
+  | "OTHER";
 
 export type SupplierLedgerEntryType = "PURCHASE" | "PAYMENT" | "ADJUSTMENT";
 
@@ -58,6 +70,7 @@ export interface Product {
   category: ProductCategory;
   packName: string;
   unitsPerPack: number;
+  saleChannel: SaleChannel;
   retailPriceKobo: bigint;
   wholesalePriceKobo: bigint;
   averageCostKobo: bigint;
@@ -119,12 +132,41 @@ export interface PurchaseLine {
   lineTotalKobo: bigint;
 }
 
+export interface Sale {
+  id: string;
+  customerId: string | null;
+  customerName: string | null;
+  createdById: string;
+  channel: SaleChannel;
+  status: SaleStatus;
+  reference: string | null;
+  notes: string | null;
+  totalKobo: bigint;
+  paidKobo: bigint;
+  soldAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface SaleLine {
+  id: string;
+  saleId: string;
+  productId: string;
+  unit: Unit;
+  quantity: number;
+  unitsPerPackSnapshot: number;
+  quantityUnits: number;
+  unitPriceKobo: bigint;
+  lineTotalKobo: bigint;
+}
+
 export interface StockTransfer {
   id: string;
   createdById: string;
   from: StockLocation;
   to: StockLocation;
   reason: string | null;
+  reference: string | null;
   transferredAt: Date;
   createdAt: Date;
 }
@@ -134,6 +176,14 @@ export interface StockTransferLine {
   transferId: string;
   productId: string;
   quantityUnits: number;
+}
+
+export interface SalePayment {
+  id: string;
+  saleId: string;
+  amountKobo: bigint;
+  paidAt: Date;
+  createdAt: Date;
 }
 
 export interface StockTransferLeg {
@@ -204,6 +254,17 @@ export interface CustomerLedgerEntry {
   reversesEntryId: string | null;
   note: string | null;
   occurredAt: Date;
+}
+
+export interface Expense {
+  id: string;
+  channel: SaleChannel;
+  category: ExpenseCategory;
+  description: string;
+  amountKobo: bigint;
+  expenseDate: Date;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface AccountLedgerEntry {

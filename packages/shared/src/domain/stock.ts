@@ -1,4 +1,4 @@
-import type { StockLocation, StockMovement } from "./types.ts";
+import type { Product, StockLocation, StockMovement } from "./types.ts";
 
 export type StockMovementReversal = Omit<
   StockMovement,
@@ -142,4 +142,163 @@ export function buildStockMovementReversal(
     occurredAt: reversedAt,
     createdAt: reversedAt,
   };
+}
+
+export function recomputeAverageCostKobo(
+  movements: readonly StockMovement[],
+): bigint {
+  const reversedTargetIds = new Set(
+    movements
+      .filter((movement) => movement.reversesEntryId !== null)
+      .map((movement) => movement.reversesEntryId as string),
+  );
+
+  const effective = movements
+    .filter(
+      (movement) =>
+        movement.reversesEntryId === null &&
+        !reversedTargetIds.has(movement.id),
+    )
+    .slice()
+    .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+
+  let units = 0n;
+  let averageCostKobo = 0n;
+
+  for (const movement of effective) {
+    const delta = BigInt(movement.quantityUnits);
+    if (delta > 0n) {
+      if (movement.type === "PURCHASE" || movement.type === "ADJUSTMENT") {
+        if (units === 0n) {
+          averageCostKobo = movement.unitCostKobo;
+        } else {
+          averageCostKobo = calculateWeightedAverageCostKobo(
+            units,
+            averageCostKobo,
+            delta,
+            delta * movement.unitCostKobo,
+          );
+        }
+        units += delta;
+      } else {
+        units += delta;
+      }
+    } else {
+      units += delta;
+      if (units <= 0n) {
+        units = 0n;
+        averageCostKobo = 0n;
+      }
+    }
+  }
+
+  return averageCostKobo;
+}
+
+export function stockByProductAndLocation(
+  movements: readonly StockMovement[],
+): Map<string, Map<StockLocation, number>> {
+  const result = new Map<string, Map<StockLocation, number>>();
+  for (const movement of movements) {
+    if (movement.reversesEntryId !== null) {
+      const target = movements.find((m) => m.id === movement.reversesEntryId);
+      if (target && movement.quantityUnits === -target.quantityUnits) {
+        continue;
+      }
+    }
+    let byLocation = result.get(movement.productId);
+    if (!byLocation) {
+      byLocation = new Map();
+      result.set(movement.productId, byLocation);
+    }
+    byLocation.set(
+      movement.location,
+      (byLocation.get(movement.location) ?? 0) + movement.quantityUnits,
+    );
+  }
+  return result;
+}
+
+export function totalUnitsForProduct(
+  movements: readonly StockMovement[],
+  productId: string,
+): number {
+  const byLocation = stockByProductAndLocation(movements).get(productId);
+  if (!byLocation) return 0;
+  let total = 0;
+  for (const units of byLocation.values()) {
+    total += units;
+  }
+  return total;
+}
+
+export function stockWorthAtCost(
+  movements: readonly StockMovement[],
+  product: Pick<Product, "id" | "averageCostKobo">,
+): bigint {
+  const units = BigInt(totalUnitsForProduct(movements, product.id));
+  return units * product.averageCostKobo;
+}
+
+export function stockWorthAtRetail(
+  movements: readonly StockMovement[],
+  product: Pick<Product, "id" | "retailPriceKobo">,
+): bigint {
+  const units = BigInt(totalUnitsForProduct(movements, product.id));
+  return units * product.retailPriceKobo;
+}
+
+export function stockWorthAtWholesale(
+  movements: readonly StockMovement[],
+  product: Pick<Product, "id" | "unitsPerPack" | "wholesalePriceKobo">,
+): bigint {
+  const units = BigInt(totalUnitsForProduct(movements, product.id));
+  const fullPacks = units / BigInt(product.unitsPerPack);
+  return fullPacks * product.wholesalePriceKobo;
+}
+
+export function stockWorthByChannel(
+  movements: readonly StockMovement[],
+  product: Pick<
+    Product,
+    | "id"
+    | "unitsPerPack"
+    | "retailPriceKobo"
+    | "wholesalePriceKobo"
+    | "saleChannel"
+  >,
+): { retailKobo: bigint; wholesaleKobo: bigint; totalKobo: bigint } {
+  const byLocation = stockByProductAndLocation(movements).get(product.id);
+  if (!byLocation) {
+    return { retailKobo: 0n, wholesaleKobo: 0n, totalKobo: 0n };
+  }
+
+  if (product.saleChannel === "RETAIL") {
+    const units = BigInt(totalUnitsForProduct(movements, product.id));
+    const retail = units * product.retailPriceKobo;
+    return { retailKobo: retail, wholesaleKobo: 0n, totalKobo: retail };
+  }
+
+  if (product.saleChannel === "WHOLESALE") {
+    const units = BigInt(totalUnitsForProduct(movements, product.id));
+    const fullPacks = units / BigInt(product.unitsPerPack);
+    const wholesale = fullPacks * product.wholesalePriceKobo;
+    return { retailKobo: 0n, wholesaleKobo: wholesale, totalKobo: wholesale };
+  }
+
+  const retailUnits = BigInt(
+    (byLocation.get("RETAIL_SHELF") ?? 0) + (byLocation.get("MARKET") ?? 0),
+  );
+  const warehouseUnits = BigInt(byLocation.get("WAREHOUSE") ?? 0);
+  const retail = retailUnits * product.retailPriceKobo;
+  const wholesale =
+    (warehouseUnits / BigInt(product.unitsPerPack)) * product.wholesalePriceKobo;
+  return { retailKobo: retail, wholesaleKobo: wholesale, totalKobo: retail + wholesale };
+}
+
+export function isLowStock(
+  movements: readonly StockMovement[],
+  product: Pick<Product, "id" | "reorderLevelUnits">,
+): boolean {
+  return totalUnitsForProduct(movements, product.id) <= product.reorderLevelUnits;
 }

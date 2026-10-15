@@ -15,6 +15,7 @@ const blankProduct: CreateProductDto = {
   category: "BEER",
   packName: "crate",
   unitsPerPack: 24,
+  saleChannel: "BOTH",
   retailPriceKobo: "",
   wholesalePriceKobo: "",
   reorderLevelUnits: 0,
@@ -28,6 +29,7 @@ function initialValues(product?: ProductDto): CreateProductDto {
     category: product.category,
     packName: product.packName,
     unitsPerPack: product.unitsPerPack,
+    saleChannel: product.saleChannel,
     retailPriceKobo: product.retailPriceKobo,
     wholesalePriceKobo: product.wholesalePriceKobo,
     reorderLevelUnits: product.reorderLevelUnits,
@@ -83,6 +85,17 @@ export function ProductForm({
             <option value="BEER">Beer</option>
             <option value="SOFT_DRINK">Soft drink</option>
             <option value="OTHER">Other</option>
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="block text-sm font-medium">Sale channel</span>
+          <select
+            {...form.register("saleChannel")}
+            className="min-h-12 w-full rounded-md border border-input bg-background px-3 text-base"
+          >
+            <option value="BOTH">Both (retail & wholesale)</option>
+            <option value="RETAIL">Retail only (fridge)</option>
+            <option value="WHOLESALE">Wholesale only</option>
           </select>
         </label>
         <label className="space-y-1.5">

@@ -22,3 +22,15 @@ export const customerDtoSchema = z
     updatedAt: isoDateTimeSchema,
   })
   .strict();
+
+export const createCustomerDtoSchema = z
+  .object({
+    name: z.string().trim().min(1),
+    type: customerTypeSchema,
+    creditLimitKobo: nonnegativeKoboStringSchema,
+    phone: z.string().trim().nullable(),
+    email: z.string().trim().nullable(),
+    address: z.string().trim().nullable(),
+    notes: z.string().trim().nullable(),
+  })
+  .strict();

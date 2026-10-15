@@ -8,7 +8,7 @@ import {
   type ProductDto,
 } from "@fabtyna/shared";
 import type { ProductsApi, ProductListOptions } from "./products.api";
-import { readMockStore, transactMockStore } from "./mock-store";
+import { newId, readMockStore, transactMockStore } from "./mock-store";
 
 function delay(): Promise<void> {
   const milliseconds = 150 + Math.floor(Math.random() * 151);
@@ -33,12 +33,12 @@ function assertUniqueSku(
   exceptId?: string,
 ): void {
   if (sku === null || sku.trim() === "") return;
-  const normalized = sku.trim().toLocaleLowerCase();
+  const normalized = sku.trim().toUpperCase();
   const duplicate = products.find(
     (product) =>
       product.id !== exceptId &&
       product.deletedAt === null &&
-      product.sku?.trim().toLocaleLowerCase() === normalized,
+      product.sku?.trim().toUpperCase() === normalized,
   );
   if (duplicate) {
     throw new Error(`SKU '${sku}' is already used by an active product.`);
@@ -59,7 +59,7 @@ function audit(
   afterData: unknown,
 ): void {
   const entry = {
-    id: crypto.randomUUID(),
+    id: newId(),
     actorId: null,
     action,
     entityType: "Product",
@@ -95,7 +95,7 @@ export const productsMockApi: ProductsApi = {
       assertUniqueSku(draft.products, data.sku);
       const createdAt = new Date();
       const product: Product = {
-        id: crypto.randomUUID(),
+        id: newId(),
         ...data,
         sku: data.sku?.trim() || null,
         retailPriceKobo: BigInt(data.retailPriceKobo),

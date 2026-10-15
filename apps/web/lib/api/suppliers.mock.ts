@@ -3,13 +3,15 @@ import {
   fromAuditLogDto,
   fromSupplierDto,
   toAuditLogDto,
+  toPurchaseDto,
   toSupplierDto,
+  toSupplierLedgerEntryDto,
   type CreateSupplierDto,
   type Supplier,
   type SupplierDto,
 } from "@fabtyna/shared";
-import type { SuppliersApi, SupplierListOptions } from "./suppliers.api";
-import { readMockStore, transactMockStore } from "./mock-store";
+import type { SuppliersApi, SupplierDetailDto, SupplierListOptions } from "./suppliers.api";
+import { newId, readMockStore, transactMockStore } from "./mock-store";
 
 function delay(): Promise<void> {
   const milliseconds = 150 + Math.floor(Math.random() * 151);
@@ -44,7 +46,7 @@ function audit(
   draft.auditLogs.push(
     fromAuditLogDto(
       toAuditLogDto({
-        id: crypto.randomUUID(),
+        id: newId(),
         actorId: null,
         action,
         entityType: "Supplier",
@@ -75,13 +77,36 @@ export const suppliersMockApi: SuppliersApi = {
     return jsonClone(rows.map(toSupplierDto));
   },
 
+  async getById(id) {
+    await delay();
+    const store = readMockStore();
+    const supplier = findSupplier(store.suppliers, id);
+    const ledgerEntries = store.supplierLedgerEntries
+      .filter((entry) => entry.supplierId === id)
+      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+    const purchases = store.purchases
+      .filter((purchase) => purchase.supplierId === id)
+      .sort((a, b) => b.purchasedAt.getTime() - a.purchasedAt.getTime());
+    const balanceOwedKobo = ledgerEntries.reduce(
+      (sum, entry) => sum + entry.amountKobo,
+      0n,
+    );
+    const detail: SupplierDetailDto = {
+      ...toSupplierDto(supplier),
+      ledgerEntries: jsonClone(ledgerEntries.map(toSupplierLedgerEntryDto)),
+      purchases: jsonClone(purchases.map(toPurchaseDto)),
+      balanceOwedKobo: balanceOwedKobo.toString(),
+    };
+    return jsonClone(detail);
+  },
+
   async create(input) {
     await delay();
     const data = validated(input);
     const result = transactMockStore((draft) => {
       const createdAt = new Date();
       const supplier: Supplier = {
-        id: crypto.randomUUID(),
+        id: newId(),
         ...data,
         name: data.name.trim(),
         phone: data.phone?.trim() || null,

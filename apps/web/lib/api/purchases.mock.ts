@@ -1,0 +1,208 @@
+import {
+  createPurchaseDtoSchema,
+  fromAuditLogDto,
+  receivePurchase,
+  toAuditLogDto,
+  toPurchaseDto,
+  toPurchaseLineDto,
+  toStockMovementDto,
+  toSupplierDto,
+  voidPurchase,
+  type Purchase,
+} from "@fabtyna/shared";
+import type { PurchasesApi, PurchaseDetailDto, PurchaseListItemDto } from "./purchases.api";
+import { newId, readMockStore, transactMockStore } from "./mock-store";
+
+function delay(): Promise<void> {
+  const milliseconds = 150 + Math.floor(Math.random() * 151);
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function jsonClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function audit(
+  draft: ReturnType<typeof readMockStore>,
+  action: string,
+  entityId: string,
+  beforeData: unknown,
+  afterData: unknown,
+): void {
+  draft.auditLogs.push(
+    fromAuditLogDto(
+      toAuditLogDto({
+        id: newId(),
+        actorId: null,
+        action,
+        entityType: "Purchase",
+        entityId,
+        beforeData,
+        afterData,
+        metadata: null,
+        occurredAt: new Date(),
+      }),
+    ),
+  );
+}
+
+function buildPurchaseDetail(
+  store: ReturnType<typeof readMockStore>,
+  purchase: Purchase,
+): PurchaseDetailDto {
+  const productById = new Map(store.products.map((p) => [p.id, p.name]));
+  const lines = store.purchaseLines
+    .filter((line) => line.purchaseId === purchase.id)
+    .map((line) => ({
+      ...toPurchaseLineDto(line),
+      productName: productById.get(line.productId) ?? line.productId,
+    }));
+  const lineIds = new Set(lines.map((l) => l.id));
+  const movements = store.stockMovements
+    .filter(
+      (m) =>
+        m.type === "PURCHASE" &&
+        m.purchaseLineId !== null &&
+        lineIds.has(m.purchaseLineId),
+    )
+    .map(toStockMovementDto);
+  const supplier = purchase.supplierId
+    ? store.suppliers.find((s) => s.id === purchase.supplierId) ?? null
+    : null;
+  return jsonClone({
+    ...toPurchaseDto(purchase),
+    supplier: supplier ? toSupplierDto(supplier) : null,
+    lines,
+    movements,
+  });
+}
+
+export const purchasesMockApi: PurchasesApi = {
+  async list() {
+    await delay();
+    const store = readMockStore();
+    const items: PurchaseListItemDto[] = store.purchases
+      .slice()
+      .sort((a, b) => b.purchasedAt.getTime() - a.purchasedAt.getTime())
+      .map((purchase) => {
+        const supplier = purchase.supplierId
+          ? store.suppliers.find((s) => s.id === purchase.supplierId) ?? null
+          : null;
+        const lineCount = store.purchaseLines.filter(
+          (l) => l.purchaseId === purchase.id,
+        ).length;
+        return {
+          ...toPurchaseDto(purchase),
+          supplierName: supplier?.name ?? null,
+          lineCount,
+        };
+      });
+    return jsonClone(items);
+  },
+
+  async getById(id) {
+    await delay();
+    const store = readMockStore();
+    const purchase = store.purchases.find((p) => p.id === id);
+    if (!purchase) throw new Error("Purchase not found.");
+    return buildPurchaseDetail(store, purchase);
+  },
+
+  async create(input) {
+    await delay();
+    const data = createPurchaseDtoSchema.parse(input);
+    const result = transactMockStore((draft) => {
+      const existingProducts = draft.products;
+      const existingMovements = draft.stockMovements;
+      const received = receivePurchase(
+        {
+          supplierId: data.supplierId,
+          createdById: "admin",
+          location: data.location,
+          purchasedAt: new Date(data.purchasedAt),
+          notes: data.notes,
+          reference: data.reference,
+          lines: data.lines.map((line) => ({
+            productId: line.productId,
+            unit: line.unit,
+            quantity: line.quantity,
+            lineTotalKobo: BigInt(line.lineTotalKobo),
+          })),
+        },
+        existingProducts,
+        existingMovements,
+        newId,
+      );
+
+      draft.purchases.push(received.purchase);
+      draft.purchaseLines.push(...received.purchaseLines);
+      draft.stockMovements.push(...received.movements);
+      if (received.supplierLedgerEntry) {
+        draft.supplierLedgerEntries.push(received.supplierLedgerEntry);
+      }
+      for (const update of received.productUpdates) {
+        const product = draft.products.find((p) => p.id === update.id);
+        if (product) product.averageCostKobo = update.averageCostKobo;
+      }
+      audit(
+        draft,
+        "PURCHASE_CREATED",
+        received.purchase.id,
+        null,
+        toPurchaseDto(received.purchase),
+      );
+      return received.purchase;
+    });
+
+    const store = readMockStore();
+    const purchase = store.purchases.find((p) => p.id === result.id)!;
+    return buildPurchaseDetail(store, purchase);
+  },
+
+  async void(id) {
+    await delay();
+    const voidedAt = new Date();
+    transactMockStore((draft) => {
+      const existingPurchases = draft.purchases;
+      const existingPurchaseLines = draft.purchaseLines;
+      const existingMovements = draft.stockMovements;
+      const existingLedger = draft.supplierLedgerEntries;
+
+      const voided = voidPurchase(
+        id,
+        voidedAt,
+        existingPurchases,
+        existingPurchaseLines,
+        existingMovements,
+        existingLedger,
+        newId,
+      );
+
+      const purchase = draft.purchases.find((p) => p.id === id);
+      if (purchase) {
+        purchase.status = "VOIDED";
+        purchase.updatedAt = voidedAt;
+      }
+      draft.stockMovements.push(...voided.reversalMovements);
+      if (voided.reversalSupplierLedgerEntry) {
+        draft.supplierLedgerEntries.push(voided.reversalSupplierLedgerEntry);
+      }
+      for (const update of voided.productUpdates) {
+        const product = draft.products.find((p) => p.id === update.id);
+        if (product) product.averageCostKobo = update.averageCostKobo;
+      }
+      audit(
+        draft,
+        "PURCHASE_VOIDED",
+        id,
+        null,
+        purchase ? toPurchaseDto(purchase) : null,
+      );
+      return purchase;
+    });
+
+    const store = readMockStore();
+    const purchase = store.purchases.find((p) => p.id === id)!;
+    return buildPurchaseDetail(store, purchase);
+  },
+};

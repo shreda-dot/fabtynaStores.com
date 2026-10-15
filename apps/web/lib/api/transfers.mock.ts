@@ -1,0 +1,134 @@
+import {
+  buildTransfer,
+  createTransferDtoSchema,
+  fromAuditLogDto,
+  toAuditLogDto,
+  toStockMovementDto,
+  toStockTransferDto,
+  toStockTransferLegDto,
+  toStockTransferLineDto,
+} from "@fabtyna/shared";
+import type { TransfersApi, TransferDetailDto } from "./transfers.api";
+import { newId, readMockStore, transactMockStore } from "./mock-store";
+
+function delay(): Promise<void> {
+  const milliseconds = 150 + Math.floor(Math.random() * 151);
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function jsonClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function audit(
+  draft: ReturnType<typeof readMockStore>,
+  action: string,
+  entityId: string,
+  beforeData: unknown,
+  afterData: unknown,
+): void {
+  draft.auditLogs.push(
+    fromAuditLogDto(
+      toAuditLogDto({
+        id: newId(),
+        actorId: null,
+        action,
+        entityType: "StockTransfer",
+        entityId,
+        beforeData,
+        afterData,
+        metadata: null,
+        occurredAt: new Date(),
+      }),
+    ),
+  );
+}
+
+function buildTransferDetail(
+  store: ReturnType<typeof readMockStore>,
+  transferId: string,
+): TransferDetailDto {
+  const transfer = store.stockTransfers.find((t) => t.id === transferId);
+  if (!transfer) throw new Error("Transfer not found.");
+  const productById = new Map(store.products.map((p) => [p.id, p.name]));
+  const lines = store.stockTransferLines
+    .filter((l) => l.transferId === transferId)
+    .map((l) => ({
+      ...toStockTransferLineDto(l),
+      productName: productById.get(l.productId) ?? l.productId,
+    }));
+  const lineIds = new Set(lines.map((l) => l.id));
+  const legs = store.stockTransferLegs
+    .filter((l) => lineIds.has(l.transferLineId))
+    .map(toStockTransferLegDto);
+  const legIds = new Set(legs.map((l) => l.id));
+  const movements = store.stockMovements
+    .filter(
+      (m) => m.transferLegId !== null && legIds.has(m.transferLegId),
+    )
+    .map(toStockMovementDto);
+  return jsonClone({
+    ...toStockTransferDto(transfer),
+    lines,
+    legs,
+    movements,
+  });
+}
+
+export const transfersMockApi: TransfersApi = {
+  async list() {
+    await delay();
+    const store = readMockStore();
+    const items = store.stockTransfers
+      .slice()
+      .sort((a, b) => b.transferredAt.getTime() - a.transferredAt.getTime())
+      .map(toStockTransferDto);
+    return jsonClone(items);
+  },
+
+  async getById(id) {
+    await delay();
+    const store = readMockStore();
+    return buildTransferDetail(store, id);
+  },
+
+  async create(input) {
+    await delay();
+    const data = createTransferDtoSchema.parse(input);
+    const result = transactMockStore((draft) => {
+      const built = buildTransfer(
+        {
+          createdById: "admin",
+          from: data.from,
+          to: data.to,
+          reason: data.reason,
+          reference: data.reference?.trim() !== "" ? data.reference! : `TRF-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+          transferredAt: new Date(data.transferredAt),
+          lines: data.lines.map((line) => ({
+            productId: line.productId,
+            quantityUnits: line.quantityUnits,
+          })),
+        },
+        draft.products,
+        draft.stockMovements,
+        newId,
+      );
+
+      draft.stockTransfers.push(built.transfer);
+      draft.stockTransferLines.push(...built.transferLines);
+      draft.stockTransferLegs.push(...built.transferLegs);
+      draft.stockMovements.push(...built.movements);
+      audit(
+        draft,
+        "TRANSFER_CREATED",
+        built.transfer.id,
+        null,
+        toStockTransferDto(built.transfer),
+      );
+      return built.transfer;
+    });
+
+    const store = readMockStore();
+    return buildTransferDetail(store, result.id);
+  },
+};

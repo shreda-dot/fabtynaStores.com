@@ -1,8 +1,14 @@
 import type {
   AuditLog,
+  Customer,
+  CustomerLedgerEntry,
+  Expense,
   Product,
   Purchase,
   PurchaseLine,
+  Sale,
+  SaleLine,
+  SalePayment,
   StockAdjustment,
   StockAdjustmentLine,
   StockMovement,
@@ -14,9 +20,15 @@ import type {
 } from "./domain/types.ts";
 import {
   auditLogDtoSchema,
+  customerDtoSchema,
+  customerLedgerEntryDtoSchema,
+  expenseDtoSchema,
   productDtoSchema,
   purchaseDtoSchema,
   purchaseLineDtoSchema,
+  saleDtoSchema,
+  saleLineDtoSchema,
+  salePaymentDtoSchema,
   stockAdjustmentDtoSchema,
   stockAdjustmentLineDtoSchema,
   stockMovementDtoSchema,
@@ -28,9 +40,15 @@ import {
 } from "./schemas/index.ts";
 import type {
   AuditLogDto,
+  CustomerDto,
+  CustomerLedgerEntryDto,
+  ExpenseDto,
   ProductDto,
   PurchaseDto,
   PurchaseLineDto,
+  SaleDto,
+  SaleLineDto,
+  SalePaymentDto,
   StockAdjustmentDto,
   StockAdjustmentLineDto,
   StockMovementDto,
@@ -169,6 +187,128 @@ export function fromPurchaseLineDto(dto: PurchaseLineDto): PurchaseLine {
     ...value,
     unitCostKobo: BigInt(value.unitCostKobo),
     lineTotalKobo: BigInt(value.lineTotalKobo),
+  };
+}
+
+export function toCustomerDto(customer: Customer): CustomerDto {
+  return customerDtoSchema.parse({
+    ...customer,
+    creditLimitKobo: customer.creditLimitKobo.toString(),
+    deletedAt: customer.deletedAt === null ? null : dateToIso(customer.deletedAt),
+    createdAt: dateToIso(customer.createdAt),
+    updatedAt: dateToIso(customer.updatedAt),
+  });
+}
+
+export function fromCustomerDto(dto: CustomerDto): Customer {
+  const value = customerDtoSchema.parse(dto);
+  return {
+    ...value,
+    creditLimitKobo: BigInt(value.creditLimitKobo),
+    deletedAt: value.deletedAt === null ? null : new Date(value.deletedAt),
+    createdAt: new Date(value.createdAt),
+    updatedAt: new Date(value.updatedAt),
+  };
+}
+
+export function toCustomerLedgerEntryDto(
+  entry: CustomerLedgerEntry,
+): CustomerLedgerEntryDto {
+  return customerLedgerEntryDtoSchema.parse({
+    ...entry,
+    amountKobo: entry.amountKobo.toString(),
+    occurredAt: dateToIso(entry.occurredAt),
+  });
+}
+
+export function fromCustomerLedgerEntryDto(
+  dto: CustomerLedgerEntryDto,
+): CustomerLedgerEntry {
+  const value = customerLedgerEntryDtoSchema.parse(dto);
+  return {
+    ...value,
+    amountKobo: BigInt(value.amountKobo),
+    occurredAt: new Date(value.occurredAt),
+  };
+}
+
+export function toExpenseDto(expense: Expense): ExpenseDto {
+  return expenseDtoSchema.parse({
+    ...expense,
+    amountKobo: expense.amountKobo.toString(),
+    expenseDate: dateToIso(expense.expenseDate),
+    createdAt: dateToIso(expense.createdAt),
+    updatedAt: dateToIso(expense.updatedAt),
+  });
+}
+
+export function fromExpenseDto(dto: ExpenseDto): Expense {
+  const value = expenseDtoSchema.parse(dto);
+  return {
+    ...value,
+    amountKobo: BigInt(value.amountKobo),
+    expenseDate: new Date(value.expenseDate),
+    createdAt: new Date(value.createdAt),
+    updatedAt: new Date(value.updatedAt),
+  };
+}
+
+export function toSaleDto(sale: Sale): SaleDto {
+  return saleDtoSchema.parse({
+    ...sale,
+    totalKobo: sale.totalKobo.toString(),
+    paidKobo: sale.paidKobo.toString(),
+    soldAt: dateToIso(sale.soldAt),
+    createdAt: dateToIso(sale.createdAt),
+    updatedAt: dateToIso(sale.updatedAt),
+  });
+}
+
+export function fromSaleDto(dto: SaleDto): Sale {
+  const value = saleDtoSchema.parse(dto);
+  return {
+    ...value,
+    totalKobo: BigInt(value.totalKobo),
+    paidKobo: BigInt(value.paidKobo),
+    soldAt: new Date(value.soldAt),
+    createdAt: new Date(value.createdAt),
+    updatedAt: new Date(value.updatedAt),
+  };
+}
+
+export function toSaleLineDto(line: SaleLine): SaleLineDto {
+  return saleLineDtoSchema.parse({
+    ...line,
+    unitPriceKobo: line.unitPriceKobo.toString(),
+    lineTotalKobo: line.lineTotalKobo.toString(),
+  });
+}
+
+export function fromSaleLineDto(dto: SaleLineDto): SaleLine {
+  const value = saleLineDtoSchema.parse(dto);
+  return {
+    ...value,
+    unitPriceKobo: BigInt(value.unitPriceKobo),
+    lineTotalKobo: BigInt(value.lineTotalKobo),
+  };
+}
+
+export function toSalePaymentDto(payment: SalePayment): SalePaymentDto {
+  return salePaymentDtoSchema.parse({
+    ...payment,
+    amountKobo: payment.amountKobo.toString(),
+    paidAt: dateToIso(payment.paidAt),
+    createdAt: dateToIso(payment.createdAt),
+  });
+}
+
+export function fromSalePaymentDto(dto: SalePaymentDto): SalePayment {
+  const value = salePaymentDtoSchema.parse(dto);
+  return {
+    ...value,
+    amountKobo: BigInt(value.amountKobo),
+    paidAt: new Date(value.paidAt),
+    createdAt: new Date(value.createdAt),
   };
 }
 

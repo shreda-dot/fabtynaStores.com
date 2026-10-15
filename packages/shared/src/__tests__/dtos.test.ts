@@ -69,6 +69,7 @@ const product: Product = {
   category: "BEER",
   packName: "crate",
   unitsPerPack: 24,
+  saleChannel: "BOTH",
   retailPriceKobo: largeKobo,
   wholesalePriceKobo: largeKobo + 1n,
   averageCostKobo: largeKobo + 2n,
@@ -151,6 +152,7 @@ const stockTransfer: StockTransfer = {
   from: "WAREHOUSE",
   to: "RETAIL_SHELF",
   reason: null,
+  reference: "TRF-TEST01",
   transferredAt: timestamp,
   createdAt: timestamp,
 };

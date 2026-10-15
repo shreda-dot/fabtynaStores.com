@@ -53,6 +53,7 @@ const purchasesRealApi: PurchasesApi = {
   list: async () => notImplemented(),
   getById: async () => notImplemented(),
   create: async () => notImplemented(),
+  update: async () => notImplemented(),
   void: async () => notImplemented(),
 };
 
@@ -60,6 +61,7 @@ const salesRealApi: SalesApi = {
   list: async () => notImplemented(),
   getById: async () => notImplemented(),
   create: async () => notImplemented(),
+  update: async () => notImplemented(),
   void: async () => notImplemented(),
   recordPayment: async () => notImplemented(),
 };

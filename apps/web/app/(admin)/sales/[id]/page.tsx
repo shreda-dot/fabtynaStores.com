@@ -57,8 +57,7 @@ export default function SaleDetailPage() {
     },
     {
       header: "Quantity",
-      render: (line) =>
-        `${line.quantity} (${line.quantityUnits} units)`,
+      render: (line) => `${line.quantity} (${line.quantityUnits} units)`,
     },
     {
       header: "Unit price",
@@ -115,14 +114,22 @@ export default function SaleDetailPage() {
           </div>
         </div>
         {s.status !== "VOIDED" && (
-          <button
-            type="button"
-            onClick={tryVoid}
-            disabled={voidMutation.isPending}
-            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md border border-destructive px-4 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-60"
-          >
-            {voidMutation.isPending ? "Voiding…" : "Void sale"}
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/sales/${s.id}/edit`}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-medium hover:bg-muted"
+            >
+              Edit sale
+            </Link>
+            <button
+              type="button"
+              onClick={tryVoid}
+              disabled={voidMutation.isPending}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md border border-destructive px-4 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-60"
+            >
+              {voidMutation.isPending ? "Voiding…" : "Void sale"}
+            </button>
+          </div>
         )}
       </div>
 

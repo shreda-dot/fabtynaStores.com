@@ -6,13 +6,13 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { formatNaira } from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
-import { ResponsiveTable, type ResponsiveTableColumn } from "@/components/responsive-table";
+import {
+  ResponsiveTable,
+  type ResponsiveTableColumn,
+} from "@/components/responsive-table";
 import { customersApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
-import type {
-  CustomerLedgerEntryDto,
-  SaleDto,
-} from "@fabtyna/shared";
+import type { CustomerLedgerEntryDto, SaleDto } from "@fabtyna/shared";
 
 export default function CustomerDetailPage() {
   const params = useParams<{ id: string }>();
@@ -51,7 +51,9 @@ export default function CustomerDetailPage() {
     {
       header: "Amount",
       render: (entry) => (
-        <span className={entry.amountKobo.startsWith("-") ? "text-destructive" : ""}>
+        <span
+          className={entry.amountKobo.startsWith("-") ? "text-destructive" : ""}
+        >
           {formatNaira(entry.amountKobo)}
         </span>
       ),
@@ -86,6 +88,22 @@ export default function CustomerDetailPage() {
     {
       header: "Total",
       render: (sale) => formatNaira(sale.totalKobo),
+    },
+    {
+      header: "Paid",
+      render: (sale) => formatNaira(sale.paidKobo),
+    },
+    {
+      header: "Unpaid",
+      render: (sale) => {
+        const owed = BigInt(sale.totalKobo) - BigInt(sale.paidKobo);
+        if (sale.status === "VOIDED") return "—";
+        return (
+          <span className={owed > 0n ? "font-medium text-destructive" : ""}>
+            {formatNaira(owed.toString())}
+          </span>
+        );
+      },
     },
     {
       header: "Status",

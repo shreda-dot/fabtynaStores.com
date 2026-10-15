@@ -1,18 +1,14 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { formatNaira } from "@fabtyna/shared";
+import { formatNaira, getLagosBusinessDayRange } from "@fabtyna/shared";
 import { ListLoading } from "@/components/list-feedback";
+import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { reportsApi, stockApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 
-function startOfLagosDay(date: Date): Date {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  return new Date(`${yyyy}-${mm}-${dd}T00:00:00+01:00`);
-}
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export default function DashboardPage() {
   const stock = useQuery({
@@ -20,33 +16,38 @@ export default function DashboardPage() {
     queryFn: () => stockApi.list(),
   });
 
-  const now = new Date();
-  const todayStart = startOfLagosDay(now);
-  const reportTo = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
-  const reportFrom = new Date(todayStart.getTime() - 6 * 24 * 60 * 60 * 1000);
-  const todayStr = todayStart.toISOString().slice(0, 10);
+  // "Today" is the Lagos (Africa/Lagos) business day, not the device day.
+  const businessDate = useLagosBusinessDate();
+  // `null` follows the current Lagos business day, so it rolls over
+  // automatically at Lagos midnight. A value pins a specific past day.
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const viewDate = selectedDate ?? businessDate;
+
+  const { start: dayStart, end: dayEnd } = getLagosBusinessDayRange(viewDate);
+  const reportFrom = new Date(dayStart.getTime() - 6 * DAY_MS);
+  const isToday = viewDate === businessDate;
 
   const report = useQuery({
     queryKey: queryKeys.reports.salesSummary(
       reportFrom.toISOString().slice(0, 10),
-      reportTo.toISOString().slice(0, 10),
+      dayEnd.toISOString().slice(0, 10),
     ),
-    queryFn: () => reportsApi.salesSummary(reportFrom, reportTo),
+    queryFn: () => reportsApi.salesSummary(reportFrom, dayEnd),
   });
 
   const today = useMemo(
-    () => report.data?.days.find((d) => d.date === todayStr) ?? null,
-    [report.data, todayStr],
+    () => report.data?.days.find((d) => d.date === viewDate) ?? null,
+    [report.data, viewDate],
   );
 
-  const totalRetailWorth = stock.data?.reduce(
-    (sum, row) => sum + BigInt(row.retailWorthKobo),
-    0n,
-  ) ?? 0n;
-  const totalWholesaleWorth = stock.data?.reduce(
-    (sum, row) => sum + BigInt(row.wholesaleWorthKobo),
-    0n,
-  ) ?? 0n;
+  const totalRetailWorth =
+    stock.data?.reduce((sum, row) => sum + BigInt(row.retailWorthKobo), 0n) ??
+    0n;
+  const totalWholesaleWorth =
+    stock.data?.reduce(
+      (sum, row) => sum + BigInt(row.wholesaleWorthKobo),
+      0n,
+    ) ?? 0n;
 
   const retailSupposed = BigInt(today?.retailSupposedRevenueKobo ?? "0");
   const retailGotten = BigInt(today?.retailRevenueGottenKobo ?? "0");
@@ -59,11 +60,42 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Fabtyna Stores administration.
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Business day is based on Africa/Lagos time and resets at Lagos
+            midnight. Accounts are usually reviewed the next day — pick a date
+            to look back.
+          </p>
+        </div>
+        <div className="flex items-end gap-2">
+          <div className="space-y-1">
+            <label
+              htmlFor="business-date"
+              className="block text-xs font-medium text-muted-foreground"
+            >
+              Business date
+            </label>
+            <input
+              id="business-date"
+              type="date"
+              value={viewDate}
+              max={businessDate}
+              onChange={(event) => setSelectedDate(event.target.value)}
+              className="h-9 rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </div>
+          {!isToday && (
+            <button
+              type="button"
+              onClick={() => setSelectedDate(null)}
+              className="h-9 rounded-md border border-border px-3 text-xs font-medium hover:bg-muted"
+            >
+              Today
+            </button>
+          )}
+        </div>
       </div>
 
       {stock.isPending || report.isPending ? (
@@ -71,7 +103,9 @@ export default function DashboardPage() {
       ) : (
         <div className="space-y-6">
           <section className="space-y-4">
-            <h2 className="text-lg font-semibold">Today&apos;s sales</h2>
+            <h2 className="text-lg font-semibold">
+              {isToday ? "Today's sales" : `Sales for ${viewDate}`}
+            </h2>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="rounded-lg border border-border bg-card p-5">
                 <h3 className="text-base font-medium">Retail (fridge)</h3>
@@ -144,7 +178,9 @@ export default function DashboardPage() {
 
           <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div className="rounded-lg border border-border bg-card p-5">
-              <p className="text-sm text-muted-foreground">Today&rsquo;s net profit</p>
+              <p className="text-sm text-muted-foreground">
+                {isToday ? "Today's net profit" : "Net profit"}
+              </p>
               <p
                 className={`mt-2 text-2xl font-semibold ${
                   todayNetProfit < 0n ? "text-destructive" : ""
@@ -154,7 +190,9 @@ export default function DashboardPage() {
               </p>
             </div>
             <div className="rounded-lg border border-border bg-card p-5">
-              <p className="text-sm text-muted-foreground">Today&rsquo;s expenses</p>
+              <p className="text-sm text-muted-foreground">
+                {isToday ? "Today's expenses" : "Expenses"}
+              </p>
               <p className="mt-2 text-2xl font-semibold">
                 {formatNaira(todayExpenses.toString())}
               </p>
@@ -167,8 +205,8 @@ export default function DashboardPage() {
             </h2>
             <p className="text-sm text-muted-foreground">
               Supposed revenue is what was billed. Revenue gotten is cash
-              received today. The gap is made up of unpaid debts, discounts
-              given below the standard price, and expenses.
+              received on that day. The gap is made up of unpaid debts,
+              discounts given below the standard price, and expenses.
             </p>
             <ul className="space-y-2 text-sm">
               <li className="flex items-center justify-between gap-4">

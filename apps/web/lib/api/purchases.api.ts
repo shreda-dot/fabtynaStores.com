@@ -25,5 +25,6 @@ export interface PurchasesApi {
   list(): Promise<PurchaseListItemDto[]>;
   getById(id: string): Promise<PurchaseDetailDto>;
   create(input: CreatePurchaseDto): Promise<PurchaseDetailDto>;
+  update(id: string, input: CreatePurchaseDto): Promise<PurchaseDetailDto>;
   void(id: string): Promise<PurchaseDetailDto>;
 }

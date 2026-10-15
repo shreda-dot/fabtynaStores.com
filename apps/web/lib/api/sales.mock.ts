@@ -166,6 +166,80 @@ export const salesMockApi: SalesApi = {
     return buildSaleDetail(store, sale);
   },
 
+  async update(id, input) {
+    await delay();
+    const data = createSaleDtoSchema.parse(input);
+    const result = transactMockStore((draft) => {
+      const original = draft.sales.find((s) => s.id === id);
+      if (!original) throw new Error("Sale not found.");
+      const before = toSaleDto(original);
+
+      // Amending keeps the audit trail: reverse the original (immutably) and
+      // record a corrected replacement instead of editing in place.
+      const amendedAt = new Date();
+      const voided = voidSale(
+        id,
+        amendedAt,
+        draft.sales,
+        draft.saleLines,
+        draft.stockMovements,
+        draft.customerLedgerEntries,
+        newId,
+      );
+      original.status = "VOIDED";
+      original.updatedAt = amendedAt;
+      draft.stockMovements.push(...voided.reversalMovements);
+      if (voided.reversalCustomerLedgerEntry) {
+        draft.customerLedgerEntries.push(voided.reversalCustomerLedgerEntry);
+      }
+
+      const recorded = recordSale(
+        {
+          customerId: data.customerId,
+          customerName: data.customerName,
+          createdById: "admin",
+          channel: data.channel,
+          location: data.location,
+          soldAt: new Date(data.soldAt),
+          notes: data.notes,
+          reference: data.reference,
+          paidKobo: BigInt(data.paidKobo),
+          lines: data.lines.map((line) => ({
+            productId: line.productId,
+            unit: line.unit,
+            quantity: line.quantity,
+            unitPriceKobo: BigInt(line.unitPriceKobo),
+          })),
+        },
+        draft.products,
+        draft.stockMovements,
+        newId,
+      );
+
+      draft.sales.push(recorded.sale);
+      draft.saleLines.push(...recorded.saleLines);
+      draft.stockMovements.push(...recorded.movements);
+      if (recorded.customerLedgerEntry) {
+        draft.customerLedgerEntries.push(recorded.customerLedgerEntry);
+      }
+      if (recorded.salePayment) {
+        draft.salePayments.push(recorded.salePayment);
+      }
+      audit(
+        draft,
+        "SALE_AMENDED",
+        id,
+        before,
+        toSaleDto(recorded.sale),
+      );
+      return recorded.sale;
+    });
+
+    const store = readMockStore();
+    const sale = store.sales.find((s) => s.id === result.id)!;
+    return buildSaleDetail(store, sale);
+  },
+
   async void(id) {
     await delay();
     const voidedAt = new Date();

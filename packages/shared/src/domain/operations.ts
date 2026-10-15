@@ -1131,7 +1131,7 @@ export function salesSummary(
     days.set(date, day);
   }
 
-  const saleById = new Map(eligible.map((s) => [s.id, s]));
+  const salesById = new Map(existingSales.map((s) => [s.id, s]));
   for (const payment of existingSalePayments) {
     if (
       payment.paidAt.getTime() < from.getTime() ||
@@ -1139,8 +1139,13 @@ export function salesSummary(
     ) {
       continue;
     }
-    const sale = saleById.get(payment.saleId);
-    const channel = sale?.channel ?? "RETAIL";
+    const sale = salesById.get(payment.saleId);
+    // Payments only count while their sale is live. A voided (or missing) sale
+    // must not contribute to revenue.
+    if (!sale || sale.status === "VOIDED") {
+      continue;
+    }
+    const channel = sale.channel;
     const date = getLagosBusinessDate(payment.paidAt);
     const day = days.get(date) ?? emptyDay(date);
     day.totalRevenueGottenKobo += payment.amountKobo;

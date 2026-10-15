@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   formatNaira,
+  getLagosBusinessDate,
   type CreatePurchaseDto,
   type ProductDto,
   type StockLocation,
@@ -38,8 +39,8 @@ export default function NewPurchasePage() {
 
   const [supplierId, setSupplierId] = useState<string>("");
   const [location, setLocation] = useState<StockLocation>("WAREHOUSE");
-  const [purchasedAt, setPurchasedAt] = useState<string>(
-    new Date().toISOString().slice(0, 10),
+  const [purchasedAt, setPurchasedAt] = useState<string>(() =>
+    getLagosBusinessDate(),
   );
   const [reference, setReference] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
@@ -178,7 +179,10 @@ export default function NewPurchasePage() {
         <section className="space-y-4 rounded-xl border border-border/60 bg-card p-4 shadow-sm sm:p-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <label htmlFor="supplier" className="block text-xs font-medium text-foreground">
+              <label
+                htmlFor="supplier"
+                className="block text-xs font-medium text-foreground"
+              >
                 Supplier (optional)
               </label>
               <select
@@ -197,7 +201,10 @@ export default function NewPurchasePage() {
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="location" className="block text-xs font-medium text-foreground">
+              <label
+                htmlFor="location"
+                className="block text-xs font-medium text-foreground"
+              >
                 Receiving location
               </label>
               <select
@@ -217,7 +224,10 @@ export default function NewPurchasePage() {
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="date" className="block text-xs font-medium text-foreground">
+              <label
+                htmlFor="date"
+                className="block text-xs font-medium text-foreground"
+              >
                 Date
               </label>
               <input
@@ -230,7 +240,10 @@ export default function NewPurchasePage() {
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="reference" className="block text-xs font-medium text-foreground">
+              <label
+                htmlFor="reference"
+                className="block text-xs font-medium text-foreground"
+              >
                 Reference
               </label>
               <input
@@ -245,7 +258,10 @@ export default function NewPurchasePage() {
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="notes" className="block text-xs font-medium text-foreground">
+            <label
+              htmlFor="notes"
+              className="block text-xs font-medium text-foreground"
+            >
               Notes
             </label>
             <textarea
@@ -321,7 +337,9 @@ export default function NewPurchasePage() {
                       </select>
                     </div>
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-medium text-foreground">Unit</label>
+                      <label className="block text-xs font-medium text-foreground">
+                        Unit
+                      </label>
                       <select
                         value={line.unit}
                         onChange={(event) =>

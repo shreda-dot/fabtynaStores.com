@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   formatNaira,
+  getLagosBusinessDate,
   type CreateSaleDto,
   type ProductDto,
   type StockLocation,
@@ -38,9 +39,7 @@ export default function NewSalePage() {
   const [channel, setChannel] = useState<SaleChannelForSale>("RETAIL");
   const [customerId, setCustomerId] = useState<string>("");
   const [customerName, setCustomerName] = useState<string>("");
-  const [soldAt, setSoldAt] = useState<string>(
-    new Date().toISOString().slice(0, 10),
-  );
+  const [soldAt, setSoldAt] = useState<string>(() => getLagosBusinessDate());
   const [reference, setReference] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
   const [paidKobo, setPaidKobo] = useState<string>("0");
@@ -157,7 +156,8 @@ export default function NewSalePage() {
     }
 
     const input: CreateSaleDto = {
-      customerId: channel === "WHOLESALE" && customerId !== "" ? customerId : null,
+      customerId:
+        channel === "WHOLESALE" && customerId !== "" ? customerId : null,
       customerName:
         channel === "RETAIL" && customerName.trim() !== ""
           ? customerName.trim()
@@ -258,7 +258,10 @@ export default function NewSalePage() {
                 {channelCustomers.length === 0 && (
                   <p className="text-xs text-muted-foreground">
                     No wholesale customers yet —{" "}
-                    <Link href="/customers" className="text-primary hover:underline">
+                    <Link
+                      href="/customers"
+                      className="text-primary hover:underline"
+                    >
                       add one
                     </Link>
                     .
@@ -394,7 +397,11 @@ export default function NewSalePage() {
                           updateLine(line.id, { quantity: event.target.value })
                         }
                         className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        placeholder={defaultUnit === "UNIT" ? "e.g. 6" : "e.g. 0.5, 0.75, 1"}
+                        placeholder={
+                          defaultUnit === "UNIT"
+                            ? "e.g. 6"
+                            : "e.g. 0.5, 0.75, 1"
+                        }
                       />
                       {defaultUnit === "PACK" && product && (
                         <p className="text-xs text-muted-foreground">

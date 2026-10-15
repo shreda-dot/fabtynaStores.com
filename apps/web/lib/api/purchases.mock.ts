@@ -159,6 +159,83 @@ export const purchasesMockApi: PurchasesApi = {
     return buildPurchaseDetail(store, purchase);
   },
 
+  async update(id, input) {
+    await delay();
+    const data = createPurchaseDtoSchema.parse(input);
+    const result = transactMockStore((draft) => {
+      const original = draft.purchases.find((p) => p.id === id);
+      if (!original) throw new Error("Purchase not found.");
+      const before = toPurchaseDto(original);
+
+      // Amending keeps the audit trail: reverse the original (immutably) and
+      // record a corrected replacement instead of editing in place.
+      const amendedAt = new Date();
+      const voided = voidPurchase(
+        id,
+        amendedAt,
+        draft.purchases,
+        draft.purchaseLines,
+        draft.stockMovements,
+        draft.supplierLedgerEntries,
+        newId,
+      );
+      original.status = "VOIDED";
+      original.updatedAt = amendedAt;
+      draft.stockMovements.push(...voided.reversalMovements);
+      if (voided.reversalSupplierLedgerEntry) {
+        draft.supplierLedgerEntries.push(voided.reversalSupplierLedgerEntry);
+      }
+      for (const pu of voided.productUpdates) {
+        const product = draft.products.find((p) => p.id === pu.id);
+        if (product) product.averageCostKobo = pu.averageCostKobo;
+      }
+
+      const received = receivePurchase(
+        {
+          supplierId: data.supplierId,
+          createdById: "admin",
+          location: data.location,
+          purchasedAt: new Date(data.purchasedAt),
+          notes: data.notes,
+          reference: data.reference,
+          lines: data.lines.map((line) => ({
+            productId: line.productId,
+            unit: line.unit,
+            quantity: line.quantity,
+            lineTotalKobo: BigInt(line.lineTotalKobo),
+          })),
+        },
+        draft.products,
+        draft.stockMovements,
+        newId,
+      );
+
+      draft.purchases.push(received.purchase);
+      draft.purchaseLines.push(...received.purchaseLines);
+      draft.stockMovements.push(...received.movements);
+      if (received.supplierLedgerEntry) {
+        draft.supplierLedgerEntries.push(received.supplierLedgerEntry);
+      }
+      for (const pu of received.productUpdates) {
+        const product = draft.products.find((p) => p.id === pu.id);
+        if (product) product.averageCostKobo = pu.averageCostKobo;
+      }
+
+      audit(
+        draft,
+        "PURCHASE_AMENDED",
+        id,
+        before,
+        toPurchaseDto(received.purchase),
+      );
+      return received.purchase;
+    });
+
+    const store = readMockStore();
+    const purchase = store.purchases.find((p) => p.id === result.id)!;
+    return buildPurchaseDetail(store, purchase);
+  },
+
   async void(id) {
     await delay();
     const voidedAt = new Date();

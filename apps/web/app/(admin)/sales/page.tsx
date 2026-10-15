@@ -2,31 +2,38 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { HandCoins, Plus, Receipt } from "lucide-react";
+import { HandCoins, Plus, Receipt, Search } from "lucide-react";
 import Link from "next/link";
-import { formatNaira, type SaleChannel, type SaleStatus } from "@fabtyna/shared";
+import {
+  formatNaira,
+  getLagosBusinessDayRange,
+  type SaleChannel,
+  type SaleStatus,
+} from "@fabtyna/shared";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { expensesApi, productsApi, salesApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import type { SaleListItemDto } from "@/lib/api/sales.api";
 
 const CHANNELS: (SaleChannel | "ALL")[] = ["ALL", "RETAIL", "WHOLESALE"];
-const STATUSES: (SaleStatus | "ALL")[] = ["ALL", "DRAFT", "COMPLETED", "VOIDED"];
-
-function startOfLagosDay(date: Date): Date {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  return new Date(`${yyyy}-${mm}-${dd}T00:00:00+01:00`);
-}
+const STATUSES: (SaleStatus | "ALL")[] = [
+  "ALL",
+  "DRAFT",
+  "COMPLETED",
+  "VOIDED",
+];
 
 export default function SalesPage() {
-  const [filterChannel, setFilterChannel] = useState<SaleChannel | "ALL">("ALL");
+  const [filterChannel, setFilterChannel] = useState<SaleChannel | "ALL">(
+    "ALL",
+  );
   const [filterStatus, setFilterStatus] = useState<SaleStatus | "ALL">("ALL");
+  const [filterSearch, setFilterSearch] = useState("");
 
   const sales = useQuery({
     queryKey: queryKeys.sales.list,
@@ -82,10 +89,13 @@ export default function SalesPage() {
     },
   });
 
-  const now = new Date();
-  const todayStart = startOfLagosDay(now);
+  // Business day follows Africa/Lagos time and rolls over automatically.
+  const businessDate = useLagosBusinessDate();
+  const { start: todayStart, end: todayEnd } =
+    getLagosBusinessDayRange(businessDate);
   const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
   const todayStartMs = todayStart.getTime();
+  const todayEndMs = todayEnd.getTime();
   const yesterdayStartMs = yesterdayStart.getTime();
 
   const stats = useMemo(() => {
@@ -99,7 +109,7 @@ export default function SalesPage() {
       if (sale.status === "VOIDED") continue;
       const soldAt = new Date(sale.soldAt).getTime();
       const total = BigInt(sale.totalKobo);
-      if (soldAt >= todayStartMs) {
+      if (soldAt >= todayStartMs && soldAt < todayEndMs) {
         if (sale.channel === "RETAIL") todayRetail += total;
         else todayWholesale += total;
       } else if (soldAt >= yesterdayStartMs && soldAt < todayStartMs) {
@@ -109,15 +119,22 @@ export default function SalesPage() {
     }
 
     return { todayRetail, todayWholesale, yesterdayRetail, yesterdayWholesale };
-  }, [sales.data, todayStartMs, yesterdayStartMs]);
+  }, [sales.data, todayStartMs, todayEndMs, yesterdayStartMs]);
 
   const filtered = useMemo(() => {
+    const query = filterSearch.trim().toLowerCase();
     return (sales.data ?? []).filter((sale) => {
-      if (filterChannel !== "ALL" && sale.channel !== filterChannel) return false;
+      if (filterChannel !== "ALL" && sale.channel !== filterChannel)
+        return false;
       if (filterStatus !== "ALL" && sale.status !== filterStatus) return false;
+      if (query !== "") {
+        const haystack =
+          `${sale.customerName ?? ""} ${sale.reference ?? ""}`.toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
       return true;
     });
-  }, [sales.data, filterChannel, filterStatus]);
+  }, [sales.data, filterChannel, filterStatus, filterSearch]);
 
   const debtors = useMemo(() => {
     return (sales.data ?? []).filter(
@@ -389,7 +406,9 @@ export default function SalesPage() {
                 onClick={() => createDebtorMutation.mutate()}
                 className="w-full rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
-                {createDebtorMutation.isPending ? "Recording…" : "Record debtor"}
+                {createDebtorMutation.isPending
+                  ? "Recording…"
+                  : "Record debtor"}
               </button>
             </div>
           )}
@@ -433,7 +452,26 @@ export default function SalesPage() {
       </div>
 
       <section className="space-y-4 rounded-lg border border-border bg-card p-4 sm:p-5">
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="space-y-1.5">
+            <label htmlFor="f-search" className="block text-sm font-medium">
+              Search
+            </label>
+            <div className="flex min-h-12 items-center gap-2 rounded-md border border-input bg-background px-3 focus-within:ring-1 focus-within:ring-ring">
+              <Search
+                aria-hidden="true"
+                className="h-4 w-4 text-muted-foreground"
+              />
+              <input
+                id="f-search"
+                type="search"
+                value={filterSearch}
+                onChange={(event) => setFilterSearch(event.target.value)}
+                placeholder="Customer name or reference"
+                className="min-w-0 flex-1 bg-transparent text-base outline-none"
+              />
+            </div>
+          </div>
           <div className="space-y-1.5">
             <label htmlFor="f-channel" className="block text-sm font-medium">
               Channel
@@ -448,7 +486,11 @@ export default function SalesPage() {
             >
               {CHANNELS.map((ch) => (
                 <option key={ch} value={ch}>
-                  {ch === "ALL" ? "All channels" : ch === "RETAIL" ? "Retail (fridge)" : "Wholesale"}
+                  {ch === "ALL"
+                    ? "All channels"
+                    : ch === "RETAIL"
+                      ? "Retail (fridge)"
+                      : "Wholesale"}
                 </option>
               ))}
             </select>

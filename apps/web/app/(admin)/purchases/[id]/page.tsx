@@ -112,14 +112,22 @@ export default function PurchaseDetailPage() {
           </div>
         </div>
         {p.status === "RECEIVED" && (
-          <button
-            type="button"
-            onClick={tryVoid}
-            disabled={voidMutation.isPending}
-            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md border border-destructive px-4 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-60"
-          >
-            {voidMutation.isPending ? "Voiding…" : "Void purchase"}
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/purchases/${p.id}/edit`}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-medium hover:bg-muted"
+            >
+              Edit purchase
+            </Link>
+            <button
+              type="button"
+              onClick={tryVoid}
+              disabled={voidMutation.isPending}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md border border-destructive px-4 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-60"
+            >
+              {voidMutation.isPending ? "Voiding…" : "Void purchase"}
+            </button>
+          </div>
         )}
       </div>
 

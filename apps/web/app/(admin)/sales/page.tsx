@@ -7,10 +7,12 @@ import Link from "next/link";
 import {
   formatLagosDate,
   formatNaira,
+  getLagosBusinessDate,
   getLagosBusinessDayRange,
   type SaleChannel,
   type SaleStatus,
 } from "@fabtyna/shared";
+import { DateFilter } from "@/components/date-filter";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
@@ -35,6 +37,7 @@ export default function SalesPage() {
   );
   const [filterStatus, setFilterStatus] = useState<SaleStatus | "ALL">("ALL");
   const [filterSearch, setFilterSearch] = useState("");
+  const [filterDate, setFilterDate] = useState("");
 
   const sales = useQuery({
     queryKey: queryKeys.sales.list,
@@ -124,25 +127,39 @@ export default function SalesPage() {
 
   const filtered = useMemo(() => {
     const query = filterSearch.trim().toLowerCase();
-    return (sales.data ?? []).filter((sale) => {
-      if (filterChannel !== "ALL" && sale.channel !== filterChannel)
-        return false;
-      if (filterStatus !== "ALL" && sale.status !== filterStatus) return false;
-      if (query !== "") {
-        const haystack =
-          `${sale.customerName ?? ""} ${sale.reference ?? ""}`.toLowerCase();
-        if (!haystack.includes(query)) return false;
-      }
-      return true;
-    });
-  }, [sales.data, filterChannel, filterStatus, filterSearch]);
+    return (sales.data ?? [])
+      .filter((sale) => {
+        if (filterChannel !== "ALL" && sale.channel !== filterChannel)
+          return false;
+        if (filterStatus !== "ALL" && sale.status !== filterStatus)
+          return false;
+        if (
+          filterDate !== "" &&
+          getLagosBusinessDate(new Date(sale.soldAt)) !== filterDate
+        )
+          return false;
+        if (query !== "") {
+          const haystack =
+            `${sale.customerName ?? ""} ${sale.reference ?? ""}`.toLowerCase();
+          if (!haystack.includes(query)) return false;
+        }
+        return true;
+      })
+      .sort(
+        (a, b) => new Date(b.soldAt).getTime() - new Date(a.soldAt).getTime(),
+      );
+  }, [sales.data, filterChannel, filterStatus, filterDate, filterSearch]);
 
   const debtors = useMemo(() => {
-    return (sales.data ?? []).filter(
-      (sale) =>
-        sale.status !== "VOIDED" &&
-        BigInt(sale.totalKobo) - BigInt(sale.paidKobo) > 0n,
-    );
+    return (sales.data ?? [])
+      .filter(
+        (sale) =>
+          sale.status !== "VOIDED" &&
+          BigInt(sale.totalKobo) - BigInt(sale.paidKobo) > 0n,
+      )
+      .sort(
+        (a, b) => new Date(b.soldAt).getTime() - new Date(a.soldAt).getTime(),
+      );
   }, [sales.data]);
 
   const totalDebt = debtors.reduce(
@@ -151,7 +168,14 @@ export default function SalesPage() {
   );
 
   const recentExpenses = useMemo(
-    () => (expenses.data ?? []).slice(0, 5),
+    () =>
+      [...(expenses.data ?? [])]
+        .sort(
+          (a, b) =>
+            new Date(b.expenseDate).getTime() -
+            new Date(a.expenseDate).getTime(),
+        )
+        .slice(0, 5),
     [expenses.data],
   );
 
@@ -453,7 +477,7 @@ export default function SalesPage() {
       </div>
 
       <section className="space-y-4 rounded-lg border border-border bg-card p-4 sm:p-5">
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div className="space-y-1.5">
             <label htmlFor="f-search" className="block text-sm font-medium">
               Search
@@ -515,6 +539,12 @@ export default function SalesPage() {
               ))}
             </select>
           </div>
+          <DateFilter
+            id="f-date"
+            value={filterDate}
+            onChange={setFilterDate}
+            max={businessDate}
+          />
         </div>
 
         {sales.isPending ? (

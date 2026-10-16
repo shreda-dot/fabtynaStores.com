@@ -34,6 +34,14 @@ export default function SupplierDetailPage() {
   if (!supplier.data) return <ListEmpty message="Supplier not found." />;
 
   const s = supplier.data;
+  const purchasesByDate = [...s.purchases].sort(
+    (a, b) =>
+      new Date(b.purchasedAt).getTime() - new Date(a.purchasedAt).getTime(),
+  );
+  const ledgerByDate = [...s.ledgerEntries].sort(
+    (a, b) =>
+      new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime(),
+  );
 
   const ledgerColumns: ResponsiveTableColumn<SupplierLedgerEntryDto>[] = [
     {
@@ -127,11 +135,11 @@ export default function SupplierDetailPage() {
 
       <section className="space-y-3 rounded-lg border border-border bg-card p-4 sm:p-5">
         <h2 className="text-lg font-semibold">Purchases</h2>
-        {s.purchases.length === 0 ? (
+        {purchasesByDate.length === 0 ? (
           <ListEmpty message="No purchases from this supplier yet." />
         ) : (
           <ResponsiveTable
-            rows={s.purchases}
+            rows={purchasesByDate}
             columns={purchaseColumns}
             getKey={(purchase) => purchase.id}
           />
@@ -140,11 +148,11 @@ export default function SupplierDetailPage() {
 
       <section className="space-y-3 rounded-lg border border-border bg-card p-4 sm:p-5">
         <h2 className="text-lg font-semibold">Ledger</h2>
-        {s.ledgerEntries.length === 0 ? (
+        {ledgerByDate.length === 0 ? (
           <ListEmpty message="No ledger entries for this supplier yet." />
         ) : (
           <ResponsiveTable
-            rows={s.ledgerEntries}
+            rows={ledgerByDate}
             columns={ledgerColumns}
             getKey={(entry) => entry.id}
           />

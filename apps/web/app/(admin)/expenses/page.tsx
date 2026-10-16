@@ -1,19 +1,23 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import {
   formatLagosDate,
   formatNaira,
+  getLagosBusinessDate,
   type ExpenseCategory,
   type ExpenseDto,
 } from "@fabtyna/shared";
+import { DateFilter } from "@/components/date-filter";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { expensesApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 
@@ -37,6 +41,9 @@ const CHANNEL_LABELS = {
 export default function ExpensesPage() {
   const queryClient = useQueryClient();
 
+  const [filterDate, setFilterDate] = useState("");
+  const businessDate = useLagosBusinessDate();
+
   const expenses = useQuery({
     queryKey: queryKeys.expenses.list(),
     queryFn: () => expensesApi.list(),
@@ -47,6 +54,19 @@ export default function ExpensesPage() {
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: queryKeys.expenses.all }),
   });
+
+  const rows = useMemo(() => {
+    return (expenses.data ?? [])
+      .filter(
+        (expense) =>
+          filterDate === "" ||
+          getLagosBusinessDate(new Date(expense.expenseDate)) === filterDate,
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.expenseDate).getTime() - new Date(a.expenseDate).getTime(),
+      );
+  }, [expenses.data, filterDate]);
 
   const columns: ResponsiveTableColumn<ExpenseDto>[] = [
     {
@@ -88,8 +108,7 @@ export default function ExpensesPage() {
     },
   ];
 
-  const totalKobo =
-    expenses.data?.reduce((sum, e) => sum + BigInt(e.amountKobo), 0n) ?? 0n;
+  const totalKobo = rows.reduce((sum, e) => sum + BigInt(e.amountKobo), 0n);
 
   return (
     <div className="space-y-6">
@@ -110,8 +129,19 @@ export default function ExpensesPage() {
       </div>
 
       <div className="rounded-lg border bg-card p-4">
-        <div className="text-sm text-muted-foreground">Total Expenses</div>
+        <div className="text-sm text-muted-foreground">
+          {filterDate === "" ? "Total Expenses" : "Expenses on selected date"}
+        </div>
         <div className="text-2xl font-bold">{formatNaira(totalKobo)}</div>
+      </div>
+
+      <div className="grid gap-3 rounded-lg border bg-card p-4 sm:grid-cols-2 lg:grid-cols-4">
+        <DateFilter
+          id="f-date"
+          value={filterDate}
+          onChange={setFilterDate}
+          max={businessDate}
+        />
       </div>
 
       {expenses.isLoading ? (
@@ -121,12 +151,8 @@ export default function ExpensesPage() {
           message="Could not load expenses."
           retry={() => void expenses.refetch()}
         />
-      ) : expenses.data && expenses.data.length > 0 ? (
-        <ResponsiveTable
-          columns={columns}
-          rows={expenses.data}
-          getKey={(e) => e.id}
-        />
+      ) : rows.length > 0 ? (
+        <ResponsiveTable columns={columns} rows={rows} getKey={(e) => e.id} />
       ) : (
         <ListEmpty message="Add your first expense to start tracking costs." />
       )}

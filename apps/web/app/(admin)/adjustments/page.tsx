@@ -1,23 +1,42 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import Link from "next/link";
-import { formatLagosDate } from "@fabtyna/shared";
+import { formatLagosDate, getLagosBusinessDate } from "@fabtyna/shared";
+import { DateFilter } from "@/components/date-filter";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { adjustmentsApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import type { StockAdjustmentDto } from "@fabtyna/shared";
 
 export default function AdjustmentsPage() {
+  const [filterDate, setFilterDate] = useState("");
+  const businessDate = useLagosBusinessDate();
+
   const adjustments = useQuery({
     queryKey: queryKeys.adjustments.list,
     queryFn: () => adjustmentsApi.list(),
   });
+
+  const rows = useMemo(() => {
+    return (adjustments.data ?? [])
+      .filter(
+        (a) =>
+          filterDate === "" ||
+          getLagosBusinessDate(new Date(a.adjustedAt)) === filterDate,
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.adjustedAt).getTime() - new Date(a.adjustedAt).getTime(),
+      );
+  }, [adjustments.data, filterDate]);
 
   const columns: ResponsiveTableColumn<StockAdjustmentDto>[] = [
     {
@@ -68,6 +87,15 @@ export default function AdjustmentsPage() {
       </div>
 
       <section className="space-y-4 rounded-lg border border-border bg-card p-4 sm:p-5">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <DateFilter
+            id="f-date"
+            value={filterDate}
+            onChange={setFilterDate}
+            max={businessDate}
+          />
+        </div>
+
         {adjustments.isPending ? (
           <ListLoading />
         ) : adjustments.isError ? (
@@ -77,14 +105,10 @@ export default function AdjustmentsPage() {
             }
             retry={() => void adjustments.refetch()}
           />
-        ) : adjustments.data.length === 0 ? (
-          <ListEmpty message="No adjustments yet. Correct stock counts by creating an adjustment." />
+        ) : rows.length === 0 ? (
+          <ListEmpty message="No adjustments match these filters." />
         ) : (
-          <ResponsiveTable
-            rows={adjustments.data}
-            columns={columns}
-            getKey={(a) => a.id}
-          />
+          <ResponsiveTable rows={rows} columns={columns} getKey={(a) => a.id} />
         )}
       </section>
     </div>

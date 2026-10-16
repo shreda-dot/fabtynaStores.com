@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   formatLagosDate,
@@ -8,6 +8,7 @@ import {
   getLagosBusinessDate,
   getLagosBusinessDayRange,
 } from "@fabtyna/shared";
+import { InfoHint } from "@/components/info-hint";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
@@ -34,6 +35,13 @@ export default function SalesReportPage() {
     queryKey: queryKeys.reports.salesSummary(from, to),
     queryFn: () => reportsApi.salesSummary(fromDate, toDate),
   });
+  const days = useMemo(
+    () =>
+      [...(report.data?.days ?? [])].sort((a, b) =>
+        b.date.localeCompare(a.date),
+      ),
+    [report.data?.days],
+  );
 
   const columns: ResponsiveTableColumn<SalesSummaryDayDto>[] = [
     {
@@ -151,19 +159,36 @@ export default function SalesReportPage() {
         <>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div className="rounded-lg border border-border bg-card p-4">
-              <p className="text-xs text-muted-foreground">Supposed revenue</p>
+              <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                Supposed revenue
+                <InfoHint label="Explain supposed revenue" align="right">
+                  This is what you billed on the sale date.
+                </InfoHint>
+              </p>
               <p className="mt-1 text-xl font-semibold">
                 {formatNaira(totals?.totalSupposedRevenueKobo ?? "0")}
               </p>
             </div>
             <div className="rounded-lg border border-border bg-card p-4">
-              <p className="text-xs text-muted-foreground">Revenue gotten</p>
+              <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                Revenue gotten
+                <InfoHint label="Explain revenue gotten" align="right">
+                  This is cash actually received in the selected period. If an
+                  old debt is paid today, it shows here today.
+                </InfoHint>
+              </p>
               <p className="mt-1 text-xl font-semibold">
                 {formatNaira(totals?.totalRevenueGottenKobo ?? "0")}
               </p>
             </div>
             <div className="rounded-lg border border-border bg-card p-4">
-              <p className="text-xs text-muted-foreground">Outstanding debt</p>
+              <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                Outstanding debt
+                <InfoHint label="Explain outstanding debt" align="right">
+                  This is billed revenue that has not been collected yet in the
+                  selected period.
+                </InfoHint>
+              </p>
               <p
                 className={`mt-1 text-xl font-semibold ${
                   debt > 0n ? "text-destructive" : ""
@@ -205,12 +230,26 @@ export default function SalesReportPage() {
           </div>
 
           <section className="space-y-3 rounded-lg border border-border bg-card p-4 sm:p-5">
-            <h2 className="text-lg font-semibold">
+            <h2 className="flex items-center gap-2 text-lg font-semibold">
               Why doesn&apos;t it tally?
+              <InfoHint label="Explain why the report may not tally">
+                <span className="block">
+                  `Supposed revenue` is what you billed. `Revenue gotten` is the
+                  cash collected in this date range.
+                </span>
+                <span className="mt-2 block">
+                  The numbers differ when customers still owe, when old debts
+                  are paid later, or when you sell below your normal price.
+                </span>
+                <span className="mt-2 block">
+                  `Discounts given` means the app thinks your billed price is
+                  below your normal selling worth.
+                </span>
+              </InfoHint>
             </h2>
             <p className="text-sm text-muted-foreground">
-              Supposed revenue is what you billed. Revenue gotten is cash
-              received. Here is where the gap went.
+              This section shows where the difference between billed value and
+              cash received came from.
             </p>
             <ul className="space-y-2 text-sm">
               <li className="flex items-center justify-between gap-4">
@@ -244,11 +283,11 @@ export default function SalesReportPage() {
 
           <section className="space-y-3 rounded-lg border border-border bg-card p-4 sm:p-5">
             <h2 className="text-lg font-semibold">Daily breakdown</h2>
-            {report.data!.days.length === 0 ? (
+            {days.length === 0 ? (
               <ListEmpty message="No sales in this period." />
             ) : (
               <ResponsiveTable
-                rows={report.data!.days}
+                rows={days}
                 columns={columns}
                 getKey={(day) => day.date}
               />

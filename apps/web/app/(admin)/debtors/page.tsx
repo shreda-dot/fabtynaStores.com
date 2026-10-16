@@ -3,9 +3,15 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2 } from "lucide-react";
-import { formatLagosDate, formatNaira } from "@fabtyna/shared";
+import {
+  formatLagosDate,
+  formatNaira,
+  getLagosBusinessDate,
+} from "@fabtyna/shared";
+import { DateFilter } from "@/components/date-filter";
 import { MoneyInput } from "@/components/money-input";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
+import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { salesApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import type { SaleDetailDto, SaleListItemDto } from "@/lib/api/sales.api";
@@ -18,6 +24,7 @@ type DebtorGroup = {
   customerId: string;
   customerName: string;
   totalOwedKobo: bigint;
+  latestSoldAt: number;
   sales: DebtorSale[];
 };
 
@@ -30,6 +37,9 @@ function amountOwed(
 export default function DebtorsPage() {
   const queryClient = useQueryClient();
 
+  const [filterDate, setFilterDate] = useState("");
+  const businessDate = useLagosBusinessDate();
+
   const salesQuery = useQuery({
     queryKey: queryKeys.sales.list,
     queryFn: () => salesApi.list(),
@@ -37,9 +47,13 @@ export default function DebtorsPage() {
 
   const unpaidSales = useMemo(() => {
     return (salesQuery.data ?? []).filter(
-      (s) => s.status !== "VOIDED" && amountOwed(s) > 0n,
+      (s) =>
+        s.status !== "VOIDED" &&
+        amountOwed(s) > 0n &&
+        (filterDate === "" ||
+          getLagosBusinessDate(new Date(s.soldAt)) === filterDate),
     );
-  }, [salesQuery.data]);
+  }, [salesQuery.data, filterDate]);
 
   const unpaidIds = unpaidSales.map((s) => s.id).join(",");
 
@@ -64,23 +78,30 @@ export default function DebtorsPage() {
         detail.customer?.id ?? `adhoc:${detail.customerName ?? detail.id}`;
       const displayName =
         detail.customer?.name ?? detail.customerName ?? "Walk-in";
+      const soldAtMs = new Date(detail.soldAt).getTime();
       const existing = map.get(groupKey);
       const debtorSale: DebtorSale = { ...detail, amountOwedKobo: owed };
       if (existing) {
         existing.totalOwedKobo += owed;
+        existing.latestSoldAt = Math.max(existing.latestSoldAt, soldAtMs);
         existing.sales.push(debtorSale);
       } else {
         map.set(groupKey, {
           customerId: groupKey,
           customerName: displayName,
           totalOwedKobo: owed,
+          latestSoldAt: soldAtMs,
           sales: [debtorSale],
         });
       }
     }
-    return [...map.values()].sort((a, b) =>
-      a.customerName.localeCompare(b.customerName),
-    );
+    const groups = [...map.values()];
+    for (const group of groups) {
+      group.sales.sort(
+        (a, b) => new Date(b.soldAt).getTime() - new Date(a.soldAt).getTime(),
+      );
+    }
+    return groups.sort((a, b) => b.latestSoldAt - a.latestSoldAt);
   }, [detailsQuery.data]);
 
   const [payingSaleId, setPayingSaleId] = useState<string | null>(null);
@@ -145,6 +166,15 @@ export default function DebtorsPage() {
           <div className="text-sm text-muted-foreground">Customers Owing</div>
           <div className="text-2xl font-bold">{debtorGroups.length}</div>
         </div>
+      </div>
+
+      <div className="grid gap-3 rounded-lg border bg-card p-4 sm:grid-cols-2 lg:grid-cols-4">
+        <DateFilter
+          id="f-date"
+          value={filterDate}
+          onChange={setFilterDate}
+          max={businessDate}
+        />
       </div>
 
       {isLoading ? (

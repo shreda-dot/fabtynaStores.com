@@ -8,7 +8,9 @@ import type {
 import {
   buildAdjustment,
   buildTransfer,
+  recordSale,
   receivePurchase,
+  salesSummary,
   voidAdjustment,
   voidPurchase,
 } from "../domain/operations.ts";
@@ -617,6 +619,83 @@ describe("voidPurchase", () => {
 
     // After void, only m0 remains: 10 units @ 50 => average 50
     expect(result.productUpdates[0].averageCostKobo).toBe(50n);
+  });
+});
+
+describe("salesSummary", () => {
+  it("uses wholesale pack pricing for standard revenue instead of unit-multiplying the pack price", () => {
+    const product = makeProduct({
+      id: "p1",
+      saleChannel: "WHOLESALE",
+      unitsPerPack: 24,
+      wholesalePriceKobo: 10000n,
+      averageCostKobo: 500n,
+    });
+
+    const received = receivePurchase(
+      {
+        supplierId: null,
+        createdById: "admin",
+        location: "WAREHOUSE",
+        purchasedAt: baseDate,
+        notes: null,
+        reference: null,
+        lines: [
+          {
+            productId: "p1",
+            unit: "PACK",
+            quantity: 2,
+            lineTotalKobo: 12000n,
+          },
+        ],
+      },
+      [product],
+      [],
+      newId,
+    );
+
+    const stockedProduct: Product = {
+      ...product,
+      averageCostKobo: received.productUpdates[0].averageCostKobo,
+    };
+
+    const recorded = recordSale(
+      {
+        customerId: null,
+        customerName: "Wholesale buyer",
+        createdById: "admin",
+        channel: "WHOLESALE",
+        location: "WAREHOUSE",
+        soldAt: baseDate,
+        notes: null,
+        reference: null,
+        paidKobo: 0n,
+        lines: [
+          {
+            productId: "p1",
+            unit: "PACK",
+            quantity: 2,
+            unitPriceKobo: 10000n,
+          },
+        ],
+      },
+      [stockedProduct],
+      received.movements,
+      newId,
+    );
+
+    const result = salesSummary(
+      new Date("2026-10-01T00:00:00.000Z"),
+      new Date("2026-10-02T00:00:00.000Z"),
+      [recorded.sale],
+      recorded.saleLines,
+      [stockedProduct],
+      [],
+      [],
+    );
+
+    expect(result.totals.totalSupposedRevenueKobo).toBe(20000n);
+    expect(result.totals.totalStandardRevenueKobo).toBe(20000n);
   });
 });
 

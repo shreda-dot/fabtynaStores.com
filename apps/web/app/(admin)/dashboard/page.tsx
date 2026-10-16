@@ -7,6 +7,7 @@ import {
   getLagosBusinessDate,
   getLagosBusinessDayRange,
 } from "@fabtyna/shared";
+import { InfoHint } from "@/components/info-hint";
 import { ListLoading } from "@/components/list-feedback";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { reportsApi, salesApi, stockApi } from "@/lib/api";
@@ -142,13 +143,24 @@ export default function DashboardPage() {
                     </dd>
                   </div>
                   <div className="flex items-center justify-between">
-                    <dt className="text-muted-foreground">Supposed revenue</dt>
+                    <dt className="flex items-center gap-1 text-muted-foreground">
+                      Supposed revenue
+                      <InfoHint label="Explain supposed revenue">
+                        What was billed for sales on this business date, whether
+                        or not the customer has paid yet.
+                      </InfoHint>
+                    </dt>
                     <dd className="font-medium">
                       {formatNaira(retailSupposed.toString())}
                     </dd>
                   </div>
                   <div className="flex items-center justify-between">
-                    <dt className="text-muted-foreground">Revenue gotten</dt>
+                    <dt className="flex items-center gap-1 text-muted-foreground">
+                      Revenue gotten
+                      <InfoHint label="Explain revenue gotten">
+                        Cash actually collected on this business date.
+                      </InfoHint>
+                    </dt>
                     <dd className="font-medium">
                       {formatNaira(retailGotten.toString())}
                     </dd>
@@ -175,13 +187,24 @@ export default function DashboardPage() {
                     </dd>
                   </div>
                   <div className="flex items-center justify-between">
-                    <dt className="text-muted-foreground">Supposed revenue</dt>
+                    <dt className="flex items-center gap-1 text-muted-foreground">
+                      Supposed revenue
+                      <InfoHint label="Explain supposed revenue">
+                        What was billed for sales on this business date, whether
+                        or not the customer has paid yet.
+                      </InfoHint>
+                    </dt>
                     <dd className="font-medium">
                       {formatNaira(wholesaleSupposed.toString())}
                     </dd>
                   </div>
                   <div className="flex items-center justify-between">
-                    <dt className="text-muted-foreground">Revenue gotten</dt>
+                    <dt className="flex items-center gap-1 text-muted-foreground">
+                      Revenue gotten
+                      <InfoHint label="Explain revenue gotten">
+                        Cash actually collected on this business date.
+                      </InfoHint>
+                    </dt>
                     <dd className="font-medium">
                       {formatNaira(wholesaleGotten.toString())}
                     </dd>
@@ -225,15 +248,23 @@ export default function DashboardPage() {
           </section>
 
           <section className="space-y-3 rounded-lg border border-border bg-card p-5">
-            <h2 className="text-lg font-semibold">
+            <h2 className="flex items-center gap-2 text-lg font-semibold">
               Why doesn&rsquo;t it tally?
+              <InfoHint label="Explain dashboard tally">
+                <span className="block">
+                  `Supposed revenue` is what you billed on this business date.
+                  `Revenue gotten` is the cash collected on this business date.
+                </span>
+                <span className="mt-2 block">
+                  `Outstanding debt` here is the current unpaid balance for
+                  sales created on this date, so it clears once those sales are
+                  paid later.
+                </span>
+              </InfoHint>
             </h2>
             <p className="text-sm text-muted-foreground">
-              Supposed revenue is what was billed. Revenue gotten is cash
-              received on that day. Outstanding debt below shows the current
-              unpaid balance for sales from this business date. The gap is made
-              up of unpaid debts, discounts given below the standard price, and
-              expenses.
+              This shows the live gap between billed sales and cash collected
+              for the selected business date.
             </p>
             <ul className="space-y-2 text-sm">
               <li className="flex items-center justify-between gap-4">

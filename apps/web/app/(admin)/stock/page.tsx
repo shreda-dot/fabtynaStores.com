@@ -10,14 +10,17 @@ import {
   formatLagosDateTime,
   formatNaira,
   formatStockUnits,
+  getLagosBusinessDate,
   type StockLocation,
   type StockMovementType,
 } from "@fabtyna/shared";
+import { DateFilter } from "@/components/date-filter";
 import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { stockApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import type { StockViewDto } from "@/lib/api/stock.api";
@@ -50,6 +53,8 @@ export default function StockPage() {
   const [filterType, setFilterType] = useState<StockMovementType | "ALL">(
     "ALL",
   );
+  const [filterDate, setFilterDate] = useState("");
+  const businessDate = useLagosBusinessDate();
 
   const stock = useQuery({
     queryKey: queryKeys.stock.list,
@@ -74,6 +79,17 @@ export default function StockPage() {
   const productNameById = new Map(
     (stock.data ?? []).map((row) => [row.productId, row.productName]),
   );
+
+  const movementRows = [...(movements.data ?? [])]
+    .filter(
+      (m) =>
+        filterDate === "" ||
+        getLagosBusinessDate(new Date(m.occurredAt)) === filterDate,
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime(),
+    );
 
   const columns: ResponsiveTableColumn<StockViewDto>[] = [
     {
@@ -188,7 +204,7 @@ export default function StockPage() {
 
       <section className="space-y-4 rounded-lg border border-border bg-card p-4 sm:p-5">
         <h2 className="text-lg font-semibold">Movement history</h2>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div className="space-y-1.5">
             <label htmlFor="f-product" className="block text-sm font-medium">
               Product
@@ -245,6 +261,12 @@ export default function StockPage() {
               ))}
             </select>
           </div>
+          <DateFilter
+            id="f-date"
+            value={filterDate}
+            onChange={setFilterDate}
+            max={businessDate}
+          />
         </div>
 
         {movements.isPending ? (
@@ -256,11 +278,11 @@ export default function StockPage() {
             }
             retry={() => void movements.refetch()}
           />
-        ) : movements.data.length === 0 ? (
+        ) : movementRows.length === 0 ? (
           <ListEmpty message="No movements match these filters." />
         ) : (
           <ResponsiveTable
-            rows={movements.data}
+            rows={movementRows}
             columns={movementColumns}
             getKey={(m) => m.id}
           />

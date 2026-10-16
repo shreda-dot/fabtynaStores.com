@@ -1110,11 +1110,17 @@ export function salesSummary(
       const product = productById.get(line.productId);
       const costPerUnit = product?.averageCostKobo ?? 0n;
       cogs += costPerUnit * BigInt(line.quantityUnits);
-      const standardPricePerUnit =
-        sale.channel === "RETAIL"
-          ? product?.retailPriceKobo ?? 0n
-          : product?.wholesalePriceKobo ?? 0n;
-      standardRevenue += standardPricePerUnit * BigInt(line.quantityUnits);
+      if (sale.channel === "RETAIL") {
+        standardRevenue +=
+          (product?.retailPriceKobo ?? 0n) * BigInt(line.quantityUnits);
+      } else {
+        const wholesalePriceKobo = product?.wholesalePriceKobo ?? 0n;
+        const unitsPerPack = BigInt(product?.unitsPerPack ?? 1);
+        standardRevenue += roundHalfUp(
+          BigInt(line.quantityUnits) * wholesalePriceKobo,
+          unitsPerPack,
+        );
+      }
     }
     day.totalSupposedRevenueKobo += sale.totalKobo;
     day.totalStandardRevenueKobo += standardRevenue;

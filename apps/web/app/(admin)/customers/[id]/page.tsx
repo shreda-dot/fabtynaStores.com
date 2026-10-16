@@ -35,6 +35,15 @@ export default function CustomerDetailPage() {
 
   const c = customer.data;
 
+  // Newest first so a long sales history is easy to scan by date.
+  const salesByDate = [...c.sales].sort(
+    (a, b) => new Date(b.soldAt).getTime() - new Date(a.soldAt).getTime(),
+  );
+  const ledgerByDate = [...c.ledgerEntries].sort(
+    (a, b) =>
+      new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime(),
+  );
+
   const totalPurchases = c.sales
     .filter((s) => s.status !== "VOIDED")
     .reduce((sum, s) => sum + BigInt(s.totalKobo), 0n);
@@ -167,11 +176,11 @@ export default function CustomerDetailPage() {
 
       <section className="space-y-3 rounded-lg border border-border bg-card p-4 sm:p-5">
         <h2 className="text-lg font-semibold">Sales</h2>
-        {c.sales.length === 0 ? (
+        {salesByDate.length === 0 ? (
           <ListEmpty message="No sales for this customer yet." />
         ) : (
           <ResponsiveTable
-            rows={c.sales}
+            rows={salesByDate}
             columns={saleColumns}
             getKey={(sale) => sale.id}
           />
@@ -180,11 +189,11 @@ export default function CustomerDetailPage() {
 
       <section className="space-y-3 rounded-lg border border-border bg-card p-4 sm:p-5">
         <h2 className="text-lg font-semibold">Ledger</h2>
-        {c.ledgerEntries.length === 0 ? (
+        {ledgerByDate.length === 0 ? (
           <ListEmpty message="No ledger entries for this customer yet." />
         ) : (
           <ResponsiveTable
-            rows={c.ledgerEntries}
+            rows={ledgerByDate}
             columns={ledgerColumns}
             getKey={(entry) => entry.id}
           />

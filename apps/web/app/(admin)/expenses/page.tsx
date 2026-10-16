@@ -38,6 +38,7 @@ const CATEGORY_LABELS: Record<ExpenseCategory, string> = {
   MAINTENANCE: "Maintenance",
   SUPPLIES: "Supplies",
   MARKETING: "Marketing",
+  LOAN_INTEREST: "Loan interest",
   OTHER: "Other",
 };
 

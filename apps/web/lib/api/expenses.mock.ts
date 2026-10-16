@@ -94,6 +94,7 @@ export const expensesMockApi: ExpensesApi = {
         description: data.description.trim(),
         amountKobo: BigInt(data.amountKobo),
         expenseDate: new Date(data.expenseDate),
+        loanRepaymentId: null,
         createdAt,
         updatedAt: createdAt,
       };

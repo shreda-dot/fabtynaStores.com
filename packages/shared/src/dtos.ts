@@ -1,11 +1,16 @@
 import type { z } from "zod";
 import {
   accountLedgerEntryDtoSchema,
+  accountingPositionOptionsDtoSchema,
+  addLoanChargeDtoSchema,
   adminUserPublicDtoSchema,
   auditLogDtoSchema,
+  cashSnapshotDtoSchema,
   createAdjustmentDtoSchema,
+  createCashSnapshotDtoSchema,
   createCustomerDtoSchema,
   createExpenseDtoSchema,
+  createLoanDtoSchema,
   createPurchaseDtoSchema,
   createSaleDtoSchema,
   createSupplierDtoSchema,
@@ -13,10 +18,15 @@ import {
   customerDtoSchema,
   customerLedgerEntryDtoSchema,
   expenseDtoSchema,
+  loanDtoSchema,
+  loanLedgerEntryDtoSchema,
+  loanRepaymentDtoSchema,
   productDtoSchema,
   purchaseDtoSchema,
   purchaseLineDtoSchema,
   purchaseReceiveDtoSchema,
+  recordLoanRepaymentDtoSchema,
+  recordPurchasePaymentDtoSchema,
   saleDtoSchema,
   saleLineDtoSchema,
   salePaymentDtoSchema,
@@ -29,6 +39,7 @@ import {
   stockTransferLineDtoSchema,
   supplierDtoSchema,
   supplierLedgerEntryDtoSchema,
+  supplierPaymentDtoSchema,
   createProductDtoSchema,
 } from "./schemas/index.ts";
 
@@ -62,3 +73,23 @@ export type CreateSaleDto = z.infer<typeof createSaleDtoSchema>;
 export type CreateTransferDto = z.infer<typeof createTransferDtoSchema>;
 export type CreateAdjustmentDto = z.infer<typeof createAdjustmentDtoSchema>;
 export type StockMovementFilterDto = z.infer<typeof stockMovementFilterDtoSchema>;
+
+/* Accounting ------------------------------------------------------------- */
+
+export type SupplierPaymentDto = z.infer<typeof supplierPaymentDtoSchema>;
+export type LoanDto = z.infer<typeof loanDtoSchema>;
+export type LoanLedgerEntryDto = z.infer<typeof loanLedgerEntryDtoSchema>;
+export type LoanRepaymentDto = z.infer<typeof loanRepaymentDtoSchema>;
+export type CashSnapshotDto = z.infer<typeof cashSnapshotDtoSchema>;
+export type CreateLoanDto = z.infer<typeof createLoanDtoSchema>;
+export type AddLoanChargeDto = z.infer<typeof addLoanChargeDtoSchema>;
+export type RecordLoanRepaymentDto = z.infer<
+  typeof recordLoanRepaymentDtoSchema
+>;
+export type RecordPurchasePaymentDto = z.infer<
+  typeof recordPurchasePaymentDtoSchema
+>;
+export type CreateCashSnapshotDto = z.infer<typeof createCashSnapshotDtoSchema>;
+export type AccountingPositionOptionsDto = z.infer<
+  typeof accountingPositionOptionsDtoSchema
+>;

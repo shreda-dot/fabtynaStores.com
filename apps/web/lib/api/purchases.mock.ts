@@ -2,15 +2,21 @@ import {
   createPurchaseDtoSchema,
   fromAuditLogDto,
   receivePurchase,
+  recordPurchasePayment,
   toAuditLogDto,
   toPurchaseDto,
   toPurchaseLineDto,
   toStockMovementDto,
   toSupplierDto,
+  toSupplierPaymentDto,
   voidPurchase,
   type Purchase,
 } from "@fabtyna/shared";
-import type { PurchasesApi, PurchaseDetailDto, PurchaseListItemDto } from "./purchases.api";
+import type {
+  PurchasesApi,
+  PurchaseDetailDto,
+  PurchaseListItemDto,
+} from "./purchases.api";
 import { newId, readMockStore, transactMockStore } from "./mock-store";
 import { mockDelay } from "./mock-transport";
 
@@ -69,11 +75,16 @@ function buildPurchaseDetail(
   const supplier = purchase.supplierId
     ? store.suppliers.find((s) => s.id === purchase.supplierId) ?? null
     : null;
+  const payments = store.supplierPayments
+    .filter((p) => p.purchaseId === purchase.id)
+    .sort((a, b) => a.paidAt.getTime() - b.paidAt.getTime())
+    .map(toSupplierPaymentDto);
   return jsonClone({
     ...toPurchaseDto(purchase),
     supplier: supplier ? toSupplierDto(supplier) : null,
     lines,
     movements,
+    payments,
   });
 }
 
@@ -122,6 +133,9 @@ export const purchasesMockApi: PurchasesApi = {
           purchasedAt: new Date(data.purchasedAt),
           notes: data.notes,
           reference: data.reference,
+          amountPaidNowKobo: BigInt(data.amountPaidNowKobo),
+          dueDate: data.dueDate,
+          paymentMethod: data.paymentMethod,
           lines: data.lines.map((line) => ({
             productId: line.productId,
             unit: line.unit,
@@ -139,6 +153,12 @@ export const purchasesMockApi: PurchasesApi = {
       draft.stockMovements.push(...received.movements);
       if (received.supplierLedgerEntry) {
         draft.supplierLedgerEntries.push(received.supplierLedgerEntry);
+      }
+      if (received.supplierPayment) {
+        draft.supplierPayments.push(received.supplierPayment);
+      }
+      if (received.supplierPaymentLedgerEntry) {
+        draft.supplierLedgerEntries.push(received.supplierPaymentLedgerEntry);
       }
       for (const update of received.productUpdates) {
         const product = draft.products.find((p) => p.id === update.id);
@@ -168,7 +188,9 @@ export const purchasesMockApi: PurchasesApi = {
       const before = toPurchaseDto(original);
 
       // Amending keeps the audit trail: reverse the original (immutably) and
-      // record a corrected replacement instead of editing in place.
+      // record a corrected replacement instead of editing in place. A purchase
+      // that already has supplier payments cannot be voided, so the domain
+      // throws and the amendment is blocked (payments are immutable).
       const amendedAt = new Date();
       const voided = voidPurchase(
         id,
@@ -178,6 +200,7 @@ export const purchasesMockApi: PurchasesApi = {
         draft.stockMovements,
         draft.supplierLedgerEntries,
         newId,
+        draft.supplierPayments,
       );
       original.status = "VOIDED";
       original.updatedAt = amendedAt;
@@ -198,6 +221,9 @@ export const purchasesMockApi: PurchasesApi = {
           purchasedAt: new Date(data.purchasedAt),
           notes: data.notes,
           reference: data.reference,
+          amountPaidNowKobo: BigInt(data.amountPaidNowKobo),
+          dueDate: data.dueDate,
+          paymentMethod: data.paymentMethod,
           lines: data.lines.map((line) => ({
             productId: line.productId,
             unit: line.unit,
@@ -215,6 +241,12 @@ export const purchasesMockApi: PurchasesApi = {
       draft.stockMovements.push(...received.movements);
       if (received.supplierLedgerEntry) {
         draft.supplierLedgerEntries.push(received.supplierLedgerEntry);
+      }
+      if (received.supplierPayment) {
+        draft.supplierPayments.push(received.supplierPayment);
+      }
+      if (received.supplierPaymentLedgerEntry) {
+        draft.supplierLedgerEntries.push(received.supplierPaymentLedgerEntry);
       }
       for (const pu of received.productUpdates) {
         const product = draft.products.find((p) => p.id === pu.id);
@@ -253,6 +285,7 @@ export const purchasesMockApi: PurchasesApi = {
         existingMovements,
         existingLedger,
         newId,
+        draft.supplierPayments,
       );
 
       const purchase = draft.purchases.find((p) => p.id === id);
@@ -281,5 +314,35 @@ export const purchasesMockApi: PurchasesApi = {
     const store = readMockStore();
     const purchase = store.purchases.find((p) => p.id === id)!;
     return buildPurchaseDetail(store, purchase);
+  },
+
+  async recordPayment(id, amountKobo, paidAt, method, note) {
+    await delay();
+    const amount = BigInt(amountKobo);
+    const paidAtDate = new Date(paidAt);
+    const result = transactMockStore((draft) => {
+      const recorded = recordPurchasePayment(
+        {
+          purchaseId: id,
+          amountKobo: amount,
+          paidAt: paidAtDate,
+          method,
+          note: note ?? null,
+        },
+        draft.purchases,
+        newId,
+      );
+      const purchase = draft.purchases.find((p) => p.id === id);
+      if (!purchase) throw new Error("Purchase not found.");
+      const before = toPurchaseDto(purchase);
+      Object.assign(purchase, recorded.purchase);
+      draft.supplierPayments.push(recorded.supplierPayment);
+      draft.supplierLedgerEntries.push(recorded.supplierLedgerEntry);
+      audit(draft, "PURCHASE_PAYMENT_RECORDED", id, before, toPurchaseDto(purchase));
+      return purchase;
+    });
+
+    const store = readMockStore();
+    return buildPurchaseDetail(store, result);
   },
 };

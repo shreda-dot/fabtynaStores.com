@@ -4,11 +4,18 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import Link from "next/link";
-import { formatLagosDate, getLagosBusinessDate } from "@fabtyna/shared";
+import {
+  formatLagosDate,
+  fromPurchaseDto,
+  getLagosBusinessDate,
+  isPurchaseOverdue,
+  purchaseBalanceKobo,
+  purchasePaymentStatus,
+} from "@fabtyna/shared";
 import { DateFilter } from "@/components/date-filter";
 import { ResponsiveTable } from "@/components/responsive-table";
 import type { ResponsiveTableColumn } from "@/components/responsive-table";
-import { StatusBadge } from "@/components/ui/badge";
+import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
@@ -66,12 +73,53 @@ export default function PurchasesPage() {
     {
       header: "Lines",
       align: "right",
-      render: (purchase) => <span className="tabular">{purchase.lineCount}</span>,
+      render: (purchase) => (
+        <span className="tabular">{purchase.lineCount}</span>
+      ),
     },
     {
       header: "Total",
       align: "right",
       render: (purchase) => <Money kobo={purchase.totalKobo} tone="neutral" />,
+    },
+    {
+      header: "Paid",
+      align: "right",
+      render: (purchase) => <Money kobo={purchase.paidKobo} tone="neutral" />,
+    },
+    {
+      header: "Balance",
+      align: "right",
+      render: (purchase) => {
+        const balance = purchaseBalanceKobo(fromPurchaseDto(purchase));
+        return balance > 0n ? (
+          <Money kobo={balance} />
+        ) : (
+          <span className="text-muted-foreground">
+            <Money kobo={0n} tone="neutral" />
+          </span>
+        );
+      },
+    },
+    {
+      header: "Payment",
+      render: (purchase) => {
+        const model = fromPurchaseDto(purchase);
+        if (purchase.status === "VOIDED") {
+          return <Badge tone="neutral">—</Badge>;
+        }
+        if (isPurchaseOverdue(model, businessDate)) {
+          return <Badge tone="danger">Overdue</Badge>;
+        }
+        const status = purchasePaymentStatus(model);
+        const label =
+          status === "PAID"
+            ? "Paid"
+            : status === "PARTIAL"
+              ? "Partial"
+              : "Unpaid";
+        return <StatusBadge status={label} />;
+      },
     },
     {
       header: "Status",
@@ -146,7 +194,10 @@ export default function PurchasesPage() {
               action={
                 <Link
                   href="/purchases/new"
-                  className={buttonClasses({ variant: "secondary", size: "sm" })}
+                  className={buttonClasses({
+                    variant: "secondary",
+                    size: "sm",
+                  })}
                 >
                   New purchase
                 </Link>

@@ -14,6 +14,7 @@ export const expenseCategorySchema = z.enum([
   "MAINTENANCE",
   "SUPPLIES",
   "MARKETING",
+  "LOAN_INTEREST",
   "OTHER",
 ]);
 
@@ -25,6 +26,7 @@ export const expenseDtoSchema = z
     description: z.string().trim().min(1),
     amountKobo: positiveKoboStringSchema,
     expenseDate: isoDateTimeSchema,
+    loanRepaymentId: idSchema.nullable(),
     createdAt: isoDateTimeSchema,
     updatedAt: isoDateTimeSchema,
   })

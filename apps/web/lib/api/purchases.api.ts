@@ -4,6 +4,7 @@ import type {
   PurchaseLineDto,
   StockMovementDto,
   SupplierDto,
+  SupplierPaymentDto,
 } from "@fabtyna/shared";
 
 export type PurchaseListItemDto = PurchaseDto & {
@@ -19,6 +20,7 @@ export type PurchaseDetailDto = PurchaseDto & {
   supplier: SupplierDto | null;
   lines: PurchaseLineWithProductDto[];
   movements: StockMovementDto[];
+  payments: SupplierPaymentDto[];
 };
 
 export interface PurchasesApi {
@@ -27,4 +29,11 @@ export interface PurchasesApi {
   create(input: CreatePurchaseDto): Promise<PurchaseDetailDto>;
   update(id: string, input: CreatePurchaseDto): Promise<PurchaseDetailDto>;
   void(id: string): Promise<PurchaseDetailDto>;
+  recordPayment(
+    id: string,
+    amountKobo: string,
+    paidAt: string,
+    method: SupplierPaymentDto["method"],
+    note?: string,
+  ): Promise<PurchaseDetailDto>;
 }

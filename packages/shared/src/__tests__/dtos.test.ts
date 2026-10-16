@@ -128,6 +128,8 @@ const purchase: Purchase = {
   reference: "PUR-2026-001",
   notes: null,
   totalKobo: largeKobo,
+  paidKobo: largeKobo,
+  dueDate: null,
   purchasedAt: timestamp,
   receivedAt: timestamp,
   createdAt: timestamp,

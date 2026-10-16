@@ -1,6 +1,7 @@
 import type {
   CustomerLedgerEntry,
   Expense,
+  PaymentMethod,
   Product,
   Purchase,
   PurchaseLine,
@@ -16,6 +17,7 @@ import type {
   StockTransferLeg,
   StockTransferLine,
   SupplierLedgerEntry,
+  SupplierPayment,
   Unit,
 } from "./types.ts";
 import {
@@ -54,6 +56,19 @@ export interface ReceivePurchaseInput {
   purchasedAt: Date;
   notes: string | null;
   reference: string | null;
+  /**
+   * Lagos business date (YYYY-MM-DD) the balance becomes overdue. Optional for
+   * backwards compatibility; defaults to null (no due date).
+   */
+  dueDate?: string | null;
+  /**
+   * Amount paid to the supplier up front. 0..totalKobo; a balance above zero
+   * requires a supplier. Optional for backwards compatibility; defaults to the
+   * full total, i.e. a legacy fully-paid purchase.
+   */
+  amountPaidNowKobo?: bigint;
+  /** How the up-front payment was made. Optional; defaults to CASH. */
+  paymentMethod?: PaymentMethod;
   lines: ReceivePurchaseLineInput[];
 }
 
@@ -61,7 +76,12 @@ export interface ReceivePurchaseResult {
   purchase: Purchase;
   purchaseLines: PurchaseLine[];
   movements: StockMovement[];
+  /** The PURCHASE ledger entry (the amount owed to the supplier). */
   supplierLedgerEntry: SupplierLedgerEntry | null;
+  /** The up-front payment, when `amountPaidNowKobo > 0`. */
+  supplierPayment: SupplierPayment | null;
+  /** The negative PAYMENT ledger entry for the up-front payment. */
+  supplierPaymentLedgerEntry: SupplierLedgerEntry | null;
   productUpdates: Array<{ id: string; averageCostKobo: bigint }>;
 }
 
@@ -148,6 +168,26 @@ export function receivePurchase(
     totalKobo += line.lineTotalKobo;
   }
 
+  // Backwards compatibility: an absent "paid now" means the purchase is
+  // settled in full, matching the pre-supplier-credit behaviour.
+  const amountPaidNowKobo = input.amountPaidNowKobo ?? totalKobo;
+  const dueDate = input.dueDate ?? null;
+
+  if (amountPaidNowKobo < 0n) {
+    throw new RangeError("The amount paid now must not be negative.");
+  }
+  if (amountPaidNowKobo > totalKobo) {
+    throw new RangeError(
+      `The amount paid now (${amountPaidNowKobo.toString()} kobo) cannot exceed the total (${totalKobo.toString()} kobo).`,
+    );
+  }
+  const unpaidKobo = totalKobo - amountPaidNowKobo;
+  if (unpaidKobo > 0n && input.supplierId === null) {
+    throw new RangeError(
+      "A supplier is required when a purchase is not fully paid.",
+    );
+  }
+
   const purchase: Purchase = {
     id: purchaseId,
     supplierId: input.supplierId,
@@ -156,6 +196,8 @@ export function receivePurchase(
     reference: input.reference,
     notes: input.notes,
     totalKobo,
+    paidKobo: amountPaidNowKobo,
+    dueDate,
     purchasedAt: input.purchasedAt,
     receivedAt: input.purchasedAt,
     createdAt: input.purchasedAt,
@@ -163,6 +205,9 @@ export function receivePurchase(
   };
 
   let supplierLedgerEntry: SupplierLedgerEntry | null = null;
+  let supplierPayment: SupplierPayment | null = null;
+  let supplierPaymentLedgerEntry: SupplierLedgerEntry | null = null;
+
   if (input.supplierId !== null) {
     supplierLedgerEntry = {
       id: newId(),
@@ -175,6 +220,30 @@ export function receivePurchase(
       note: null,
       occurredAt: input.purchasedAt,
     };
+
+    if (amountPaidNowKobo > 0n) {
+      supplierPayment = {
+        id: newId(),
+        supplierId: input.supplierId,
+        purchaseId,
+        amountKobo: amountPaidNowKobo,
+        method: input.paymentMethod ?? "CASH",
+        note: "Paid at receipt",
+        paidAt: input.purchasedAt,
+        createdAt: input.purchasedAt,
+      };
+      supplierPaymentLedgerEntry = {
+        id: newId(),
+        supplierId: input.supplierId,
+        type: "PAYMENT",
+        amountKobo: -amountPaidNowKobo,
+        purchaseId: null,
+        supplierPaymentId: supplierPayment.id,
+        reversesEntryId: null,
+        note: null,
+        occurredAt: input.purchasedAt,
+      };
+    }
   }
 
   return {
@@ -182,6 +251,8 @@ export function receivePurchase(
     purchaseLines,
     movements,
     supplierLedgerEntry,
+    supplierPayment,
+    supplierPaymentLedgerEntry,
     productUpdates,
   };
 }
@@ -480,6 +551,7 @@ export function voidPurchase(
   existingMovements: readonly StockMovement[],
   existingSupplierLedger: readonly SupplierLedgerEntry[],
   newId: IdGenerator,
+  existingSupplierPayments: readonly SupplierPayment[] = [],
 ): VoidResult {
   if (!Number.isFinite(voidedAt.getTime())) {
     throw new RangeError("Void date must be valid.");
@@ -491,6 +563,18 @@ export function voidPurchase(
   }
   if (purchase.status === "VOIDED") {
     throw new RangeError("This purchase has already been voided.");
+  }
+
+  // Payments are immutable and cannot be silently discarded by a void, so a
+  // part-paid purchase is blocked here. (Legacy purchases defaulted to
+  // "fully paid" by the v5 migration have no payment rows and stay voidable.)
+  const hasPayments = existingSupplierPayments.some(
+    (payment) => payment.purchaseId === purchaseId,
+  );
+  if (hasPayments) {
+    throw new RangeError(
+      "This purchase has supplier payments recorded and cannot be voided. Reverse the payments instead of voiding the purchase.",
+    );
   }
 
   const lines = existingPurchaseLines.filter((l) => l.purchaseId === purchaseId);
@@ -980,6 +1064,92 @@ export function recordSalePayment(
     customerLedgerEntry,
     salePayment,
   };
+}
+
+export interface RecordPurchasePaymentInput {
+  purchaseId: string;
+  amountKobo: bigint;
+  paidAt: Date;
+  method: PaymentMethod;
+  note: string | null;
+}
+
+export interface RecordPurchasePaymentResult {
+  purchase: Purchase;
+  supplierPayment: SupplierPayment;
+  supplierLedgerEntry: SupplierLedgerEntry;
+}
+
+/**
+ * Records a payment against a supplier purchase. Mirrors `recordSalePayment`:
+ * validates, increments `paidKobo`, and writes a negative PAYMENT ledger entry
+ * referencing the new `SupplierPayment` row. Never deletes the purchase.
+ */
+export function recordPurchasePayment(
+  input: RecordPurchasePaymentInput,
+  existingPurchases: readonly Purchase[],
+  newId: IdGenerator,
+): RecordPurchasePaymentResult {
+  if (!Number.isFinite(input.paidAt.getTime())) {
+    throw new RangeError("Payment date must be valid.");
+  }
+  if (input.amountKobo <= 0n) {
+    throw new RangeError("Payment amount must be positive.");
+  }
+
+  const purchase = existingPurchases.find((p) => p.id === input.purchaseId);
+  if (!purchase) {
+    throw new RangeError(`Purchase '${input.purchaseId}' not found.`);
+  }
+  if (purchase.status === "VOIDED") {
+    throw new RangeError("Cannot record payment for a voided purchase.");
+  }
+  if (purchase.supplierId === null) {
+    throw new RangeError(
+      "Cannot record a payment for a purchase that has no supplier.",
+    );
+  }
+
+  const remainingKobo = purchase.totalKobo - purchase.paidKobo;
+  if (remainingKobo <= 0n) {
+    throw new RangeError("This purchase is already fully paid.");
+  }
+  if (input.amountKobo > remainingKobo) {
+    throw new RangeError(
+      `Payment amount exceeds the remaining balance of ${remainingKobo.toString()} kobo.`,
+    );
+  }
+
+  const updatedPurchase: Purchase = {
+    ...purchase,
+    paidKobo: purchase.paidKobo + input.amountKobo,
+    updatedAt: input.paidAt,
+  };
+
+  const supplierPayment: SupplierPayment = {
+    id: newId(),
+    supplierId: purchase.supplierId,
+    purchaseId: purchase.id,
+    amountKobo: input.amountKobo,
+    method: input.method,
+    note: input.note,
+    paidAt: input.paidAt,
+    createdAt: input.paidAt,
+  };
+
+  const supplierLedgerEntry: SupplierLedgerEntry = {
+    id: newId(),
+    supplierId: purchase.supplierId,
+    type: "PAYMENT",
+    amountKobo: -input.amountKobo,
+    purchaseId: null,
+    supplierPaymentId: supplierPayment.id,
+    reversesEntryId: null,
+    note: null,
+    occurredAt: input.paidAt,
+  };
+
+  return { purchase: updatedPurchase, supplierPayment, supplierLedgerEntry };
 }
 
 export interface SalesSummaryDay {

@@ -59,4 +59,21 @@ export const queryKeys = {
   dashboard: {
     all: ["dashboard"] as const,
   },
+  payables: {
+    all: ["payables"] as const,
+    outstanding: ["payables", "outstanding"] as const,
+  },
+  loans: {
+    all: ["loans"] as const,
+    list: ["loans", "list"] as const,
+    detail: (id: string) => ["loans", "detail", id] as const,
+  },
+  cash: {
+    all: ["cash"] as const,
+    latest: ["cash", "latest"] as const,
+  },
+  accounting: {
+    all: ["accounting"] as const,
+    position: (options: unknown) => ["accounting", "position", options] as const,
+  },
 };

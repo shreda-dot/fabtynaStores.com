@@ -10,6 +10,7 @@ import {
   formatNaira,
   getLagosBusinessDate,
   type CreatePurchaseDto,
+  type PaymentMethod,
   type ProductDto,
   type StockLocation,
   type Unit,
@@ -42,6 +43,16 @@ type PurchaseLineDraft = {
 };
 
 const LOCATIONS: StockLocation[] = ["WAREHOUSE", "RETAIL_SHELF", "MARKET"];
+
+const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
+  { value: "CASH", label: "Cash" },
+  { value: "TRANSFER", label: "Transfer" },
+  { value: "OTHER", label: "Other" },
+];
+
+function toKobo(text: string): bigint {
+  return text.trim() === "" ? -1n : BigInt(text);
+}
 
 export default function EditPurchasePage() {
   const params = useParams<{ id: string }>();
@@ -96,7 +107,10 @@ export default function EditPurchasePage() {
   if (!purchase.data) {
     return (
       <div className="mx-auto max-w-5xl">
-        <EmptyState title="Purchase not found" description="No record to edit." />
+        <EmptyState
+          title="Purchase not found"
+          description="No record to edit."
+        />
       </div>
     );
   }
@@ -107,6 +121,25 @@ export default function EditPurchasePage() {
         <EmptyState
           title="This purchase was voided"
           description="A voided purchase can no longer be edited."
+          action={
+            <Link
+              href={`/purchases/${purchase.data.id}`}
+              className={buttonClasses({ variant: "secondary" })}
+            >
+              View purchase
+            </Link>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (purchase.data.payments.length > 0) {
+    return (
+      <div className="mx-auto max-w-5xl">
+        <EmptyState
+          title="This purchase has supplier payments"
+          description="Editing would void it, but recorded payments are immutable. Reverse the payments on the payables page first, or record a new purchase instead."
           action={
             <Link
               href={`/purchases/${purchase.data.id}`}
@@ -161,6 +194,11 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
         ],
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // The replacement keeps the original's paid state so the supplier ledger is
+  // unchanged by the amendment. A purchase with payments never reaches here.
+  const [amountPaidNow, setAmountPaidNow] = useState<string>(purchase.paidKobo);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [dueDate, setDueDate] = useState<string>(purchase.dueDate ?? "");
 
   const lineSeq = useRef(1);
   const submitting = useRef(false);
@@ -200,6 +238,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
 
   const totalKobo = lines.reduce((sum, line) => sum + lineTotalKobo(line), 0n);
 
+  const paidInputKobo = toKobo(amountPaidNow);
+  const paidKobo = paidInputKobo === -1n ? totalKobo : paidInputKobo;
+  const balanceKobo = totalKobo - paidKobo;
+
   const supportQueryFailed = productsQuery.isError || suppliersQuery.isError;
 
   const updateMutation = useMutation({
@@ -211,6 +253,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.accounting.all,
+      });
       toast.success(
         `Purchase updated — ${formatNaira(totalKobo)} recorded; the original was voided.`,
       );
@@ -310,6 +356,9 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
   function focusFirstError(found: Record<string, string>) {
     const order = [
       "purchase-date",
+      "purchase-supplier",
+      "purchase-paid",
+      "purchase-due",
       "lines",
       ...lines.flatMap((line) => [
         `line-${line.id}-product`,
@@ -342,6 +391,9 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       purchasedAt: createLagosDateTime(purchasedAt).toISOString(),
       notes: notes.trim() === "" ? null : notes.trim(),
       reference: reference.trim() === "" ? null : reference.trim(),
+      amountPaidNowKobo: (paidKobo < 0n ? 0n : paidKobo).toString(),
+      dueDate: balanceKobo > 0n && dueDate !== "" ? dueDate : null,
+      paymentMethod,
       lines: lines.map((line) => ({
         productId: line.productId,
         unit: line.unit,
@@ -371,6 +423,21 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
             <SummaryRow label="New total">
               <Money kobo={totalKobo} tone="neutral" />
             </SummaryRow>
+            <SummaryRow label="Paid">
+              <Money kobo={paidKobo < 0n ? 0n : paidKobo} tone="neutral" />
+            </SummaryRow>
+            <SummaryRow label="Balance owed">
+              {balanceKobo > 0n ? (
+                <Money kobo={balanceKobo} />
+              ) : (
+                <span className="text-success">Nothing owed</span>
+              )}
+            </SummaryRow>
+            {balanceKobo > 0n && (
+              <SummaryRow label="Due date">
+                {dueDate === "" ? "No due date" : dueDate}
+              </SummaryRow>
+            )}
             <div className="border-t border-border pt-1.5">
               <dt className="text-muted-foreground">Lines</dt>
               <dd className="mt-1 space-y-0.5">
@@ -455,10 +522,15 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
           <CardHeader title="Details" />
           <CardBody className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
-              <FormField id="purchase-supplier" label="Supplier (optional)">
+              <FormField
+                id="purchase-supplier"
+                label="Supplier (optional)"
+                error={errors["purchase-supplier"]}
+              >
                 <Select
                   id="purchase-supplier"
                   value={supplierId}
+                  aria-invalid={errors["purchase-supplier"] !== undefined}
                   onChange={(event) => setSupplierId(event.target.value)}
                 >
                   <option value="">No supplier</option>
@@ -519,6 +591,66 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
                 onChange={(event) => setNotes(event.target.value)}
               />
             </FormField>
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Payment"
+            description="Keeps the original paid state. Reduce it to record supplier credit."
+          />
+          <CardBody className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <MoneyInput
+                  key={`paid-${totalKobo.toString()}`}
+                  id="purchase-paid"
+                  label="Amount paid"
+                  defaultValueKobo={(paidKobo < 0n ? 0n : paidKobo).toString()}
+                  onKoboChange={setAmountPaidNow}
+                />
+                {errors["purchase-paid"] && (
+                  <p role="alert" className="text-sm text-danger">
+                    {errors["purchase-paid"]}
+                  </p>
+                )}
+              </div>
+
+              <FormField id="purchase-method" label="Payment method">
+                <Select
+                  id="purchase-method"
+                  value={paymentMethod}
+                  onChange={(event) =>
+                    setPaymentMethod(event.target.value as PaymentMethod)
+                  }
+                >
+                  {PAYMENT_METHODS.map((method) => (
+                    <option key={method.value} value={method.value}>
+                      {method.label}
+                    </option>
+                  ))}
+                </Select>
+              </FormField>
+
+              {balanceKobo > 0n && (
+                <FormField
+                  id="purchase-due"
+                  label="Due date"
+                  hint="When you expect to pay the balance."
+                  error={errors["purchase-due"]}
+                  className="sm:col-span-2"
+                >
+                  <Input
+                    id="purchase-due"
+                    type="date"
+                    value={dueDate}
+                    min={purchasedAt}
+                    aria-invalid={errors["purchase-due"] !== undefined}
+                    onChange={(event) => setDueDate(event.target.value)}
+                  />
+                </FormField>
+              )}
+            </div>
           </CardBody>
         </Card>
 
@@ -601,7 +733,9 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
                           })
                         }
                       >
-                        <option value="PACK">Pack ({unitsPerPack} units)</option>
+                        <option value="PACK">
+                          Pack ({unitsPerPack} units)
+                        </option>
                         <option value="UNIT">Single unit</option>
                       </Select>
                     </FormField>
@@ -660,21 +794,42 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
         </Card>
 
         <Card>
-          <CardBody className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <div className="text-left sm:text-right">
-              <p className="text-xs text-muted-foreground">Total</p>
-              <p className="text-lg font-semibold text-foreground">
-                <Money kobo={totalKobo} tone="neutral" />
-              </p>
-            </div>
-            <div className="flex flex-col gap-2">
+          <CardBody className="space-y-4">
+            <dl className="grid gap-3 sm:grid-cols-3">
+              <div>
+                <dt className="text-xs text-muted-foreground">Total</dt>
+                <dd className="text-lg font-semibold text-foreground">
+                  <Money kobo={totalKobo} tone="neutral" />
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Paid</dt>
+                <dd className="text-lg font-semibold text-foreground">
+                  <Money kobo={paidKobo < 0n ? 0n : paidKobo} tone="neutral" />
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">
+                  Balance owed to supplier
+                </dt>
+                <dd
+                  className={`text-lg font-semibold ${
+                    balanceKobo > 0n ? "text-danger" : "text-foreground"
+                  }`}
+                >
+                  <Money kobo={balanceKobo > 0n ? balanceKobo : 0n} />
+                </dd>
+              </div>
+            </dl>
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
               {updateMutation.isError && (
-                <p role="alert" className="text-sm text-danger">
+                <p role="alert" className="text-sm text-danger sm:mr-auto">
                   {toUserMessage(updateMutation.error)}
                 </p>
               )}
               {network.offline && (
-                <p className="text-sm text-warning">
+                <p className="text-sm text-warning sm:mr-auto">
                   You&rsquo;re offline. Changes can&rsquo;t be saved until you
                   reconnect.
                 </p>

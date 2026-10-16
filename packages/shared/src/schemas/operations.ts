@@ -2,7 +2,10 @@ import { z } from "zod";
 import {
   idSchema,
   isoDateTimeSchema,
+  lagosDateStringSchema,
   nonnegativeKoboStringSchema,
+  paymentMethodSchema,
+  positiveKoboStringSchema,
 } from "./common.ts";
 import { stockLocationSchema, stockMovementTypeSchema } from "./stock.ts";
 import { unitSchema } from "./purchase.ts";
@@ -100,7 +103,25 @@ export const createPurchaseDtoSchema = z
     purchasedAt: isoDateTimeSchema,
     notes: z.string().trim().nullable(),
     reference: z.string().trim().nullable(),
+    /**
+     * Amount paid to the supplier at the moment of receiving. Must be between
+     * 0 and the purchase total (checked in the domain). A balance above zero
+     * requires a supplier so the debt can be tracked.
+     */
+    amountPaidNowKobo: nonnegativeKoboStringSchema,
+    dueDate: lagosDateStringSchema.nullable(),
+    /** How the up-front payment was made. Defaults to CASH. */
+    paymentMethod: paymentMethodSchema.optional(),
     lines: z.array(createPurchaseLineDtoSchema).min(1),
+  })
+  .strict();
+
+export const recordPurchasePaymentDtoSchema = z
+  .object({
+    amountKobo: positiveKoboStringSchema,
+    paidAt: isoDateTimeSchema,
+    method: paymentMethodSchema,
+    note: z.string().trim().nullable().optional(),
   })
   .strict();
 

@@ -1,8 +1,12 @@
 import {
   fromAuditLogDto,
+  fromCashSnapshotDto,
   fromCustomerDto,
   fromCustomerLedgerEntryDto,
   fromExpenseDto,
+  fromLoanDto,
+  fromLoanLedgerEntryDto,
+  fromLoanRepaymentDto,
   fromProductDto,
   fromPurchaseDto,
   fromPurchaseLineDto,
@@ -17,10 +21,15 @@ import {
   fromStockTransferLineDto,
   fromSupplierDto,
   fromSupplierLedgerEntryDto,
+  fromSupplierPaymentDto,
   toAuditLogDto,
+  toCashSnapshotDto,
   toCustomerDto,
   toCustomerLedgerEntryDto,
   toExpenseDto,
+  toLoanDto,
+  toLoanLedgerEntryDto,
+  toLoanRepaymentDto,
   toProductDto,
   toPurchaseDto,
   toPurchaseLineDto,
@@ -35,10 +44,15 @@ import {
   toStockTransferLineDto,
   toSupplierDto,
   toSupplierLedgerEntryDto,
+  toSupplierPaymentDto,
   type AuditLog,
+  type CashSnapshot,
   type Customer,
   type CustomerLedgerEntry,
   type Expense,
+  type Loan,
+  type LoanLedgerEntry,
+  type LoanRepayment,
   type Product,
   type Purchase,
   type PurchaseLine,
@@ -53,12 +67,17 @@ import {
   type StockTransferLine,
   type Supplier,
   type SupplierLedgerEntry,
+  type SupplierPayment,
 } from "@fabtyna/shared";
 import type {
   AuditLogDto,
+  CashSnapshotDto,
   CustomerDto,
   CustomerLedgerEntryDto,
   ExpenseDto,
+  LoanDto,
+  LoanLedgerEntryDto,
+  LoanRepaymentDto,
   ProductDto,
   PurchaseDto,
   PurchaseLineDto,
@@ -73,8 +92,13 @@ import type {
   StockTransferLineDto,
   SupplierDto,
   SupplierLedgerEntryDto,
+  SupplierPaymentDto,
 } from "@fabtyna/shared";
-import { assertStoreInvariants } from "@fabtyna/shared";
+import {
+  assertStoreInvariants,
+  MOCK_STORE_CURRENT_VERSION,
+  migrateMockStoreData,
+} from "@fabtyna/shared";
 
 export type MockStore = {
   products: Product[];
@@ -92,8 +116,13 @@ export type MockStore = {
   stockAdjustmentLines: StockAdjustmentLine[];
   stockMovements: StockMovement[];
   supplierLedgerEntries: SupplierLedgerEntry[];
+  supplierPayments: SupplierPayment[];
   customerLedgerEntries: CustomerLedgerEntry[];
   expenses: Expense[];
+  loans: Loan[];
+  loanLedgerEntries: LoanLedgerEntry[];
+  loanRepayments: LoanRepayment[];
+  cashSnapshots: CashSnapshot[];
   auditLogs: AuditLog[];
 };
 
@@ -113,8 +142,13 @@ type PersistedMockStore = {
   stockAdjustmentLines: StockAdjustmentLineDto[];
   stockMovements: StockMovementDto[];
   supplierLedgerEntries: SupplierLedgerEntryDto[];
+  supplierPayments: SupplierPaymentDto[];
   customerLedgerEntries: CustomerLedgerEntryDto[];
   expenses: ExpenseDto[];
+  loans: LoanDto[];
+  loanLedgerEntries: LoanLedgerEntryDto[];
+  loanRepayments: LoanRepaymentDto[];
+  cashSnapshots: CashSnapshotDto[];
   auditLogs: AuditLogDto[];
 };
 
@@ -125,7 +159,7 @@ type PersistedPayload = {
 
 const STORAGE_KEY = "fabtyna-mock-v1";
 const BACKUP_KEY = "fabtyna-mock-v1-backup";
-const CURRENT_VERSION = 4;
+const CURRENT_VERSION = MOCK_STORE_CURRENT_VERSION;
 
 let idFallbackCounter = 0;
 
@@ -271,8 +305,13 @@ function seedDemoData(): MockStore {
     stockAdjustmentLines: [],
     stockMovements: [],
     supplierLedgerEntries: [],
+    supplierPayments: [],
     customerLedgerEntries: [],
     expenses: [],
+    loans: [],
+    loanLedgerEntries: [],
+    loanRepayments: [],
+    cashSnapshots: [],
     auditLogs: [],
   };
 }
@@ -294,8 +333,13 @@ function encodeStore(store: MockStore): PersistedMockStore {
     stockAdjustmentLines: store.stockAdjustmentLines.map(toStockAdjustmentLineDto),
     stockMovements: store.stockMovements.map(toStockMovementDto),
     supplierLedgerEntries: store.supplierLedgerEntries.map(toSupplierLedgerEntryDto),
+    supplierPayments: store.supplierPayments.map(toSupplierPaymentDto),
     customerLedgerEntries: store.customerLedgerEntries.map(toCustomerLedgerEntryDto),
     expenses: store.expenses.map(toExpenseDto),
+    loans: store.loans.map(toLoanDto),
+    loanLedgerEntries: store.loanLedgerEntries.map(toLoanLedgerEntryDto),
+    loanRepayments: store.loanRepayments.map(toLoanRepaymentDto),
+    cashSnapshots: store.cashSnapshots.map(toCashSnapshotDto),
     auditLogs: store.auditLogs.map(toAuditLogDto),
   };
 }
@@ -308,15 +352,21 @@ function decodeStore(value: unknown): MockStore {
   if (typeof data.version !== "number") {
     throw new TypeError("Mock storage payload is missing a version.");
   }
-  if (data.version !== CURRENT_VERSION) {
-    throw new RangeError(`Unsupported mock storage version: ${data.version}`);
-  }
   if (typeof data.data !== "object" || data.data === null) {
     throw new TypeError("Mock storage payload is missing data.");
   }
 
-  const saved = data.data as PersistedMockStore;
-  const requiredKeys = [
+  // NON-DESTRUCTIVE: migrate older payloads forward instead of throwing (which
+  // would wipe the user's data via a reseed). A future version cannot be
+  // understood, so we throw to signal the caller to reseed.
+  const migration = migrateMockStoreData(data.version, data.data);
+  if (migration === null) {
+    throw new RangeError(`Unsupported mock storage version: ${data.version}`);
+  }
+
+  const raw = migration.data as Record<string, unknown>;
+  const saved = {} as PersistedMockStore;
+  const keys = [
     "products",
     "suppliers",
     "customers",
@@ -332,14 +382,21 @@ function decodeStore(value: unknown): MockStore {
     "stockAdjustmentLines",
     "stockMovements",
     "supplierLedgerEntries",
+    "supplierPayments",
     "customerLedgerEntries",
     "expenses",
+    "loans",
+    "loanLedgerEntries",
+    "loanRepayments",
+    "cashSnapshots",
     "auditLogs",
   ] as const;
-  for (const key of requiredKeys) {
-    if (!Array.isArray((saved as Record<string, unknown>)[key])) {
+  for (const key of keys) {
+    const value = raw[key];
+    if (!Array.isArray(value)) {
       throw new TypeError(`Mock storage field '${key}' must be an array.`);
     }
+    (saved as Record<string, unknown>)[key] = value;
   }
 
   return {
@@ -358,8 +415,13 @@ function decodeStore(value: unknown): MockStore {
     stockAdjustmentLines: saved.stockAdjustmentLines.map(fromStockAdjustmentLineDto),
     stockMovements: saved.stockMovements.map(fromStockMovementDto),
     supplierLedgerEntries: saved.supplierLedgerEntries.map(fromSupplierLedgerEntryDto),
+    supplierPayments: saved.supplierPayments.map(fromSupplierPaymentDto),
     customerLedgerEntries: saved.customerLedgerEntries.map(fromCustomerLedgerEntryDto),
     expenses: saved.expenses.map(fromExpenseDto),
+    loans: saved.loans.map(fromLoanDto),
+    loanLedgerEntries: saved.loanLedgerEntries.map(fromLoanLedgerEntryDto),
+    loanRepayments: saved.loanRepayments.map(fromLoanRepaymentDto),
+    cashSnapshots: saved.cashSnapshots.map(fromCashSnapshotDto),
     auditLogs: saved.auditLogs.map(fromAuditLogDto),
   };
 }
@@ -457,6 +519,24 @@ function jsonOf<T>(row: T, toDto: (row: T) => unknown): string {
   return JSON.stringify(toDto(row));
 }
 
+function assertRowsImmutable<T extends { id: string }>(
+  label: string,
+  previous: readonly T[],
+  candidate: readonly T[],
+  toDto: (row: T) => unknown,
+): void {
+  const prevJson = new Map(previous.map((row) => [row.id, jsonOf(row, toDto)]));
+  for (const row of previous) {
+    const found = candidate.find((c) => c.id === row.id);
+    if (!found) {
+      throw new Error(`${label} '${row.id}' was removed.`);
+    }
+    if (jsonOf(found, toDto) !== prevJson.get(row.id)) {
+      throw new Error(`${label} '${row.id}' was modified.`);
+    }
+  }
+}
+
 function assertImmutability(previous: MockStore, candidate: MockStore): void {
   const prevMovements = new Map(previous.stockMovements.map((m) => [m.id, jsonOf(m, toStockMovementDto)]));
   for (const m of previous.stockMovements) {
@@ -504,6 +584,12 @@ function assertImmutability(previous: MockStore, candidate: MockStore): void {
       throw new Error(`Supplier '${id}' was removed.`);
     }
   }
+
+  // Accounting ledgers are immutable too.
+  assertRowsImmutable("Supplier payment", previous.supplierPayments, candidate.supplierPayments, toSupplierPaymentDto);
+  assertRowsImmutable("Loan ledger entry", previous.loanLedgerEntries, candidate.loanLedgerEntries, toLoanLedgerEntryDto);
+  assertRowsImmutable("Loan repayment", previous.loanRepayments, candidate.loanRepayments, toLoanRepaymentDto);
+  assertRowsImmutable("Cash snapshot", previous.cashSnapshots, candidate.cashSnapshots, toCashSnapshotDto);
 }
 
 export function transactMockStore<T>(change: (draft: MockStore) => T): T {
@@ -532,6 +618,11 @@ export function transactMockStore<T>(change: (draft: MockStore) => T): T {
     supplierLedgerEntries: draft.supplierLedgerEntries,
     purchaseLines: draft.purchaseLines,
     stockAdjustmentLines: draft.stockAdjustmentLines,
+    purchases: draft.purchases,
+    supplierPayments: draft.supplierPayments,
+    loanLedgerEntries: draft.loanLedgerEntries,
+    cashSnapshots: draft.cashSnapshots,
+    expenses: draft.expenses,
   });
 
   persist(draft);

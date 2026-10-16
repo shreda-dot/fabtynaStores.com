@@ -70,12 +70,11 @@ export function MobileNav() {
           </button>
         </div>
         <nav aria-label="Main navigation" className="flex-1 space-y-1 overflow-y-auto p-3">
-          {navItems.map((item) => {
+          {navItems.map((item, index) => {
             const Icon = item.icon;
-            const active =
-              item.href === "/dashboard"
-                ? pathname === item.href
-                : pathname === item.href || pathname.startsWith(`${item.href}/`);
+            const active = item.exact
+              ? pathname === item.href
+              : pathname === item.href || pathname.startsWith(`${item.href}/`);
             const className = `flex min-h-12 items-center gap-3 rounded-md px-3 text-base font-medium ${
               active
                 ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -83,9 +82,15 @@ export function MobileNav() {
                   ? "text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-foreground"
                   : "cursor-not-allowed text-sidebar-foreground/50"
             }`;
+            const showGroup = item.group !== undefined && item.group !== navItems[index - 1]?.group;
 
             return (
               <div key={item.href}>
+                {showGroup && (
+                  <p className="px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/50">
+                    {item.group}
+                  </p>
+                )}
                 {item.enabled ? (
                   <Link
                     href={item.href}

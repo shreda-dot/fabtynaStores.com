@@ -1,3 +1,4 @@
+export * from "./accounting.ts";
 export * from "./common.ts";
 export * from "./customer.ts";
 export * from "./expense.ts";

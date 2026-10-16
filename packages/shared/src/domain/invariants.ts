@@ -1,12 +1,23 @@
 import type {
+    CashSnapshot,
+    Expense,
+    LoanLedgerEntry,
     Product,
+    Purchase,
     StockAdjustmentLine,
     StockLocation,
     StockMovement,
     StockTransferLeg,
     SupplierLedgerEntry,
+    SupplierPayment,
 } from "./types.ts";
 import { validateSupplierLedgerAmount } from "./ledger.ts";
+import {
+    validateCashSnapshot,
+    validateLoanLedgerEntry,
+    validateLoanLedgerReversals,
+    validatePurchasePaymentFields,
+} from "./accounting.ts";
 
 const NON_REVERSAL_MOVEMENT_SIGNS: Record<
     StockMovement["type"],
@@ -357,6 +368,12 @@ export interface InvariantStoreState {
         unitCostKobo: bigint;
     }[];
     stockAdjustmentLines?: readonly StockAdjustmentLine[];
+    /** Accounting additions — validated only when supplied. */
+    purchases?: readonly Purchase[];
+    supplierPayments?: readonly SupplierPayment[];
+    loanLedgerEntries?: readonly LoanLedgerEntry[];
+    cashSnapshots?: readonly CashSnapshot[];
+    expenses?: readonly Expense[];
 }
 
 export function assertStoreInvariants(state: InvariantStoreState): void {
@@ -387,6 +404,34 @@ export function assertStoreInvariants(state: InvariantStoreState): void {
 
     for (const line of state.stockAdjustmentLines ?? []) {
         validateAdjustmentLineFields(line);
+    }
+
+    for (const purchase of state.purchases ?? []) {
+        validatePurchasePaymentFields(purchase);
+    }
+    for (const payment of state.supplierPayments ?? []) {
+        if (payment.amountKobo <= 0n) {
+            throw new RangeError("A supplier payment amount must be positive.");
+        }
+    }
+    for (const entry of state.loanLedgerEntries ?? []) {
+        validateLoanLedgerEntry(entry);
+    }
+    if (state.loanLedgerEntries) {
+        validateLoanLedgerReversals(state.loanLedgerEntries);
+    }
+    for (const snapshot of state.cashSnapshots ?? []) {
+        validateCashSnapshot(snapshot);
+    }
+    for (const expense of state.expenses ?? []) {
+        if (expense.amountKobo < 0n) {
+            throw new RangeError("An expense amount must not be negative.");
+        }
+        if (expense.loanRepaymentId !== null && expense.category !== "LOAN_INTEREST") {
+            throw new RangeError(
+                "An expense linked to a loan repayment must use the LOAN_INTEREST category.",
+            );
+        }
     }
 }
 

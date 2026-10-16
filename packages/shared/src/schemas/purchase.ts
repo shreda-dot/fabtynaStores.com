@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { idSchema, isoDateTimeSchema, nonnegativeKoboStringSchema } from "./common.ts";
+import {
+  idSchema,
+  isoDateTimeSchema,
+  lagosDateStringSchema,
+  nonnegativeKoboStringSchema,
+} from "./common.ts";
 
 export const purchaseStatusSchema = z.enum(["DRAFT", "RECEIVED", "VOIDED"]);
 export const unitSchema = z.enum(["UNIT", "PACK"]);
@@ -27,6 +32,8 @@ export const purchaseDtoSchema = z
     reference: z.string().nullable(),
     notes: z.string().nullable(),
     totalKobo: nonnegativeKoboStringSchema,
+    paidKobo: nonnegativeKoboStringSchema,
+    dueDate: lagosDateStringSchema.nullable(),
     purchasedAt: isoDateTimeSchema,
     receivedAt: isoDateTimeSchema.nullable(),
     createdAt: isoDateTimeSchema,

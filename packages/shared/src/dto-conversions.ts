@@ -1,8 +1,12 @@
 import type {
   AuditLog,
+  CashSnapshot,
   Customer,
   CustomerLedgerEntry,
   Expense,
+  Loan,
+  LoanLedgerEntry,
+  LoanRepayment,
   Product,
   Purchase,
   PurchaseLine,
@@ -17,12 +21,17 @@ import type {
   StockTransferLine,
   Supplier,
   SupplierLedgerEntry,
+  SupplierPayment,
 } from "./domain/types.ts";
 import {
   auditLogDtoSchema,
+  cashSnapshotDtoSchema,
   customerDtoSchema,
   customerLedgerEntryDtoSchema,
   expenseDtoSchema,
+  loanDtoSchema,
+  loanLedgerEntryDtoSchema,
+  loanRepaymentDtoSchema,
   productDtoSchema,
   purchaseDtoSchema,
   purchaseLineDtoSchema,
@@ -37,12 +46,17 @@ import {
   stockTransferLineDtoSchema,
   supplierDtoSchema,
   supplierLedgerEntryDtoSchema,
+  supplierPaymentDtoSchema,
 } from "./schemas/index.ts";
 import type {
   AuditLogDto,
+  CashSnapshotDto,
   CustomerDto,
   CustomerLedgerEntryDto,
   ExpenseDto,
+  LoanDto,
+  LoanLedgerEntryDto,
+  LoanRepaymentDto,
   ProductDto,
   PurchaseDto,
   PurchaseLineDto,
@@ -57,6 +71,7 @@ import type {
   StockTransferLineDto,
   SupplierDto,
   SupplierLedgerEntryDto,
+  SupplierPaymentDto,
 } from "./dtos.ts";
 
 function dateToIso(date: Date): string {
@@ -154,6 +169,7 @@ export function toPurchaseDto(purchase: Purchase): PurchaseDto {
   return purchaseDtoSchema.parse({
     ...purchase,
     totalKobo: purchase.totalKobo.toString(),
+    paidKobo: purchase.paidKobo.toString(),
     purchasedAt: dateToIso(purchase.purchasedAt),
     receivedAt: purchase.receivedAt === null ? null : dateToIso(purchase.receivedAt),
     createdAt: dateToIso(purchase.createdAt),
@@ -166,6 +182,7 @@ export function fromPurchaseDto(dto: PurchaseDto): Purchase {
   return {
     ...value,
     totalKobo: BigInt(value.totalKobo),
+    paidKobo: BigInt(value.paidKobo),
     purchasedAt: new Date(value.purchasedAt),
     receivedAt: value.receivedAt === null ? null : new Date(value.receivedAt),
     createdAt: new Date(value.createdAt),
@@ -405,5 +422,112 @@ export function fromAuditLogDto(dto: AuditLogDto): AuditLog {
   return {
     ...value,
     occurredAt: new Date(value.occurredAt),
+  };
+}
+
+/* Accounting ------------------------------------------------------------- */
+
+export function toSupplierPaymentDto(
+  payment: SupplierPayment,
+): SupplierPaymentDto {
+  return supplierPaymentDtoSchema.parse({
+    ...payment,
+    amountKobo: payment.amountKobo.toString(),
+    paidAt: dateToIso(payment.paidAt),
+    createdAt: dateToIso(payment.createdAt),
+  });
+}
+
+export function fromSupplierPaymentDto(
+  dto: SupplierPaymentDto,
+): SupplierPayment {
+  const value = supplierPaymentDtoSchema.parse(dto);
+  return {
+    ...value,
+    amountKobo: BigInt(value.amountKobo),
+    paidAt: new Date(value.paidAt),
+    createdAt: new Date(value.createdAt),
+  };
+}
+
+export function toLoanDto(loan: Loan): LoanDto {
+  return loanDtoSchema.parse({
+    ...loan,
+    principalKobo: loan.principalKobo.toString(),
+    agreedInterestKobo: loan.agreedInterestKobo.toString(),
+    disbursedAt: dateToIso(loan.disbursedAt),
+    createdAt: dateToIso(loan.createdAt),
+  });
+}
+
+export function fromLoanDto(dto: LoanDto): Loan {
+  const value = loanDtoSchema.parse(dto);
+  return {
+    ...value,
+    principalKobo: BigInt(value.principalKobo),
+    agreedInterestKobo: BigInt(value.agreedInterestKobo),
+    disbursedAt: new Date(value.disbursedAt),
+    createdAt: new Date(value.createdAt),
+  };
+}
+
+export function toLoanLedgerEntryDto(
+  entry: LoanLedgerEntry,
+): LoanLedgerEntryDto {
+  return loanLedgerEntryDtoSchema.parse({
+    ...entry,
+    amountKobo: entry.amountKobo.toString(),
+    occurredAt: dateToIso(entry.occurredAt),
+  });
+}
+
+export function fromLoanLedgerEntryDto(
+  dto: LoanLedgerEntryDto,
+): LoanLedgerEntry {
+  const value = loanLedgerEntryDtoSchema.parse(dto);
+  return {
+    ...value,
+    amountKobo: BigInt(value.amountKobo),
+    occurredAt: new Date(value.occurredAt),
+  };
+}
+
+export function toLoanRepaymentDto(
+  repayment: LoanRepayment,
+): LoanRepaymentDto {
+  return loanRepaymentDtoSchema.parse({
+    ...repayment,
+    amountKobo: repayment.amountKobo.toString(),
+    interestPortionKobo: repayment.interestPortionKobo.toString(),
+    paidAt: dateToIso(repayment.paidAt),
+    createdAt: dateToIso(repayment.createdAt),
+  });
+}
+
+export function fromLoanRepaymentDto(dto: LoanRepaymentDto): LoanRepayment {
+  const value = loanRepaymentDtoSchema.parse(dto);
+  return {
+    ...value,
+    amountKobo: BigInt(value.amountKobo),
+    interestPortionKobo: BigInt(value.interestPortionKobo),
+    paidAt: new Date(value.paidAt),
+    createdAt: new Date(value.createdAt),
+  };
+}
+
+export function toCashSnapshotDto(snapshot: CashSnapshot): CashSnapshotDto {
+  return cashSnapshotDtoSchema.parse({
+    ...snapshot,
+    amountKobo: snapshot.amountKobo.toString(),
+    createdAt: dateToIso(snapshot.createdAt),
+  });
+}
+
+export function fromCashSnapshotDto(dto: CashSnapshotDto): CashSnapshot {
+  const value = cashSnapshotDtoSchema.parse(dto);
+  return {
+    ...value,
+    amountKobo: BigInt(value.amountKobo),
+    createdAt: new Date(value.createdAt),
   };
 }

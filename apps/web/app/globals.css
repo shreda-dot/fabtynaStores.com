@@ -2,87 +2,230 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * Design tokens.
+ *
+ * Plain, neutral business-tool palette: a single neutral grey scale, one
+ * primary accent (deep slate-blue) and semantic colours that are used only to
+ * carry meaning (success / warning / danger / info).
+ *
+ * Tokens are mapped into Tailwind's theme so they are available as utilities
+ * (bg-surface, text-muted-foreground, border-border, rounded-md, ...).
+ */
 @theme inline {
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 
+  /* Neutral scale ------------------------------------------------ */
   --color-background: var(--theme-background);
+  --color-surface: var(--theme-surface);
   --color-foreground: var(--theme-foreground);
   --color-card: var(--theme-card);
   --color-card-foreground: var(--theme-card-foreground);
-  --color-primary: var(--theme-primary);
-  --color-primary-foreground: var(--theme-primary-foreground);
-  --color-secondary: var(--theme-secondary);
-  --color-secondary-foreground: var(--theme-secondary-foreground);
   --color-muted: var(--theme-muted);
   --color-muted-foreground: var(--theme-muted-foreground);
-  --color-accent: var(--theme-accent);
-  --color-accent-foreground: var(--theme-accent-foreground);
-  --color-destructive: var(--theme-destructive);
-  --color-destructive-foreground: var(--theme-destructive-foreground);
+  --color-subtle: var(--theme-subtle);
   --color-border: var(--theme-border);
   --color-input: var(--theme-input);
+
+  /* Primary accent (the only accent) ---------------------------- */
+  --color-primary: var(--theme-primary);
+  --color-primary-foreground: var(--theme-primary-foreground);
   --color-ring: var(--theme-ring);
+
+  /* Secondary / ghost surfaces --------------------------------- */
+  --color-secondary: var(--theme-secondary);
+  --color-secondary-foreground: var(--theme-secondary-foreground);
+  --color-accent: var(--theme-accent);
+  --color-accent-foreground: var(--theme-accent-foreground);
+
+  /* Semantic — meaning only ------------------------------------ */
+  --color-success: var(--theme-success);
+  --color-success-foreground: var(--theme-success-foreground);
+  --color-success-surface: var(--theme-success-surface);
+  --color-warning: var(--theme-warning);
+  --color-warning-foreground: var(--theme-warning-foreground);
+  --color-warning-surface: var(--theme-warning-surface);
+  --color-danger: var(--theme-danger);
+  --color-danger-foreground: var(--theme-danger-foreground);
+  --color-danger-surface: var(--theme-danger-surface);
+  --color-info: var(--theme-info);
+  --color-info-foreground: var(--theme-info-foreground);
+  --color-info-surface: var(--theme-info-surface);
+
+  /* Destructive aliases kept for existing call sites ------------ */
+  --color-destructive: var(--theme-danger);
+  --color-destructive-foreground: var(--theme-danger-foreground);
+
+  /* Sidebar ------------------------------------------------------ */
   --color-sidebar: var(--theme-sidebar);
   --color-sidebar-foreground: var(--theme-sidebar-foreground);
   --color-sidebar-accent: var(--theme-sidebar-accent);
   --color-sidebar-accent-foreground: var(--theme-sidebar-accent-foreground);
   --color-sidebar-border: var(--theme-sidebar-border);
 
+  /* Radius scale ------------------------------------------------- */
   --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
   --radius-xl: 0.75rem;
+
+  /* Typographic scale ------------------------------------------- */
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1rem;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.375rem;
+  --text-section: 1rem;
+  --text-section--line-height: 1.5rem;
+  --text-page: 1.375rem;
+  --text-page--line-height: 1.75rem;
 }
 
 :root {
   color-scheme: light;
-  --theme-background: #f8fafc;
-  --theme-foreground: #1e293b;
+
+  /* Neutrals */
+  --theme-background: #f6f7f9;
+  --theme-surface: #ffffff;
+  --theme-foreground: #1c2430;
   --theme-card: #ffffff;
-  --theme-card-foreground: #1e293b;
-  --theme-primary: #5b6f84;
+  --theme-card-foreground: #1c2430;
+  --theme-muted: #eef1f5;
+  --theme-muted-foreground: #5b6675;
+  --theme-subtle: #f2f4f7;
+  --theme-border: #dde1e7;
+  --theme-input: #cbd2db;
+
+  /* Primary accent: deep slate-blue */
+  --theme-primary: #33465c;
   --theme-primary-foreground: #ffffff;
-  --theme-secondary: #f1f5f9;
-  --theme-secondary-foreground: #1e293b;
-  --theme-muted: #f1f5f9;
-  --theme-muted-foreground: #64748b;
-  --theme-accent: #e9eef3;
-  --theme-accent-foreground: #40566d;
-  --theme-destructive: #a65d5d;
-  --theme-destructive-foreground: #ffffff;
-  --theme-border: #e2e8f0;
-  --theme-input: #e2e8f0;
-  --theme-ring: #71869b;
+  --theme-ring: #4b6480;
+
+  /* Secondary / ghost */
+  --theme-secondary: #eef1f5;
+  --theme-secondary-foreground: #1c2430;
+  --theme-accent: #e6ebf1;
+  --theme-accent-foreground: #29384a;
+
+  /* Semantic */
+  --theme-success: #1f7a4d;
+  --theme-success-foreground: #ffffff;
+  --theme-success-surface: #e6f4ec;
+  --theme-warning: #9a6a12;
+  --theme-warning-foreground: #ffffff;
+  --theme-warning-surface: #fbf1dc;
+  --theme-danger: #a13636;
+  --theme-danger-foreground: #ffffff;
+  --theme-danger-surface: #fbeaea;
+  --theme-info: #2f5c8a;
+  --theme-info-foreground: #ffffff;
+  --theme-info-surface: #e8f0f8;
+
+  /* Sidebar */
   --theme-sidebar: #ffffff;
-  --theme-sidebar-foreground: #1e293b;
-  --theme-sidebar-accent: #e9eef3;
-  --theme-sidebar-accent-foreground: #40566d;
-  --theme-sidebar-border: #e2e8f0;
+  --theme-sidebar-foreground: #1c2430;
+  --theme-sidebar-accent: #e6ebf1;
+  --theme-sidebar-accent-foreground: #29384a;
+  --theme-sidebar-border: #dde1e7;
 }
 
 .dark {
   color-scheme: dark;
-  --theme-background: #111827;
-  --theme-foreground: #e2e8f0;
-  --theme-card: #1e293b;
-  --theme-card-foreground: #e2e8f0;
-  --theme-primary: #aab9c8;
-  --theme-primary-foreground: #17212d;
-  --theme-secondary: #293548;
-  --theme-secondary-foreground: #e2e8f0;
-  --theme-muted: #293548;
-  --theme-muted-foreground: #a0adbc;
-  --theme-accent: #344256;
-  --theme-accent-foreground: #d6e0ea;
-  --theme-destructive: #bd7777;
-  --theme-destructive-foreground: #1f1717;
-  --theme-border: #334155;
-  --theme-input: #334155;
-  --theme-ring: #aab9c8;
-  --theme-sidebar: #17212d;
-  --theme-sidebar-foreground: #e2e8f0;
-  --theme-sidebar-accent: #293548;
-  --theme-sidebar-accent-foreground: #d6e0ea;
-  --theme-sidebar-border: #334155;
+
+  /* Neutrals */
+  --theme-background: #10151c;
+  --theme-surface: #171e27;
+  --theme-foreground: #dde4ec;
+  --theme-card: #171e27;
+  --theme-card-foreground: #dde4ec;
+  --theme-muted: #212a35;
+  --theme-muted-foreground: #9aa7b6;
+  --theme-subtle: #1c242e;
+  --theme-border: #2c3745;
+  --theme-input: #384656;
+
+  /* Primary accent */
+  --theme-primary: #8ea8c4;
+  --theme-primary-foreground: #10161d;
+  --theme-ring: #8ea8c4;
+
+  /* Secondary / ghost */
+  --theme-secondary: #212a35;
+  --theme-secondary-foreground: #dde4ec;
+  --theme-accent: #26313d;
+  --theme-accent-foreground: #cfd9e4;
+
+  /* Semantic */
+  --theme-success: #6cc79a;
+  --theme-success-foreground: #0b1a12;
+  --theme-success-surface: #16281f;
+  --theme-warning: #e0b45e;
+  --theme-warning-foreground: #201704;
+  --theme-warning-surface: #2a2313;
+  --theme-danger: #e09090;
+  --theme-danger-foreground: #22100f;
+  --theme-danger-surface: #2c1a1a;
+  --theme-info: #86b0db;
+  --theme-info-foreground: #091523;
+  --theme-info-surface: #16222e;
+
+  /* Sidebar */
+  --theme-sidebar: #141a22;
+  --theme-sidebar-foreground: #dde4ec;
+  --theme-sidebar-accent: #26313d;
+  --theme-sidebar-accent-foreground: #cfd9e4;
+  --theme-sidebar-border: #2c3745;
+}
+
+@layer base {
+  * {
+    border-color: var(--theme-border);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--theme-background);
+    color: var(--theme-foreground);
+    font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system,
+      "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    overflow-x: hidden;
+  }
+
+  /* Visible, consistent focus ring on every keyboard-reachable control. */
+  :focus-visible {
+    outline: 2px solid var(--theme-ring);
+    outline-offset: 2px;
+  }
+
+  /* Never let a stray focusable element create a horizontal scrollbar. */
+  img,
+  svg,
+  video,
+  canvas {
+    max-width: 100%;
+  }
+}
+
+@layer utilities {
+  /* Money and quantity columns: line the digits up. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+}
+
+/* Respect the user's motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

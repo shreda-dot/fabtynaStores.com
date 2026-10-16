@@ -1,22 +1,34 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Ban } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatLagosDateTime, formatNaira } from "@fabtyna/shared";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
+import { formatLagosDateTime } from "@fabtyna/shared";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { StatusBadge } from "@/components/ui/badge";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useNetworkStatus } from "@/hooks/use-network-status";
 import { adjustmentsApi } from "@/lib/api";
 import type { AdjustmentLineWithProductDto } from "@/lib/api/adjustments.api";
+import { ApiError, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { confirm } from "@/stores/confirm-store";
+import { toast } from "@/stores/toast-store";
 
 export default function AdjustmentDetailPage() {
   const params = useParams<{ id: string }>();
   const queryClient = useQueryClient();
+  const network = useNetworkStatus();
   const id = params.id;
 
   const adjustment = useQuery({
@@ -27,27 +39,75 @@ export default function AdjustmentDetailPage() {
   const voidMutation = useMutation({
     mutationFn: () => adjustmentsApi.void(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.adjustments.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adjustments.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+      void adjustment.refetch();
+    },
+    onError: (error) => {
+      toast.error(toUserMessage(error));
     },
   });
 
-  function tryVoid() {
-    if (adjustment.data?.status !== "COMPLETED") return;
-    if (
-      !window.confirm(
-        "Void this adjustment? The stock movements will be reversed. This cannot be undone.",
-      )
-    ) {
-      return;
-    }
-    voidMutation.mutate();
+  if (adjustment.isPending) {
+    return (
+      <div className="space-y-6">
+        <Skeleton variant="text" count={2} className="max-w-sm" />
+        <Skeleton variant="stat" count={2} />
+        <Skeleton variant="row" count={4} />
+      </div>
+    );
   }
+
+  if (adjustment.isError) {
+    const notFound =
+      adjustment.error instanceof ApiError && adjustment.error.kind === "not-found";
+    if (notFound) {
+      return (
+        <EmptyState
+          title="Adjustment not found"
+          description="This adjustment may have been removed, or the link is incorrect."
+          action={
+            <Link href="/adjustments" className={buttonClasses({})}>
+              Back to adjustments
+            </Link>
+          }
+          className="mt-8"
+        />
+      );
+    }
+    return (
+      <ErrorState
+        title="Adjustment could not be loaded"
+        message={toUserMessage(adjustment.error)}
+        onRetry={() => void adjustment.refetch()}
+        className="mt-8"
+      />
+    );
+  }
+
+  if (!adjustment.data) {
+    return (
+      <EmptyState
+        title="Adjustment not found"
+        description="This adjustment may have been removed, or the link is incorrect."
+        action={
+          <Link href="/adjustments" className={buttonClasses({})}>
+            Back to adjustments
+          </Link>
+        }
+        className="mt-8"
+      />
+    );
+  }
+
+  const a = adjustment.data;
+  const isVoided = a.status === "VOIDED";
 
   const lineColumns: ResponsiveTableColumn<AdjustmentLineWithProductDto>[] = [
     {
       header: "Product",
-      render: (line) => line.productName,
+      render: (line) =>
+        line.productName || line.productId.slice(0, 8),
     },
     {
       header: "Location",
@@ -55,87 +115,107 @@ export default function AdjustmentDetailPage() {
     },
     {
       header: "Delta",
-      render: (line) =>
-        line.quantityDeltaUnits > 0
-          ? `+${line.quantityDeltaUnits}`
-          : line.quantityDeltaUnits.toString(),
+      align: "right",
+      render: (line) => (
+        <span className="tabular">
+          {line.quantityDeltaUnits > 0
+            ? `+${line.quantityDeltaUnits}`
+            : line.quantityDeltaUnits.toString()}
+        </span>
+      ),
     },
     {
       header: "Unit cost",
-      render: (line) => formatNaira(line.unitCostKobo),
+      align: "right",
+      render: (line) => <Money kobo={line.unitCostKobo} tone="neutral" />,
     },
   ];
 
-  if (adjustment.isPending) return <ListLoading />;
-  if (adjustment.isError)
-    return (
-      <ListError
-        message={adjustment.error.message || "Adjustment could not be loaded."}
-        retry={() => void adjustment.refetch()}
-      />
-    );
-  if (!adjustment.data) return <ListEmpty message="Adjustment not found." />;
-
-  const a = adjustment.data;
+  async function tryVoid() {
+    if (isVoided) return;
+    await confirm({
+      title: "Void this adjustment?",
+      tone: "danger",
+      confirmLabel: "Void adjustment",
+      cancelLabel: "Keep adjustment",
+      description: "This cannot be undone.",
+      details: (
+        <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+          <li>The stock movements from this adjustment will be reversed.</li>
+          <li>Stock levels return to what they were before the adjustment.</li>
+          <li>
+            The record stays in history marked <strong>VOIDED</strong>.
+          </li>
+        </ul>
+      ),
+      onConfirm: () => voidMutation.mutateAsync(),
+      successMessage: `Adjustment ${a.id.slice(0, 8)} voided.`,
+    });
+  }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <Link
-            href="/adjustments"
-            className="inline-flex min-h-11 items-center gap-1 rounded-md border border-border px-3 text-sm font-medium hover:bg-muted"
-          >
-            <ArrowLeft aria-hidden="true" className="h-4 w-4" />
-            Back
-          </Link>
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">
-              Adjustment {a.id.slice(0, 8)}
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {formatLagosDateTime(a.adjustedAt)} ·{" "}
-              <span className={a.status === "VOIDED" ? "text-destructive" : ""}>
-                {a.status}
-              </span>
-            </p>
-          </div>
-        </div>
-        {a.status === "COMPLETED" && (
-          <button
-            type="button"
-            onClick={tryVoid}
-            disabled={voidMutation.isPending}
-            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md border border-destructive px-4 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-60"
-          >
-            {voidMutation.isPending ? "Voiding…" : "Void adjustment"}
-          </button>
-        )}
-      </div>
+      <PageHeader
+        title={`Adjustment ${a.id.slice(0, 8)}`}
+        description={
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <span>{formatLagosDateTime(a.adjustedAt)}</span>
+            <StatusBadge status={a.status} />
+          </span>
+        }
+        actions={
+          <>
+            <Link
+              href="/adjustments"
+              className={buttonClasses({ variant: "secondary" })}
+            >
+              <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+              Back
+            </Link>
+            {!isVoided && (
+              <Button
+                variant="danger"
+                loading={voidMutation.isPending}
+                disabled={network.offline}
+                onClick={() => void tryVoid()}
+              >
+                <Ban aria-hidden="true" className="h-4 w-4" />
+                Void adjustment
+              </Button>
+            )}
+          </>
+        }
+      />
 
-      {voidMutation.error && (
+      {isVoided && (
         <div
-          role="alert"
-          className="rounded-lg border border-destructive/30 bg-card p-4 text-sm text-destructive"
+          role="status"
+          className="rounded-md border border-danger/30 bg-danger-surface p-4 text-sm text-danger"
         >
-          <p className="font-medium">Cannot void this adjustment</p>
-          <p className="mt-1">{voidMutation.error.message}</p>
+          <p className="font-semibold">This adjustment is voided</p>
+          <p className="mt-1">
+            The stock movements were reversed. The record is kept for audit.
+          </p>
         </div>
       )}
 
-      <div className="rounded-lg border border-border bg-card p-4">
-        <p className="text-sm text-muted-foreground">Reason</p>
-        <p className="mt-1 font-medium">{a.reason}</p>
-      </div>
+      <Card>
+        <CardBody>
+          <p className="text-sm text-muted-foreground">Reason</p>
+          <p className="mt-1 font-medium">{a.reason}</p>
+        </CardBody>
+      </Card>
 
-      <section className="space-y-3 rounded-lg border border-border bg-card p-4 sm:p-5">
-        <h2 className="text-lg font-semibold">Lines</h2>
-        <ResponsiveTable
-          rows={a.lines}
-          columns={lineColumns}
-          getKey={(line) => line.id}
-        />
-      </section>
+      <Card>
+        <CardHeader title="Lines" />
+        <CardBody>
+          <ResponsiveTable
+            rows={a.lines}
+            columns={lineColumns}
+            getKey={(line) => line.id}
+          />
+        </CardBody>
+      </Card>
     </div>
   );
 }

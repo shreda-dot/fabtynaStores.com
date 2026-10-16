@@ -1,18 +1,27 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Receipt, ScrollText } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatLagosDate, formatNaira } from "@fabtyna/shared";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
+import { formatLagosDate } from "@fabtyna/shared";
+import type { CustomerLedgerEntryDto, SaleDto } from "@fabtyna/shared";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { StatusBadge } from "@/components/ui/badge";
+import { buttonClasses } from "@/components/ui/button";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatCard } from "@/components/ui/stat-card";
 import { customersApi } from "@/lib/api";
+import { ApiError, toTechnicalDetail, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
-import type { CustomerLedgerEntryDto, SaleDto } from "@fabtyna/shared";
 
 export default function CustomerDetailPage() {
   const params = useParams<{ id: string }>();
@@ -23,15 +32,45 @@ export default function CustomerDetailPage() {
     queryFn: () => customersApi.getById(id),
   });
 
-  if (customer.isPending) return <ListLoading />;
-  if (customer.isError)
+  if (customer.isPending) {
     return (
-      <ListError
-        message={customer.error.message || "Customer could not be loaded."}
-        retry={() => void customer.refetch()}
+      <div className="space-y-6">
+        <Skeleton variant="text" className="h-8 w-56" />
+        <Skeleton variant="stat" count={3} />
+        <Skeleton variant="row" count={4} />
+      </div>
+    );
+  }
+
+  if (customer.isError) {
+    if (customer.error instanceof ApiError && customer.error.kind === "not-found") {
+      return (
+        <EmptyState
+          title="Customer not found"
+          description="This customer may have been removed, or the link is incorrect."
+          action={
+            <Link
+              href="/customers"
+              className={buttonClasses({ variant: "secondary", size: "sm" })}
+            >
+              Back to customers
+            </Link>
+          }
+        />
+      );
+    }
+    return (
+      <ErrorState
+        message={toUserMessage(customer.error)}
+        detail={
+          process.env.NODE_ENV === "development"
+            ? toTechnicalDetail(customer.error)
+            : undefined
+        }
+        onRetry={() => void customer.refetch()}
       />
     );
-  if (!customer.data) return <ListEmpty message="Customer not found." />;
+  }
 
   const c = customer.data;
 
@@ -59,13 +98,8 @@ export default function CustomerDetailPage() {
     },
     {
       header: "Amount",
-      render: (entry) => (
-        <span
-          className={entry.amountKobo.startsWith("-") ? "text-destructive" : ""}
-        >
-          {formatNaira(entry.amountKobo)}
-        </span>
-      ),
+      align: "right",
+      render: (entry) => <Money kobo={entry.amountKobo} />,
     },
     {
       header: "Note",
@@ -96,109 +130,139 @@ export default function CustomerDetailPage() {
     },
     {
       header: "Total",
-      render: (sale) => formatNaira(sale.totalKobo),
+      align: "right",
+      render: (sale) => <Money kobo={sale.totalKobo} tone="neutral" />,
     },
     {
       header: "Paid",
-      render: (sale) => formatNaira(sale.paidKobo),
+      align: "right",
+      render: (sale) => <Money kobo={sale.paidKobo} tone="neutral" />,
     },
     {
       header: "Unpaid",
+      align: "right",
       render: (sale) => {
-        const owed = BigInt(sale.totalKobo) - BigInt(sale.paidKobo);
         if (sale.status === "VOIDED") return "—";
+        const owed = BigInt(sale.totalKobo) - BigInt(sale.paidKobo);
         return (
-          <span className={owed > 0n ? "font-medium text-destructive" : ""}>
-            {formatNaira(owed.toString())}
-          </span>
+          <Money kobo={owed} className={owed > 0n ? "text-danger" : undefined} />
         );
       },
     },
     {
       header: "Status",
-      render: (sale) => sale.status,
+      align: "center",
+      render: (sale) => <StatusBadge status={sale.status} />,
     },
   ];
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Link
-          href="/customers"
-          className="inline-flex min-h-11 items-center gap-1 rounded-md border border-border px-3 text-sm font-medium hover:bg-muted"
-        >
-          <ArrowLeft aria-hidden="true" className="h-4 w-4" />
-          Back
-        </Link>
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{c.name}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {c.type} · {c.phone ?? "No phone"} · {c.email ?? "no email"}
-          </p>
-        </div>
+      <PageHeader
+        title={c.name}
+        description={`${c.type} · ${c.phone ?? "No phone"} · ${c.email ?? "no email"}`}
+        actions={
+          <Link
+            href="/customers"
+            className={buttonClasses({ variant: "secondary", size: "sm" })}
+          >
+            <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+            Back to customers
+          </Link>
+        }
+      />
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <StatCard
+          label="Total purchases"
+          value={<Money kobo={totalPurchases} tone="neutral" />}
+        />
+        <StatCard
+          label="Balance owed"
+          value={<Money kobo={c.balanceOwedKobo} tone="auto" />}
+          tone={BigInt(c.balanceOwedKobo) > 0n ? "danger" : "default"}
+          hint={
+            BigInt(c.balanceOwedKobo) > 0n
+              ? "Outstanding on credit sales"
+              : "Nothing outstanding"
+          }
+        />
+        <StatCard
+          label="Credit limit"
+          value={<Money kobo={c.creditLimitKobo} tone="neutral" />}
+        />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">Total purchases</p>
-          <p className="mt-1 text-xl font-semibold">
-            {formatNaira(totalPurchases.toString())}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">Balance owed</p>
-          <p
-            className={`mt-1 text-xl font-semibold ${
-              BigInt(c.balanceOwedKobo) > 0n ? "text-destructive" : ""
-            }`}
-          >
-            {formatNaira(c.balanceOwedKobo)}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">Credit limit</p>
-          <p className="mt-1 text-xl font-semibold">
-            {formatNaira(c.creditLimitKobo)}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">Address</p>
-          <p className="mt-1 text-sm">{c.address ?? "—"}</p>
-        </div>
-      </div>
+      <Card>
+        <CardHeader title="Contact" />
+        <CardBody>
+          <dl className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <dt className="text-sm text-muted-foreground">Type</dt>
+              <dd className="mt-0.5 text-sm">{c.type}</dd>
+            </div>
+            <div>
+              <dt className="text-sm text-muted-foreground">Phone</dt>
+              <dd className="mt-0.5 text-sm">{c.phone ?? "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-sm text-muted-foreground">Email</dt>
+              <dd className="mt-0.5 text-sm">{c.email ?? "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-sm text-muted-foreground">Address</dt>
+              <dd className="mt-0.5 text-sm">{c.address ?? "—"}</dd>
+            </div>
+          </dl>
+        </CardBody>
+      </Card>
 
       {c.notes && (
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">Notes</p>
-          <p className="mt-1 text-sm">{c.notes}</p>
-        </div>
+        <Card>
+          <CardHeader title="Notes" />
+          <CardBody>
+            <p className="text-sm text-muted-foreground">{c.notes}</p>
+          </CardBody>
+        </Card>
       )}
 
-      <section className="space-y-3 rounded-lg border border-border bg-card p-4 sm:p-5">
-        <h2 className="text-lg font-semibold">Sales</h2>
-        {salesByDate.length === 0 ? (
-          <ListEmpty message="No sales for this customer yet." />
-        ) : (
-          <ResponsiveTable
-            rows={salesByDate}
-            columns={saleColumns}
-            getKey={(sale) => sale.id}
-          />
-        )}
-      </section>
+      <Card>
+        <CardHeader title="Sales" />
+        <CardBody>
+          {salesByDate.length === 0 ? (
+            <EmptyState
+              icon={Receipt}
+              title="No sales yet"
+              description="Sales for this customer will appear here."
+            />
+          ) : (
+            <ResponsiveTable
+              rows={salesByDate}
+              columns={saleColumns}
+              getKey={(sale) => sale.id}
+            />
+          )}
+        </CardBody>
+      </Card>
 
-      <section className="space-y-3 rounded-lg border border-border bg-card p-4 sm:p-5">
-        <h2 className="text-lg font-semibold">Ledger</h2>
-        {ledgerByDate.length === 0 ? (
-          <ListEmpty message="No ledger entries for this customer yet." />
-        ) : (
-          <ResponsiveTable
-            rows={ledgerByDate}
-            columns={ledgerColumns}
-            getKey={(entry) => entry.id}
-          />
-        )}
-      </section>
+      <Card>
+        <CardHeader title="Ledger" />
+        <CardBody>
+          {ledgerByDate.length === 0 ? (
+            <EmptyState
+              icon={ScrollText}
+              title="No ledger entries yet"
+              description="Credit and payment activity will appear here."
+            />
+          ) : (
+            <ResponsiveTable
+              rows={ledgerByDate}
+              columns={ledgerColumns}
+              getKey={(entry) => entry.id}
+            />
+          )}
+        </CardBody>
+      </Card>
     </div>
   );
 }

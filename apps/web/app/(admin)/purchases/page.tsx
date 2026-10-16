@@ -1,29 +1,27 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import Link from "next/link";
-import {
-  formatLagosDate,
-  formatNaira,
-  getLagosBusinessDate,
-} from "@fabtyna/shared";
+import { formatLagosDate, getLagosBusinessDate } from "@fabtyna/shared";
 import { DateFilter } from "@/components/date-filter";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
-import {
-  ResponsiveTable,
-  type ResponsiveTableColumn,
-} from "@/components/responsive-table";
+import { ResponsiveTable } from "@/components/responsive-table";
+import type { ResponsiveTableColumn } from "@/components/responsive-table";
+import { StatusBadge } from "@/components/ui/badge";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { purchasesApi } from "@/lib/api";
-import { queryKeys } from "@/lib/query-keys";
 import type { PurchaseListItemDto } from "@/lib/api/purchases.api";
+import { toUserMessage } from "@/lib/api/client";
+import { queryKeys } from "@/lib/query-keys";
 
 export default function PurchasesPage() {
-  const queryClient = useQueryClient();
-  void queryClient;
-
   const [filterDate, setFilterDate] = useState("");
   const businessDate = useLagosBusinessDate();
 
@@ -67,30 +65,21 @@ export default function PurchasesPage() {
     },
     {
       header: "Lines",
-      render: (purchase) => purchase.lineCount.toString(),
+      align: "right",
+      render: (purchase) => <span className="tabular">{purchase.lineCount}</span>,
     },
     {
       header: "Total",
-      render: (purchase) => formatNaira(purchase.totalKobo),
+      align: "right",
+      render: (purchase) => <Money kobo={purchase.totalKobo} tone="neutral" />,
     },
     {
       header: "Status",
-      render: (purchase) => (
-        <span
-          className={
-            purchase.status === "VOIDED"
-              ? "text-destructive"
-              : purchase.status === "RECEIVED"
-                ? "text-green-700 dark:text-green-400"
-                : ""
-          }
-        >
-          {purchase.status}
-        </span>
-      ),
+      render: (purchase) => <StatusBadge status={purchase.status} />,
     },
     {
       header: "",
+      align: "right",
       render: (purchase) => (
         <Link
           href={`/purchases/${purchase.id}`}
@@ -102,25 +91,22 @@ export default function PurchasesPage() {
     },
   ];
 
+  const hasAnyPurchase = (purchases.data?.length ?? 0) > 0;
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Purchases</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Record goods received into your store.
-          </p>
-        </div>
-        <Link
-          href="/purchases/new"
-          className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90"
-        >
-          <Plus aria-hidden="true" className="h-4 w-4" />
-          New purchase
-        </Link>
-      </div>
+      <PageHeader
+        title="Purchases"
+        description="Record goods received into your store."
+        actions={
+          <Link href="/purchases/new" className={buttonClasses({})}>
+            <Plus aria-hidden="true" className="h-4 w-4" />
+            New purchase
+          </Link>
+        }
+      />
 
-      <section className="space-y-4 rounded-lg border border-border bg-card p-4 sm:p-5">
+      <section className="space-y-4 rounded-md border border-border bg-card p-4 sm:p-5">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <DateFilter
             id="f-date"
@@ -131,16 +117,42 @@ export default function PurchasesPage() {
         </div>
 
         {purchases.isPending ? (
-          <ListLoading />
+          <Skeleton variant="row" count={6} />
         ) : purchases.isError ? (
-          <ListError
-            message={
-              purchases.error.message || "Purchases could not be loaded."
-            }
-            retry={() => void purchases.refetch()}
+          <ErrorState
+            title="Purchases could not be loaded"
+            message={toUserMessage(purchases.error)}
+            onRetry={() => void purchases.refetch()}
           />
         ) : rows.length === 0 ? (
-          <ListEmpty message="No purchases match these filters." />
+          hasAnyPurchase ? (
+            <EmptyState
+              title="No purchases match these filters"
+              description="Try clearing the date filter."
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setFilterDate("")}
+                >
+                  Clear filters
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              title="No purchases yet"
+              description="Record goods received into your store to build your purchase history."
+              action={
+                <Link
+                  href="/purchases/new"
+                  className={buttonClasses({ variant: "secondary", size: "sm" })}
+                >
+                  New purchase
+                </Link>
+              }
+            />
+          )
         ) : (
           <ResponsiveTable
             rows={rows}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, useState, type FormEvent } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -7,6 +8,10 @@ import {
   type CreateSupplierDto,
   type SupplierDto,
 } from "@fabtyna/shared";
+import { Button } from "@/components/ui/button";
+import { FormField } from "@/components/ui/form-field";
+import { Input, Textarea } from "@/components/ui/input";
+import { useNetworkStatus } from "@/hooks/use-network-status";
 
 function initialValues(supplier?: SupplierDto): CreateSupplierDto {
   return {
@@ -31,124 +36,186 @@ export function SupplierForm({
   onCancel: () => void;
   onSubmit: (value: CreateSupplierDto) => Promise<void>;
 }) {
+  const network = useNetworkStatus();
+  const submitting = useRef(false);
+  const [summary, setSummary] = useState<string[]>([]);
+
   const form = useForm<CreateSupplierDto>({
     resolver: zodResolver(createSupplierDtoSchema),
     defaultValues: initialValues(supplier),
+    mode: "onBlur",
   });
 
+  const errors = form.formState.errors;
+
+  async function handleValid(input: CreateSupplierDto) {
+    if (submitting.current) return;
+    submitting.current = true;
+    try {
+      await onSubmit(input);
+    } finally {
+      submitting.current = false;
+    }
+  }
+
+  function handleInvalid(formErrors: typeof errors) {
+    const messages = Object.values(formErrors)
+      .map((fieldError) => fieldError?.message)
+      .filter((message): message is string => typeof message === "string");
+    setSummary(messages);
+    const firstKey = Object.keys(formErrors)[0];
+    if (firstKey) form.setFocus(firstKey as keyof CreateSupplierDto);
+  }
+
+  function submitForm(event: FormEvent<HTMLFormElement>) {
+    // `handleSubmit` reads the submit ref through `handleValid`, so it must be
+    // created inside the event handler rather than during render.
+    void form.handleSubmit(handleValid, handleInvalid)(event);
+  }
+
   return (
-    <form
-      onSubmit={form.handleSubmit(onSubmit)}
-      className="space-y-5"
-      noValidate
-    >
-      <label className="block space-y-1.5">
-        <span className="block text-sm font-medium">Supplier name</span>
-        <input
-          {...form.register("name")}
+    <form onSubmit={submitForm} className="space-y-5" noValidate>
+      {summary.length > 0 && (
+        <div
+          role="alert"
+          className="rounded-md border border-danger/30 bg-danger-surface p-3 text-sm text-danger"
+        >
+          <p className="font-medium">
+            {summary.length === 1
+              ? "There is 1 problem to fix"
+              : `There are ${summary.length} problems to fix`}
+          </p>
+          <ul className="mt-1 list-disc pl-5">
+            {summary.map((message, index) => (
+              <li key={index}>{message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <FormField
+        id="supplier-name"
+        label="Supplier name"
+        error={errors.name?.message}
+      >
+        <Input
+          id="supplier-name"
           autoFocus
-          className="min-h-12 w-full rounded-md border border-input bg-background px-3 text-base"
+          aria-invalid={errors.name !== undefined}
+          {...form.register("name")}
         />
-        {form.formState.errors.name && (
-          <span className="block text-sm text-destructive">
-            {form.formState.errors.name.message}
-          </span>
-        )}
-      </label>
+      </FormField>
+
       <div className="grid gap-4 sm:grid-cols-2">
-        <Controller
-          control={form.control}
-          name="phone"
-          render={({ field }) => (
-            <label className="space-y-1.5">
-              <span className="block text-sm font-medium">Phone</span>
-              <input
+        <FormField
+          id="supplier-phone"
+          label="Phone"
+          error={errors.phone?.message}
+        >
+          <Controller
+            control={form.control}
+            name="phone"
+            render={({ field }) => (
+              <Input
+                id="supplier-phone"
                 ref={field.ref}
                 name={field.name}
                 onBlur={field.onBlur}
                 value={field.value ?? ""}
                 onChange={(event) => field.onChange(event.target.value || null)}
-                className="min-h-12 w-full rounded-md border border-input bg-background px-3 text-base"
               />
-            </label>
-          )}
-        />
-        <Controller
-          control={form.control}
-          name="email"
-          render={({ field }) => (
-            <label className="space-y-1.5">
-              <span className="block text-sm font-medium">Email</span>
-              <input
+            )}
+          />
+        </FormField>
+
+        <FormField
+          id="supplier-email"
+          label="Email"
+          error={errors.email?.message}
+        >
+          <Controller
+            control={form.control}
+            name="email"
+            render={({ field }) => (
+              <Input
+                id="supplier-email"
                 ref={field.ref}
                 type="email"
                 name={field.name}
                 onBlur={field.onBlur}
                 value={field.value ?? ""}
                 onChange={(event) => field.onChange(event.target.value || null)}
-                className="min-h-12 w-full rounded-md border border-input bg-background px-3 text-base"
               />
-              {form.formState.errors.email && (
-                <span className="block text-sm text-destructive">
-                  {form.formState.errors.email.message}
-                </span>
-              )}
-            </label>
-          )}
-        />
-        <Controller
-          control={form.control}
-          name="address"
-          render={({ field }) => (
-            <label className="space-y-1.5 sm:col-span-2">
-              <span className="block text-sm font-medium">Address</span>
-              <textarea
+            )}
+          />
+        </FormField>
+
+        <FormField
+          id="supplier-address"
+          label="Address"
+          className="sm:col-span-2"
+          error={errors.address?.message}
+        >
+          <Controller
+            control={form.control}
+            name="address"
+            render={({ field }) => (
+              <Textarea
+                id="supplier-address"
                 ref={field.ref}
                 name={field.name}
                 onBlur={field.onBlur}
-                value={field.value ?? ""}
-                onChange={(event) => field.onChange(event.target.value || null)}
                 rows={2}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-base"
+                value={field.value ?? ""}
+                onChange={(event) => field.onChange(event.target.value || null)}
               />
-            </label>
-          )}
-        />
-        <Controller
-          control={form.control}
-          name="notes"
-          render={({ field }) => (
-            <label className="space-y-1.5 sm:col-span-2">
-              <span className="block text-sm font-medium">Notes</span>
-              <textarea
+            )}
+          />
+        </FormField>
+
+        <FormField
+          id="supplier-notes"
+          label="Notes"
+          className="sm:col-span-2"
+          error={errors.notes?.message}
+        >
+          <Controller
+            control={form.control}
+            name="notes"
+            render={({ field }) => (
+              <Textarea
+                id="supplier-notes"
                 ref={field.ref}
                 name={field.name}
                 onBlur={field.onBlur}
+                rows={3}
                 value={field.value ?? ""}
                 onChange={(event) => field.onChange(event.target.value || null)}
-                rows={3}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-base"
               />
-            </label>
-          )}
-        />
+            )}
+          />
+        </FormField>
       </div>
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+
+      {error && (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
+      {network.offline && (
+        <p className="text-sm text-warning">
+          You&rsquo;re offline. Changes can&rsquo;t be saved until you
+          reconnect.
+        </p>
+      )}
+
       <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="min-h-12 rounded-md border border-border px-4 text-sm font-medium hover:bg-muted"
-        >
+        <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={pending}
-          className="min-h-12 rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground disabled:opacity-60"
-        >
-          {pending ? "Saving…" : supplier ? "Save changes" : "Add supplier"}
-        </button>
+        </Button>
+        <Button type="submit" loading={pending} disabled={network.offline}>
+          {supplier ? "Save changes" : "Add supplier"}
+        </Button>
       </div>
     </form>
   );

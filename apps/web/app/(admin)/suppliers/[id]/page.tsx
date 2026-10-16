@@ -1,18 +1,27 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Info, PackageSearch, ScrollText } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatLagosDate, formatNaira } from "@fabtyna/shared";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
+import { formatLagosDate } from "@fabtyna/shared";
+import type { PurchaseDto, SupplierLedgerEntryDto } from "@fabtyna/shared";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { StatusBadge } from "@/components/ui/badge";
+import { buttonClasses } from "@/components/ui/button";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatCard } from "@/components/ui/stat-card";
 import { suppliersApi } from "@/lib/api";
+import { ApiError, toTechnicalDetail, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
-import type { SupplierLedgerEntryDto, PurchaseDto } from "@fabtyna/shared";
 
 export default function SupplierDetailPage() {
   const params = useParams<{ id: string }>();
@@ -23,15 +32,45 @@ export default function SupplierDetailPage() {
     queryFn: () => suppliersApi.getById(id),
   });
 
-  if (supplier.isPending) return <ListLoading />;
-  if (supplier.isError)
+  if (supplier.isPending) {
     return (
-      <ListError
-        message={supplier.error.message || "Supplier could not be loaded."}
-        retry={() => void supplier.refetch()}
+      <div className="space-y-6">
+        <Skeleton variant="text" className="h-8 w-56" />
+        <Skeleton variant="stat" count={3} />
+        <Skeleton variant="row" count={4} />
+      </div>
+    );
+  }
+
+  if (supplier.isError) {
+    if (supplier.error instanceof ApiError && supplier.error.kind === "not-found") {
+      return (
+        <EmptyState
+          title="Supplier not found"
+          description="This supplier may have been removed, or the link is incorrect."
+          action={
+            <Link
+              href="/suppliers"
+              className={buttonClasses({ variant: "secondary", size: "sm" })}
+            >
+              Back to suppliers
+            </Link>
+          }
+        />
+      );
+    }
+    return (
+      <ErrorState
+        message={toUserMessage(supplier.error)}
+        detail={
+          process.env.NODE_ENV === "development"
+            ? toTechnicalDetail(supplier.error)
+            : undefined
+        }
+        onRetry={() => void supplier.refetch()}
       />
     );
-  if (!supplier.data) return <ListEmpty message="Supplier not found." />;
+  }
 
   const s = supplier.data;
   const purchasesByDate = [...s.purchases].sort(
@@ -54,13 +93,8 @@ export default function SupplierDetailPage() {
     },
     {
       header: "Amount",
-      render: (entry) => (
-        <span
-          className={entry.amountKobo.startsWith("-") ? "text-destructive" : ""}
-        >
-          {formatNaira(entry.amountKobo)}
-        </span>
-      ),
+      align: "right",
+      render: (entry) => <Money kobo={entry.amountKobo} />,
     },
     {
       header: "Note",
@@ -86,78 +120,104 @@ export default function SupplierDetailPage() {
     },
     {
       header: "Total",
-      render: (purchase) => formatNaira(purchase.totalKobo),
+      align: "right",
+      render: (purchase) => <Money kobo={purchase.totalKobo} tone="neutral" />,
     },
     {
       header: "Status",
-      render: (purchase) => purchase.status,
+      align: "center",
+      render: (purchase) => <StatusBadge status={purchase.status} />,
     },
   ];
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Link
-          href="/suppliers"
-          className="inline-flex min-h-11 items-center gap-1 rounded-md border border-border px-3 text-sm font-medium hover:bg-muted"
-        >
-          <ArrowLeft aria-hidden="true" className="h-4 w-4" />
-          Back
-        </Link>
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{s.name}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {s.phone ?? "No phone"} · {s.email ?? "no email"}
-          </p>
-        </div>
+      <PageHeader
+        title={s.name}
+        description={`${s.phone ?? "No phone"} · ${s.email ?? "no email"}`}
+        actions={
+          <Link
+            href="/suppliers"
+            className={buttonClasses({ variant: "secondary", size: "sm" })}
+          >
+            <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+            Back to suppliers
+          </Link>
+        }
+      />
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <StatCard label="Balance owed" value={<Money kobo={s.balanceOwedKobo} tone="auto" />} />
+        <StatCard label="Purchases" value={s.purchases.length} />
+        <StatCard label="Ledger entries" value={s.ledgerEntries.length} />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">Balance owed</p>
-          <p className="mt-1 text-xl font-semibold">
-            {formatNaira(s.balanceOwedKobo)}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">Address</p>
-          <p className="mt-1 text-sm">{s.address ?? "—"}</p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">Notes</p>
-          <p className="mt-1 text-sm">{s.notes ?? "—"}</p>
-        </div>
+      <Card>
+        <CardHeader title="Contact" />
+        <CardBody>
+          <dl className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <dt className="text-sm text-muted-foreground">Phone</dt>
+              <dd className="mt-0.5 text-sm">{s.phone ?? "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-sm text-muted-foreground">Email</dt>
+              <dd className="mt-0.5 text-sm">{s.email ?? "—"}</dd>
+            </div>
+            <div className="sm:col-span-2">
+              <dt className="text-sm text-muted-foreground">Address</dt>
+              <dd className="mt-0.5 text-sm">{s.address ?? "—"}</dd>
+            </div>
+            <div className="sm:col-span-2">
+              <dt className="text-sm text-muted-foreground">Notes</dt>
+              <dd className="mt-0.5 text-sm">{s.notes ?? "—"}</dd>
+            </div>
+          </dl>
+        </CardBody>
+      </Card>
+
+      <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-surface p-3 text-sm text-warning">
+        <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+        <p>Supplier payments are recorded in the Money phase.</p>
       </div>
 
-      <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-        Supplier payments are recorded in the Money phase.
-      </div>
+      <Card>
+        <CardHeader title="Purchases" />
+        <CardBody>
+          {purchasesByDate.length === 0 ? (
+            <EmptyState
+              icon={PackageSearch}
+              title="No purchases yet"
+              description="Purchases from this supplier will appear here."
+            />
+          ) : (
+            <ResponsiveTable
+              rows={purchasesByDate}
+              columns={purchaseColumns}
+              getKey={(purchase) => purchase.id}
+            />
+          )}
+        </CardBody>
+      </Card>
 
-      <section className="space-y-3 rounded-lg border border-border bg-card p-4 sm:p-5">
-        <h2 className="text-lg font-semibold">Purchases</h2>
-        {purchasesByDate.length === 0 ? (
-          <ListEmpty message="No purchases from this supplier yet." />
-        ) : (
-          <ResponsiveTable
-            rows={purchasesByDate}
-            columns={purchaseColumns}
-            getKey={(purchase) => purchase.id}
-          />
-        )}
-      </section>
-
-      <section className="space-y-3 rounded-lg border border-border bg-card p-4 sm:p-5">
-        <h2 className="text-lg font-semibold">Ledger</h2>
-        {ledgerByDate.length === 0 ? (
-          <ListEmpty message="No ledger entries for this supplier yet." />
-        ) : (
-          <ResponsiveTable
-            rows={ledgerByDate}
-            columns={ledgerColumns}
-            getKey={(entry) => entry.id}
-          />
-        )}
-      </section>
+      <Card>
+        <CardHeader title="Ledger" />
+        <CardBody>
+          {ledgerByDate.length === 0 ? (
+            <EmptyState
+              icon={ScrollText}
+              title="No ledger entries yet"
+              description="Purchase and payment activity will appear here."
+            />
+          ) : (
+            <ResponsiveTable
+              rows={ledgerByDate}
+              columns={ledgerColumns}
+              getKey={(entry) => entry.id}
+            />
+          )}
+        </CardBody>
+      </Card>
     </div>
   );
 }

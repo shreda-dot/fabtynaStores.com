@@ -7,15 +7,28 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, Truck } from "lucide-react";
 import type { CreateSupplierDto, SupplierDto } from "@fabtyna/shared";
-import { FormModal } from "@/components/form-modal";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
-import { ResponsiveTable, type ResponsiveTableColumn } from "@/components/responsive-table";
 import { SupplierForm } from "@/components/suppliers/supplier-form";
+import {
+  ResponsiveTable,
+  type ResponsiveTableColumn,
+} from "@/components/responsive-table";
+import { StatusBadge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardBody } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { suppliersApi } from "@/lib/api";
+import { toTechnicalDetail, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { confirm } from "@/stores/confirm-store";
+import { toast } from "@/stores/toast-store";
 import { useUIStore } from "@/stores/ui-store";
 
 export default function SuppliersPage() {
@@ -37,13 +50,8 @@ export default function SuppliersPage() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: ({
-      id,
-      input,
-    }: {
-      id?: string;
-      input: CreateSupplierDto;
-    }) => (id ? suppliersApi.update(id, input) : suppliersApi.create(input)),
+    mutationFn: ({ id, input }: { id?: string; input: CreateSupplierDto }) =>
+      id ? suppliersApi.update(id, input) : suppliersApi.create(input),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
       closeForm();
@@ -78,19 +86,25 @@ export default function SuppliersPage() {
     await saveMutation.mutateAsync({ id: editingSupplier?.id, input });
   }
 
-  function deleteSupplier(supplier: SupplierDto) {
-    if (
-      !window.confirm(
-        `Delete ${supplier.name}? It will be hidden from lists and can be restored later.`,
-      )
-    ) {
-      return;
+  async function runAction(action: "delete" | "restore", supplier: SupplierDto) {
+    const isDelete = action === "delete";
+    const ok = await confirm({
+      title: isDelete ? `Delete ${supplier.name}?` : `Restore ${supplier.name}?`,
+      description: isDelete
+        ? "The supplier will be hidden from lists and can be restored later."
+        : "The supplier will appear in the supplier list again.",
+      confirmLabel: isDelete ? "Delete supplier" : "Restore",
+      tone: isDelete ? "danger" : "normal",
+    });
+    if (!ok) return;
+    try {
+      await actionMutation.mutateAsync({ action, id: supplier.id });
+      toast.success(
+        isDelete ? `${supplier.name} deleted` : `${supplier.name} restored`,
+      );
+    } catch (err) {
+      toast.error(toUserMessage(err));
     }
-    actionMutation.mutate({ action: "delete", id: supplier.id });
-  }
-
-  function restoreSupplier(supplier: SupplierDto) {
-    actionMutation.mutate({ action: "restore", id: supplier.id });
   }
 
   const columns: ResponsiveTableColumn<SupplierDto>[] = [
@@ -116,7 +130,7 @@ export default function SuppliersPage() {
     {
       header: "Email",
       render: (supplier) => (
-        <span className="text-sm text-muted-foreground truncate block max-w-[220px]">
+        <span className="block max-w-[220px] truncate text-sm text-muted-foreground">
           {supplier.email ?? "—"}
         </span>
       ),
@@ -124,42 +138,46 @@ export default function SuppliersPage() {
     {
       header: "Notes",
       render: (supplier) => (
-        <span className="text-sm text-muted-foreground line-clamp-2 max-w-[250px]">
+        <span className="line-clamp-2 max-w-[250px] text-sm text-muted-foreground">
           {supplier.notes ?? "—"}
         </span>
       ),
     },
     {
+      header: "Status",
+      align: "center",
+      render: (supplier) => (
+        <StatusBadge status={supplier.deletedAt ? "Deleted" : "Active"} />
+      ),
+    },
+    {
       header: "Actions",
+      align: "right",
       render: (supplier) =>
         supplier.deletedAt ? (
           <div className="flex justify-end">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={actionMutation.isPending}
-              onClick={() => restoreSupplier(supplier)}
-              className="h-8 rounded-md border border-border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+              onClick={() => void runAction("restore", supplier)}
             >
               Restore
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="flex items-center justify-end gap-1.5">
-            <button
-              type="button"
-              onClick={() => openEdit(supplier)}
-              className="h-8 rounded-md border border-border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
+            <Button variant="secondary" size="sm" onClick={() => openEdit(supplier)}>
               Edit
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
               disabled={actionMutation.isPending}
-              onClick={() => deleteSupplier(supplier)}
-              className="h-8 rounded-md border border-destructive/20 px-3 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
+              onClick={() => void runAction("delete", supplier)}
             >
               Delete
-            </button>
+            </Button>
           </div>
         ),
     },
@@ -167,99 +185,103 @@ export default function SuppliersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
-            Suppliers
-          </h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Keep supplier contact details in one place.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <Plus aria-hidden="true" className="h-3.5 w-3.5" />
-          Add supplier
-        </button>
-      </div>
+      <PageHeader
+        title="Suppliers"
+        description="Keep supplier contact details in one place."
+        actions={
+          <Button onClick={openCreate}>
+            <Plus aria-hidden="true" className="h-4 w-4" />
+            Add supplier
+          </Button>
+        }
+      />
 
-      <section className="space-y-4 rounded-xl border border-border/60 bg-card p-4 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <label className="relative min-w-0 flex-1 max-w-md">
-            <span className="sr-only">Search suppliers</span>
-            <Search
-              aria-hidden="true"
-              className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-            />
-            <input
-              type="search"
-              value={search}
-              onChange={(event) => setFilter("suppliersSearch", event.target.value)}
-              placeholder="Search by name, phone or email..."
-              className="h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-          </label>
-          <label className="inline-flex h-9 items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={showDeleted}
-              onChange={(event) =>
-                setFilter("suppliersShowDeleted", event.target.checked)
+      <Card>
+        <CardBody className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <label className="relative min-w-0 flex-1 sm:max-w-md">
+              <span className="sr-only">Search suppliers</span>
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                type="search"
+                value={search}
+                onChange={(event) => setFilter("suppliersSearch", event.target.value)}
+                placeholder="Search by name, phone or email..."
+                className="pl-9"
+              />
+            </label>
+            <label className="inline-flex min-h-11 cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={showDeleted}
+                onChange={(event) =>
+                  setFilter("suppliersShowDeleted", event.target.checked)
+                }
+                className="h-4 w-4 rounded border-input accent-primary"
+              />
+              Show deleted
+            </label>
+          </div>
+
+          {suppliers.isPending ? (
+            <Skeleton variant="row" count={5} />
+          ) : suppliers.isError ? (
+            <ErrorState
+              message={toUserMessage(suppliers.error)}
+              detail={
+                process.env.NODE_ENV === "development"
+                  ? toTechnicalDetail(suppliers.error)
+                  : undefined
               }
-              className="h-3.5 w-3.5 rounded border-input accent-primary"
+              onRetry={() => void suppliers.refetch()}
             />
-            Show deleted
-          </label>
-        </div>
+          ) : suppliers.data.length === 0 ? (
+            <EmptyState
+              icon={Truck}
+              title={showDeleted ? "No deleted suppliers" : "No suppliers yet"}
+              description={
+                showDeleted
+                  ? "No deleted suppliers match this search."
+                  : "Add a supplier to keep their details readily available."
+              }
+              action={
+                showDeleted ? undefined : (
+                  <Button onClick={openCreate}>
+                    <Plus aria-hidden="true" className="h-4 w-4" />
+                    Add supplier
+                  </Button>
+                )
+              }
+            />
+          ) : (
+            <ResponsiveTable
+              rows={suppliers.data}
+              columns={columns}
+              getKey={(supplier) => supplier.id}
+            />
+          )}
+        </CardBody>
+      </Card>
 
-        {actionMutation.error && (
-          <p role="alert" className="text-xs text-destructive">
-            {actionMutation.error.message}
-          </p>
-        )}
-
-        {suppliers.isPending ? (
-          <ListLoading />
-        ) : suppliers.isError ? (
-          <ListError
-            message={suppliers.error.message || "Suppliers could not be loaded."}
-            retry={() => void suppliers.refetch()}
-          />
-        ) : suppliers.data.length === 0 ? (
-          <ListEmpty
-            message={
-              showDeleted
-                ? "No deleted suppliers match this search."
-                : "Add a supplier to keep their details readily available."
-            }
-          />
-        ) : (
-          <ResponsiveTable
-            rows={suppliers.data}
-            columns={columns}
-            getKey={(supplier) => supplier.id}
-          />
-        )}
-      </section>
-
-      {formOpen && (
-        <FormModal
-          title={editingSupplier ? "Edit supplier" : "Add supplier"}
-          onClose={closeForm}
-        >
-          <SupplierForm
-            key={editingSupplier?.id ?? "new-supplier"}
-            supplier={editingSupplier}
-            error={saveMutation.error?.message}
-            pending={saveMutation.isPending}
-            onCancel={closeForm}
-            onSubmit={save}
-          />
-        </FormModal>
-      )}
+      <Modal
+        open={formOpen}
+        onClose={closeForm}
+        title={editingSupplier ? "Edit supplier" : "Add supplier"}
+        size="lg"
+        busy={saveMutation.isPending}
+      >
+        <SupplierForm
+          key={editingSupplier?.id ?? "new-supplier"}
+          supplier={editingSupplier}
+          error={saveMutation.error ? toUserMessage(saveMutation.error) : undefined}
+          pending={saveMutation.isPending}
+          onCancel={closeForm}
+          onSubmit={save}
+        />
+      </Modal>
     </div>
   );
 }

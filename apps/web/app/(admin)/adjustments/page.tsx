@@ -1,28 +1,50 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Ban, Plus, Scale } from "lucide-react";
 import Link from "next/link";
 import { formatLagosDate, getLagosBusinessDate } from "@fabtyna/shared";
 import { DateFilter } from "@/components/date-filter";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { StatusBadge } from "@/components/ui/badge";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
+import { useNetworkStatus } from "@/hooks/use-network-status";
 import { adjustmentsApi } from "@/lib/api";
+import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { confirm } from "@/stores/confirm-store";
+import { toast } from "@/stores/toast-store";
 import type { StockAdjustmentDto } from "@fabtyna/shared";
 
 export default function AdjustmentsPage() {
   const [filterDate, setFilterDate] = useState("");
   const businessDate = useLagosBusinessDate();
+  const network = useNetworkStatus();
+  const queryClient = useQueryClient();
 
   const adjustments = useQuery({
     queryKey: queryKeys.adjustments.list,
     queryFn: () => adjustmentsApi.list(),
+  });
+
+  const voidMutation = useMutation({
+    mutationFn: (adjustmentId: string) => adjustmentsApi.void(adjustmentId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adjustments.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+    },
+    onError: (error) => {
+      toast.error(toUserMessage(error));
+    },
   });
 
   const rows = useMemo(() => {
@@ -38,6 +60,27 @@ export default function AdjustmentsPage() {
       );
   }, [adjustments.data, filterDate]);
 
+  async function tryVoid(a: StockAdjustmentDto) {
+    await confirm({
+      title: "Void this adjustment?",
+      tone: "danger",
+      confirmLabel: "Void adjustment",
+      cancelLabel: "Keep adjustment",
+      description: "This cannot be undone.",
+      details: (
+        <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+          <li>The stock movements from this adjustment will be reversed.</li>
+          <li>Stock levels return to what they were before the adjustment.</li>
+          <li>
+            The record stays in history marked <strong>VOIDED</strong>.
+          </li>
+        </ul>
+      ),
+      onConfirm: () => voidMutation.mutateAsync(a.id),
+      successMessage: `Adjustment ${a.id.slice(0, 8)} voided.`,
+    });
+  }
+
   const columns: ResponsiveTableColumn<StockAdjustmentDto>[] = [
     {
       header: "Date",
@@ -49,47 +92,56 @@ export default function AdjustmentsPage() {
     },
     {
       header: "Status",
-      render: (a) => (
-        <span className={a.status === "VOIDED" ? "text-destructive" : ""}>
-          {a.status}
-        </span>
-      ),
+      render: (a) => <StatusBadge status={a.status} />,
     },
     {
       header: "Actions",
+      align: "right",
       render: (a) => (
-        <Link
-          href={`/adjustments/${a.id}`}
-          className="font-medium text-primary hover:underline"
-        >
-          View
-        </Link>
+        <div className="flex items-center justify-end gap-1">
+          <Link
+            href={`/adjustments/${a.id}`}
+            className="font-medium text-primary hover:underline"
+          >
+            View
+          </Link>
+          {a.status === "COMPLETED" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-danger hover:bg-danger/10"
+              loading={
+                voidMutation.isPending && voidMutation.variables === a.id
+              }
+              disabled={voidMutation.isPending || network.offline}
+              onClick={() => void tryVoid(a)}
+            >
+              <Ban aria-hidden="true" className="h-3.5 w-3.5" />
+              Void
+            </Button>
+          )}
+        </div>
       ),
     },
   ];
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Adjustments</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Correct stock counts for damaged, lost or found items.
-          </p>
-        </div>
-        <Link
-          href="/adjustments/new"
-          className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90"
-        >
-          <Plus aria-hidden="true" className="h-4 w-4" />
-          New adjustment
-        </Link>
-      </div>
+      <PageHeader
+        title="Adjustments"
+        description="Correct stock counts for damaged, lost or found items."
+        actions={
+          <Link href="/adjustments/new" className={buttonClasses({ size: "md" })}>
+            <Plus aria-hidden="true" className="h-4 w-4" />
+            New adjustment
+          </Link>
+        }
+      />
 
-      <section className="space-y-4 rounded-lg border border-border bg-card p-4 sm:p-5">
+      <section className="space-y-4 rounded-md border border-border bg-card p-4 sm:p-5">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <DateFilter
-            id="f-date"
+            id="adjustments-date"
             value={filterDate}
             onChange={setFilterDate}
             max={businessDate}
@@ -97,16 +149,44 @@ export default function AdjustmentsPage() {
         </div>
 
         {adjustments.isPending ? (
-          <ListLoading />
+          <Skeleton variant="row" count={6} />
         ) : adjustments.isError ? (
-          <ListError
-            message={
-              adjustments.error.message || "Adjustments could not be loaded."
-            }
-            retry={() => void adjustments.refetch()}
+          <ErrorState
+            title="Adjustments could not be loaded"
+            message={toUserMessage(adjustments.error)}
+            onRetry={() => void adjustments.refetch()}
           />
         ) : rows.length === 0 ? (
-          <ListEmpty message="No adjustments match these filters." />
+          filterDate !== "" ? (
+            <EmptyState
+              title="No adjustments match these filters"
+              description="Try clearing the date filter."
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setFilterDate("")}
+                >
+                  Clear filter
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              icon={Scale}
+              title="No adjustments yet"
+              description="Record a correction when stock counts change for damage, loss or found items."
+              action={
+                <Link
+                  href="/adjustments/new"
+                  className={buttonClasses({ variant: "secondary", size: "sm" })}
+                >
+                  <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+                  New adjustment
+                </Link>
+              }
+            />
+          )
         ) : (
           <ResponsiveTable rows={rows} columns={columns} getKey={(a) => a.id} />
         )}

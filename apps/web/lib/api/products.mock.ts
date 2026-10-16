@@ -9,10 +9,10 @@ import {
 } from "@fabtyna/shared";
 import type { ProductsApi, ProductListOptions } from "./products.api";
 import { newId, readMockStore, transactMockStore } from "./mock-store";
+import { mockDelay } from "./mock-transport";
 
 function delay(): Promise<void> {
-  const milliseconds = 150 + Math.floor(Math.random() * 151);
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  return mockDelay();
 }
 
 function jsonClone<T>(value: T): T {

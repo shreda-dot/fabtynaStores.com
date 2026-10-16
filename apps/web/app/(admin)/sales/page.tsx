@@ -1,25 +1,43 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { HandCoins, Plus, Receipt, Search } from "lucide-react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
+import { useQuery } from "@tanstack/react-query";
+import { HandCoins, Plus, Search } from "lucide-react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   formatLagosDate,
-  formatNaira,
   getLagosBusinessDate,
   getLagosBusinessDayRange,
   type SaleChannel,
   type SaleStatus,
 } from "@fabtyna/shared";
 import { DateFilter } from "@/components/date-filter";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
-import {
-  ResponsiveTable,
-  type ResponsiveTableColumn,
-} from "@/components/responsive-table";
+import { RecordDebtorDialog } from "@/components/debtors/Record-debtor-dialog";
+import { ResponsiveTable } from "@/components/responsive-table";
+import type { ResponsiveTableColumn } from "@/components/responsive-table";
+import { Badge, StatusBadge } from "@/components/ui/badge";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { FormField } from "@/components/ui/form-field";
+import { Select } from "@/components/ui/input";
+import { Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/page-header";
+import { PageSkeleton } from "@/components/ui/page-skeleton";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatCard, type StatTrend } from "@/components/ui/stat-card";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
-import { expensesApi, productsApi, salesApi } from "@/lib/api";
+import { salesApi } from "@/lib/api";
+import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import type { SaleListItemDto } from "@/lib/api/sales.api";
 
@@ -31,70 +49,82 @@ const STATUSES: (SaleStatus | "ALL")[] = [
   "VOIDED",
 ];
 
+const PAGE_SIZE = 50;
+const TOP_DEBTORS = 3;
+// URL value meaning "every date". When the `date` param is absent the list
+// defaults to today's Lagos business day.
+const ALL_DATES = "all";
+
+function parseChannel(value: string | null): SaleChannel | "ALL" {
+  return value === "RETAIL" || value === "WHOLESALE" ? value : "ALL";
+}
+
+function parseStatus(value: string | null): SaleStatus | "ALL" {
+  return value === "DRAFT" || value === "COMPLETED" || value === "VOIDED"
+    ? value
+    : "ALL";
+}
+
+function trendFor(today: bigint, yesterday: bigint): StatTrend | undefined {
+  if (today === 0n && yesterday === 0n) return undefined;
+  const direction =
+    today > yesterday ? "up" : today < yesterday ? "down" : "flat";
+  return {
+    direction,
+    label:
+      direction === "flat"
+        ? "Same as yesterday"
+        : `${direction === "up" ? "Up" : "Down"} vs yesterday`,
+  };
+}
+
 export default function SalesPage() {
-  const [filterChannel, setFilterChannel] = useState<SaleChannel | "ALL">(
-    "ALL",
+  return (
+    <Suspense fallback={<PageSkeleton variant="list" />}>
+      <SalesContent />
+    </Suspense>
   );
-  const [filterStatus, setFilterStatus] = useState<SaleStatus | "ALL">("ALL");
-  const [filterSearch, setFilterSearch] = useState("");
-  const [filterDate, setFilterDate] = useState("");
+}
+
+function SalesContent() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // Business day follows Africa/Lagos time and rolls over automatically.
+  const businessDate = useLagosBusinessDate();
+
+  const filterChannel = parseChannel(searchParams.get("channel"));
+  const filterStatus = parseStatus(searchParams.get("status"));
+  const filterSearch = searchParams.get("q") ?? "";
+
+  // Date filter: absent param = today, "all" = every date, else a specific day.
+  const dateParam = searchParams.get("date");
+  const showAllDates = dateParam === ALL_DATES;
+  const filterDate = showAllDates ? "" : (dateParam ?? businessDate);
+
+  const setParams = useCallback(
+    (patch: Record<string, string>) => {
+      const params = new URLSearchParams(searchParams.toString());
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === "" || value === "ALL") params.delete(key);
+        else params.set(key, value);
+      }
+      const qs = params.toString();
+      router.replace(qs === "" ? pathname : `${pathname}?${qs}`, {
+        scroll: false,
+      });
+    },
+    [pathname, router, searchParams],
+  );
 
   const sales = useQuery({
     queryKey: queryKeys.sales.list,
     queryFn: () => salesApi.list(),
   });
 
-  const expenses = useQuery({
-    queryKey: queryKeys.expenses.list(),
-    queryFn: () => expensesApi.list(),
-  });
+  const [debtorDialogOpen, setDebtorDialogOpen] = useState(false);
 
-  const products = useQuery({
-    queryKey: queryKeys.products.list("", false),
-    queryFn: () => productsApi.list({ search: "", includeDeleted: false }),
-  });
-
-  const queryClient = useQueryClient();
-
-  const [showDebtorForm, setShowDebtorForm] = useState(false);
-  const [debtorName, setDebtorName] = useState("");
-  const [debtorProductId, setDebtorProductId] = useState("");
-  const [debtorQty, setDebtorQty] = useState("");
-  const [debtorPrice, setDebtorPrice] = useState("");
-
-  const createDebtorMutation = useMutation({
-    mutationFn: () =>
-      salesApi.create({
-        customerId: null,
-        customerName: debtorName.trim(),
-        channel: "RETAIL",
-        location: "RETAIL_SHELF",
-        soldAt: new Date().toISOString(),
-        notes: null,
-        reference: null,
-        paidKobo: "0",
-        lines: [
-          {
-            productId: debtorProductId,
-            unit: "UNIT",
-            quantity: Number(debtorQty),
-            unitPriceKobo: debtorPrice,
-          },
-        ],
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
-      setShowDebtorForm(false);
-      setDebtorName("");
-      setDebtorProductId("");
-      setDebtorQty("");
-      setDebtorPrice("");
-    },
-  });
-
-  // Business day follows Africa/Lagos time and rolls over automatically.
-  const businessDate = useLagosBusinessDate();
   const { start: todayStart, end: todayEnd } =
     getLagosBusinessDayRange(businessDate);
   const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
@@ -150,6 +180,17 @@ export default function SalesPage() {
       );
   }, [sales.data, filterChannel, filterStatus, filterDate, filterSearch]);
 
+  // Show the list in pages so "all dates" never renders thousands of rows.
+  // The limit resets automatically whenever any filter changes.
+  const filterKey = `${filterChannel}|${filterStatus}|${filterDate}|${filterSearch}`;
+  const [limitState, setLimitState] = useState({
+    key: filterKey,
+    count: PAGE_SIZE,
+  });
+  const visibleCount =
+    limitState.key === filterKey ? limitState.count : PAGE_SIZE;
+  const visible = filtered.slice(0, visibleCount);
+
   const debtors = useMemo(() => {
     return (sales.data ?? [])
       .filter(
@@ -157,9 +198,12 @@ export default function SalesPage() {
           sale.status !== "VOIDED" &&
           BigInt(sale.totalKobo) - BigInt(sale.paidKobo) > 0n,
       )
-      .sort(
-        (a, b) => new Date(b.soldAt).getTime() - new Date(a.soldAt).getTime(),
-      );
+      .sort((a, b) => {
+        const owedA = BigInt(a.totalKobo) - BigInt(a.paidKobo);
+        const owedB = BigInt(b.totalKobo) - BigInt(b.paidKobo);
+        if (owedA === owedB) return 0;
+        return owedA > owedB ? -1 : 1;
+      });
   }, [sales.data]);
 
   const totalDebt = debtors.reduce(
@@ -167,22 +211,8 @@ export default function SalesPage() {
     0n,
   );
 
-  const recentExpenses = useMemo(
-    () =>
-      [...(expenses.data ?? [])]
-        .sort(
-          (a, b) =>
-            new Date(b.expenseDate).getTime() -
-            new Date(a.expenseDate).getTime(),
-        )
-        .slice(0, 5),
-    [expenses.data],
-  );
-
-  const totalExpenses = (expenses.data ?? []).reduce(
-    (sum, e) => sum + BigInt(e.amountKobo),
-    0n,
-  );
+  const otherFiltersActive =
+    filterSearch !== "" || filterChannel !== "ALL" || filterStatus !== "ALL";
 
   const columns: ResponsiveTableColumn<SaleListItemDto>[] = [
     {
@@ -203,15 +233,9 @@ export default function SalesPage() {
     {
       header: "Channel",
       render: (sale) => (
-        <span
-          className={
-            sale.channel === "RETAIL"
-              ? "text-blue-700 dark:text-blue-400"
-              : "text-purple-700 dark:text-purple-400"
-          }
-        >
-          {sale.channel === "RETAIL" ? "Retail (fridge)" : "Wholesale"}
-        </span>
+        <Badge tone={sale.channel === "RETAIL" ? "info" : "accent"}>
+          {sale.channel === "RETAIL" ? "Retail" : "Wholesale"}
+        </Badge>
       ),
     },
     {
@@ -220,294 +244,134 @@ export default function SalesPage() {
     },
     {
       header: "Lines",
-      render: (sale) => sale.lineCount.toString(),
+      align: "right",
+      render: (sale) => <span className="tabular">{sale.lineCount}</span>,
     },
     {
       header: "Total",
-      render: (sale) => formatNaira(sale.totalKobo),
+      align: "right",
+      render: (sale) => <Money kobo={sale.totalKobo} tone="neutral" />,
     },
     {
       header: "Paid",
-      render: (sale) => formatNaira(sale.paidKobo),
+      align: "right",
+      render: (sale) => <Money kobo={sale.paidKobo} tone="neutral" />,
     },
     {
       header: "Status",
-      render: (sale) => (
-        <span
-          className={
-            sale.status === "VOIDED"
-              ? "text-destructive"
-              : sale.status === "COMPLETED"
-                ? "text-green-700 dark:text-green-400"
-                : ""
-          }
-        >
-          {sale.status}
-        </span>
-      ),
+      render: (sale) => <StatusBadge status={sale.status} />,
     },
   ];
 
+  const listScope = showAllDates
+    ? "all dates"
+    : filterDate === businessDate
+      ? "today"
+      : filterDate;
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Sales</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Retail (fridge) and wholesale sales.
-          </p>
-        </div>
-        <Link
-          href="/sales/new"
-          className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90"
-        >
-          <Plus aria-hidden="true" className="h-4 w-4" />
-          New sale
-        </Link>
-      </div>
+      <PageHeader
+        title="Sales"
+        description="Retail (fridge) and wholesale sales."
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setDebtorDialogOpen(true)}
+            >
+              <HandCoins aria-hidden="true" className="h-4 w-4" />
+              Record debtor
+            </Button>
+            <Link href="/sales/new" className={buttonClasses({ size: "md" })}>
+              <Plus aria-hidden="true" className="h-4 w-4" />
+              New sale
+            </Link>
+          </>
+        }
+      />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-xs text-muted-foreground">Today — retail</p>
-          <p className="mt-1 text-xl font-semibold">
-            {formatNaira(stats.todayRetail.toString())}
-          </p>
+      {sales.isPending ? (
+        <Skeleton variant="stat" count={3} />
+      ) : sales.isError ? null : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <StatCard
+            label="Today — retail"
+            value={<Money kobo={stats.todayRetail} tone="neutral" />}
+            trend={trendFor(stats.todayRetail, stats.yesterdayRetail)}
+          />
+          <StatCard
+            label="Today — wholesale"
+            value={<Money kobo={stats.todayWholesale} tone="neutral" />}
+            trend={trendFor(stats.todayWholesale, stats.yesterdayWholesale)}
+          />
+          <StatCard
+            label="Total still owed"
+            value={<Money kobo={totalDebt} tone="neutral" />}
+            tone={totalDebt > 0n ? "danger" : "default"}
+            hint="All unpaid balances from every date."
+          />
         </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-xs text-muted-foreground">Today — wholesale</p>
-          <p className="mt-1 text-xl font-semibold">
-            {formatNaira(stats.todayWholesale.toString())}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-xs text-muted-foreground">Yesterday — retail</p>
-          <p className="mt-1 text-xl font-semibold">
-            {formatNaira(stats.yesterdayRetail.toString())}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-xs text-muted-foreground">Yesterday — wholesale</p>
-          <p className="mt-1 text-xl font-semibold">
-            {formatNaira(stats.yesterdayWholesale.toString())}
-          </p>
-        </div>
-      </div>
+      )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="rounded-lg border border-border bg-card p-4 sm:p-5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Receipt className="h-4 w-4 text-muted-foreground" />
-              <h2 className="font-semibold">Recent expenses</h2>
-            </div>
-            <div className="flex items-center gap-3">
-              <Link
-                href="/expenses/new"
-                className="text-sm text-primary hover:underline"
-              >
-                Add
-              </Link>
-              <Link
-                href="/expenses"
-                className="text-sm text-muted-foreground hover:underline"
-              >
-                View all
-              </Link>
-            </div>
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Total: {formatNaira(totalExpenses.toString())}
-          </p>
-          {expenses.isPending ? (
-            <ListLoading />
-          ) : recentExpenses.length === 0 ? (
-            <ListEmpty message="No expenses recorded." />
-          ) : (
-            <ul className="mt-3 space-y-2">
-              {recentExpenses.map((e) => (
-                <li
-                  key={e.id}
-                  className="flex items-center justify-between gap-2 text-sm"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{e.description}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {e.channel === "RETAIL"
-                        ? "Retail"
-                        : e.channel === "WHOLESALE"
-                          ? "Wholesale"
-                          : "Both"}{" "}
-                      · {formatLagosDate(e.expenseDate)}
-                    </p>
-                  </div>
-                  <span className="shrink-0 font-medium">
-                    {formatNaira(e.amountKobo)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="rounded-lg border border-border bg-card p-4 sm:p-5">
+      {!sales.isPending && !sales.isError && debtors.length > 0 && (
+        <section className="rounded-md border border-border bg-card p-4 sm:p-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <HandCoins className="h-4 w-4 text-muted-foreground" />
-              <h2 className="font-semibold">Debtors</h2>
+              <h2 className="text-section font-semibold">Biggest debts</h2>
             </div>
             <Link
               href="/debtors"
               className="text-sm text-primary hover:underline"
             >
-              View all
+              View all debtors
             </Link>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Outstanding: {formatNaira(totalDebt.toString())}
-          </p>
-
-          <button
-            type="button"
-            onClick={() => setShowDebtorForm((v) => !v)}
-            className="mt-3 inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            {showDebtorForm ? "Cancel" : "Record retail debtor"}
-          </button>
-
-          {showDebtorForm && (
-            <div className="mt-3 space-y-2 rounded-md border border-border bg-background/50 p-3">
-              <input
-                type="text"
-                value={debtorName}
-                onChange={(e) => setDebtorName(e.target.value)}
-                placeholder="Customer name (not stored)"
-                className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
-              <select
-                value={debtorProductId}
-                onChange={(e) => setDebtorProductId(e.target.value)}
-                className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                <option value="">Select product</option>
-                {products.data?.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={debtorQty}
-                  onChange={(e) => setDebtorQty(e.target.value)}
-                  placeholder="Qty"
-                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                />
-                <input
-                  type="text"
-                  value={debtorPrice}
-                  onChange={(e) => setDebtorPrice(e.target.value)}
-                  placeholder="Price (kobo)"
-                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                />
-              </div>
-              {createDebtorMutation.error && (
-                <p className="text-xs text-destructive">
-                  {createDebtorMutation.error.message}
-                </p>
-              )}
-              <button
-                type="button"
-                disabled={
-                  !debtorName.trim() ||
-                  !debtorProductId ||
-                  !debtorQty ||
-                  !debtorPrice ||
-                  createDebtorMutation.isPending
-                }
-                onClick={() => createDebtorMutation.mutate()}
-                className="w-full rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              >
-                {createDebtorMutation.isPending
-                  ? "Recording…"
-                  : "Record debtor"}
-              </button>
-            </div>
-          )}
-
-          {sales.isPending ? (
-            <ListLoading />
-          ) : debtors.length === 0 ? (
-            <ListEmpty message="No outstanding debts." />
-          ) : (
-            <ul className="mt-3 space-y-2">
-              {debtors.slice(0, 5).map((s) => {
-                const owed = BigInt(s.totalKobo) - BigInt(s.paidKobo);
-                return (
-                  <li
-                    key={s.id}
-                    className="flex items-center justify-between gap-2 text-sm"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">
-                        {s.customerName ?? "Walk-in"}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {s.channel === "RETAIL" ? "Retail" : "Wholesale"} ·{" "}
-                        {formatLagosDate(s.soldAt)}
-                      </p>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <p className="font-medium text-destructive">
-                        {formatNaira(owed.toString())}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        of {formatNaira(s.totalKobo)}
-                      </p>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+          <ul className="mt-3 grid gap-3 sm:grid-cols-3">
+            {debtors.slice(0, TOP_DEBTORS).map((s) => {
+              const owed = BigInt(s.totalKobo) - BigInt(s.paidKobo);
+              return (
+                <li
+                  key={s.id}
+                  className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">
+                      {s.customerName ?? "Walk-in"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {s.channel === "RETAIL" ? "Retail" : "Wholesale"} ·{" "}
+                      {formatLagosDate(s.soldAt)}
+                    </p>
+                  </div>
+                  <Money kobo={owed} className="shrink-0" />
+                </li>
+              );
+            })}
+          </ul>
         </section>
-      </div>
+      )}
 
-      <section className="space-y-4 rounded-lg border border-border bg-card p-4 sm:p-5">
+      <section className="space-y-4 rounded-md border border-border bg-card p-4 sm:p-5">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="space-y-1.5">
-            <label htmlFor="f-search" className="block text-sm font-medium">
-              Search
-            </label>
-            <div className="flex min-h-12 items-center gap-2 rounded-md border border-input bg-background px-3 focus-within:ring-1 focus-within:ring-ring">
+          <FormField id="sales-search" label="Search">
+            <div className="flex min-h-11 items-center gap-2 rounded-md border border-input bg-surface px-3 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring">
               <Search
                 aria-hidden="true"
                 className="h-4 w-4 text-muted-foreground"
               />
-              <input
-                id="f-search"
-                type="search"
+              <SearchField
                 value={filterSearch}
-                onChange={(event) => setFilterSearch(event.target.value)}
-                placeholder="Customer name or reference"
-                className="min-w-0 flex-1 bg-transparent text-base outline-none"
+                onChange={(value) => setParams({ q: value })}
               />
             </div>
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="f-channel" className="block text-sm font-medium">
-              Channel
-            </label>
-            <select
-              id="f-channel"
+          </FormField>
+          <FormField id="sales-channel" label="Channel">
+            <Select
+              id="sales-channel"
               value={filterChannel}
-              onChange={(event) =>
-                setFilterChannel(event.target.value as SaleChannel | "ALL")
-              }
-              className="min-h-12 w-full rounded-md border border-input bg-background px-3 text-base"
+              onChange={(event) => setParams({ channel: event.target.value })}
             >
               {CHANNELS.map((ch) => (
                 <option key={ch} value={ch}>
@@ -518,52 +382,174 @@ export default function SalesPage() {
                       : "Wholesale"}
                 </option>
               ))}
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="f-status" className="block text-sm font-medium">
-              Status
-            </label>
-            <select
-              id="f-status"
+            </Select>
+          </FormField>
+          <FormField id="sales-status" label="Status">
+            <Select
+              id="sales-status"
               value={filterStatus}
-              onChange={(event) =>
-                setFilterStatus(event.target.value as SaleStatus | "ALL")
-              }
-              className="min-h-12 w-full rounded-md border border-input bg-background px-3 text-base"
+              onChange={(event) => setParams({ status: event.target.value })}
             >
               {STATUSES.map((st) => (
                 <option key={st} value={st}>
                   {st === "ALL" ? "All statuses" : st}
                 </option>
               ))}
-            </select>
-          </div>
+            </Select>
+          </FormField>
           <DateFilter
-            id="f-date"
+            id="sales-date"
             value={filterDate}
-            onChange={setFilterDate}
+            onChange={(value) =>
+              setParams({
+                // Cleared input = every date. Picking today goes back to the
+                // default (no param) so it keeps following the Lagos day.
+                date:
+                  value === ""
+                    ? ALL_DATES
+                    : value === businessDate
+                      ? ""
+                      : value,
+              })
+            }
             max={businessDate}
           />
         </div>
 
         {sales.isPending ? (
-          <ListLoading />
+          <Skeleton variant="row" count={6} />
         ) : sales.isError ? (
-          <ListError
-            message={sales.error.message || "Sales could not be loaded."}
-            retry={() => void sales.refetch()}
+          <ErrorState
+            title="Sales could not be loaded"
+            message={toUserMessage(sales.error)}
+            onRetry={() => void sales.refetch()}
           />
         ) : filtered.length === 0 ? (
-          <ListEmpty message="No sales match these filters." />
-        ) : (
-          <ResponsiveTable
-            rows={filtered}
-            columns={columns}
-            getKey={(sale) => sale.id}
+          <EmptyState
+            title={
+              otherFiltersActive
+                ? "No sales match these filters"
+                : `No sales for ${listScope}`
+            }
+            description={
+              otherFiltersActive
+                ? "Try clearing the search, channel or status filter."
+                : "Record a sale, or look at another date."
+            }
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
+                {otherFiltersActive && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() =>
+                      setParams({ q: "", channel: "ALL", status: "ALL" })
+                    }
+                  >
+                    Clear filters
+                  </Button>
+                )}
+                {!showAllDates && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setParams({ date: ALL_DATES })}
+                  >
+                    Show all dates
+                  </Button>
+                )}
+              </div>
+            }
           />
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Showing {visible.length} of {filtered.length} sales for{" "}
+              {listScope}.
+            </p>
+            <ResponsiveTable
+              rows={visible}
+              columns={columns}
+              getKey={(sale) => sale.id}
+            />
+            {visible.length < filtered.length && (
+              <div className="flex justify-center">
+                <Button
+                  variant="secondary"
+                  onClick={() =>
+                    setLimitState({
+                      key: filterKey,
+                      count: visibleCount + PAGE_SIZE,
+                    })
+                  }
+                >
+                  Show {Math.min(PAGE_SIZE, filtered.length - visible.length)}{" "}
+                  more
+                </Button>
+              </div>
+            )}
+          </>
         )}
       </section>
+
+      <RecordDebtorDialog
+        open={debtorDialogOpen}
+        onClose={() => setDebtorDialogOpen(false)}
+      />
     </div>
+  );
+}
+
+/**
+ * Keeps typing responsive by holding the text locally and only pushing the
+ * debounced value into the URL. External URL changes (refresh/back) sync back.
+ */
+function SearchField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  // Push external URL changes (refresh/back) into the uncontrolled input.
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input || input.value === value) return;
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    input.value = value;
+  }, [value]);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  function handleChange(event: ChangeEvent<HTMLInputElement>) {
+    const next = event.target.value;
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      onChange(next);
+    }, 300);
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      id="sales-search"
+      type="search"
+      defaultValue={value}
+      onChange={handleChange}
+      placeholder="Customer name or reference"
+      className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
+    />
   );
 }

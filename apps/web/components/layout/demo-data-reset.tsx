@@ -2,31 +2,41 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { RotateCcw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { resetDemoData } from "@/lib/api";
+import { toUserMessage } from "@/lib/api/client";
+import { confirm } from "@/stores/confirm-store";
+import { toast } from "@/stores/toast-store";
 
 export function DemoDataReset() {
   const queryClient = useQueryClient();
 
-  function reset() {
-    const confirmed = window.confirm(
-      "Reset all demo products and suppliers to the original sample data?",
-    );
-    if (!confirmed) return;
-    resetDemoData();
-    queryClient.clear();
+  async function reset() {
+    const ok = await confirm({
+      title: "Reset demo data?",
+      description:
+        "All demo products, customers, suppliers, purchases and sales will be replaced with the original sample data. This cannot be undone.",
+      confirmLabel: "Reset demo data",
+      tone: "danger",
+    });
+    if (!ok) return;
+
+    try {
+      resetDemoData();
+      queryClient.clear();
+      toast.success("Demo data reset", "The original sample data has been restored.");
+    } catch (err) {
+      toast.error(toUserMessage(err));
+    }
   }
 
   if (process.env.NEXT_PUBLIC_API_MODE === "real") return null;
 
   return (
-    <button
-      type="button"
-      onClick={reset}
-      className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border px-3 text-sm font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-    >
+    <Button variant="secondary" onClick={() => void reset()}>
       <RotateCcw aria-hidden="true" className="h-4 w-4" />
       <span className="hidden sm:inline">Reset demo data</span>
       <span className="sm:hidden">Reset</span>
-    </button>
+    </Button>
   );
 }

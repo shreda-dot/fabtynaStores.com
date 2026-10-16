@@ -7,23 +7,34 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, Users } from "lucide-react";
 import Link from "next/link";
 import {
   formatNaira,
   type CreateCustomerDto,
   type CustomerDto,
 } from "@fabtyna/shared";
-import { FormModal } from "@/components/form-modal";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
+import { CustomerForm } from "@/components/customers/customer-form";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
-import { CustomerForm } from "@/components/customers/customer-form";
+import { StatusBadge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardBody } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
+import { Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { customersApi } from "@/lib/api";
+import { toTechnicalDetail, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { confirm } from "@/stores/confirm-store";
+import { toast } from "@/stores/toast-store";
 import { useUIStore } from "@/stores/ui-store";
 
 export default function CustomersPage() {
@@ -96,26 +107,54 @@ export default function CustomersPage() {
   }
 
   async function deleteCustomer(customer: CustomerDto) {
-    const detail = await customersApi.getById(customer.id);
-    if (BigInt(detail.balanceOwedKobo) > 0n) {
-      actionMutation.reset();
-      window.alert(
-        `${customer.name} still owes money and cannot be deleted until the debt is fully paid.`,
+    // Business guard: a customer with an outstanding balance cannot be deleted.
+    let balanceOwedKobo: string;
+    try {
+      const detail = await customersApi.getById(customer.id);
+      balanceOwedKobo = detail.balanceOwedKobo;
+    } catch (err) {
+      toast.error(toUserMessage(err));
+      return;
+    }
+
+    if (BigInt(balanceOwedKobo) > 0n) {
+      toast.warning(
+        `${customer.name} still owes ${formatNaira(balanceOwedKobo)}`,
+        "Settle the outstanding balance before deleting this customer.",
       );
       return;
     }
-    if (
-      !window.confirm(
-        `Delete ${customer.name}? It will be hidden from lists and can be restored later.`,
-      )
-    ) {
-      return;
+
+    const ok = await confirm({
+      title: `Delete ${customer.name}?`,
+      description: "The customer will be hidden from lists and can be restored later.",
+      confirmLabel: "Delete customer",
+      tone: "danger",
+    });
+    if (!ok) return;
+
+    try {
+      await actionMutation.mutateAsync({ action: "delete", id: customer.id });
+      toast.success(`${customer.name} deleted`);
+    } catch (err) {
+      toast.error(toUserMessage(err));
     }
-    actionMutation.mutate({ action: "delete", id: customer.id });
   }
 
-  function restoreCustomer(customer: CustomerDto) {
-    actionMutation.mutate({ action: "restore", id: customer.id });
+  async function restoreCustomer(customer: CustomerDto) {
+    const ok = await confirm({
+      title: `Restore ${customer.name}?`,
+      description: "The customer will appear in the customer list again.",
+      confirmLabel: "Restore",
+    });
+    if (!ok) return;
+
+    try {
+      await actionMutation.mutateAsync({ action: "restore", id: customer.id });
+      toast.success(`${customer.name} restored`);
+    } catch (err) {
+      toast.error(toUserMessage(err));
+    }
   }
 
   const columns: ResponsiveTableColumn<CustomerDto>[] = [
@@ -136,43 +175,48 @@ export default function CustomersPage() {
     },
     {
       header: "Credit limit",
-      render: (customer) => formatNaira(customer.creditLimitKobo),
+      align: "right",
+      render: (customer) => <Money kobo={customer.creditLimitKobo} />,
     },
     {
       header: "Phone",
       render: (customer) => customer.phone ?? "—",
     },
     {
+      header: "Status",
+      align: "center",
+      render: (customer) => (
+        <StatusBadge status={customer.deletedAt ? "Deleted" : "Active"} />
+      ),
+    },
+    {
       header: "Actions",
+      align: "right",
       render: (customer) =>
         customer.deletedAt ? (
           <div className="flex justify-end">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={actionMutation.isPending}
-              onClick={() => restoreCustomer(customer)}
-              className="h-8 rounded-md border border-border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+              onClick={() => void restoreCustomer(customer)}
             >
               Restore
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="flex items-center justify-end gap-1.5">
-            <button
-              type="button"
-              onClick={() => openEdit(customer)}
-              className="h-8 rounded-md border border-border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
+            <Button variant="secondary" size="sm" onClick={() => openEdit(customer)}>
               Edit
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
               disabled={actionMutation.isPending}
-              onClick={() => deleteCustomer(customer)}
-              className="h-8 rounded-md border border-destructive/20 px-3 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
+              onClick={() => void deleteCustomer(customer)}
             >
               Delete
-            </button>
+            </Button>
           </div>
         ),
     },
@@ -180,103 +224,105 @@ export default function CustomersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
-            Customers
-          </h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Retail and wholesale customers with credit limits.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <Plus aria-hidden="true" className="h-3.5 w-3.5" />
-          Add customer
-        </button>
-      </div>
+      <PageHeader
+        title="Customers"
+        description="Retail and wholesale customers with credit limits."
+        actions={
+          <Button onClick={openCreate}>
+            <Plus aria-hidden="true" className="h-4 w-4" />
+            Add customer
+          </Button>
+        }
+      />
 
-      <section className="space-y-4 rounded-xl border border-border/60 bg-card p-4 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <label className="relative min-w-0 flex-1 max-w-md">
-            <span className="sr-only">Search customers</span>
-            <Search
-              aria-hidden="true"
-              className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-            />
-            <input
-              type="search"
-              value={search}
-              onChange={(event) =>
-                setFilter("customersSearch", event.target.value)
+      <Card>
+        <CardBody className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <label className="relative min-w-0 flex-1 sm:max-w-md">
+              <span className="sr-only">Search customers</span>
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                type="search"
+                value={search}
+                onChange={(event) =>
+                  setFilter("customersSearch", event.target.value)
+                }
+                placeholder="Search by name, phone or email..."
+                className="pl-9"
+              />
+            </label>
+            <label className="inline-flex min-h-11 cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={showDeleted}
+                onChange={(event) =>
+                  setFilter("customersShowDeleted", event.target.checked)
+                }
+                className="h-4 w-4 rounded border-input accent-primary"
+              />
+              Show deleted
+            </label>
+          </div>
+
+          {customers.isPending ? (
+            <Skeleton variant="row" count={5} />
+          ) : customers.isError ? (
+            <ErrorState
+              message={toUserMessage(customers.error)}
+              detail={
+                process.env.NODE_ENV === "development"
+                  ? toTechnicalDetail(customers.error)
+                  : undefined
               }
-              placeholder="Search by name, phone or email..."
-              className="h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              onRetry={() => void customers.refetch()}
             />
-          </label>
-          <label className="inline-flex h-9 items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={showDeleted}
-              onChange={(event) =>
-                setFilter("customersShowDeleted", event.target.checked)
+          ) : customers.data.length === 0 ? (
+            <EmptyState
+              icon={Users}
+              title={showDeleted ? "No deleted customers" : "No customers yet"}
+              description={
+                showDeleted
+                  ? "No deleted customers match this search."
+                  : "Add a customer to track credit and sales."
               }
-              className="h-3.5 w-3.5 rounded border-input accent-primary"
+              action={
+                showDeleted ? undefined : (
+                  <Button onClick={openCreate}>
+                    <Plus aria-hidden="true" className="h-4 w-4" />
+                    Add customer
+                  </Button>
+                )
+              }
             />
-            Show deleted
-          </label>
-        </div>
+          ) : (
+            <ResponsiveTable
+              rows={customers.data}
+              columns={columns}
+              getKey={(customer) => customer.id}
+            />
+          )}
+        </CardBody>
+      </Card>
 
-        {actionMutation.error && (
-          <p role="alert" className="text-xs text-destructive">
-            {actionMutation.error.message}
-          </p>
-        )}
-
-        {customers.isPending ? (
-          <ListLoading />
-        ) : customers.isError ? (
-          <ListError
-            message={
-              customers.error.message || "Customers could not be loaded."
-            }
-            retry={() => void customers.refetch()}
-          />
-        ) : customers.data.length === 0 ? (
-          <ListEmpty
-            message={
-              showDeleted
-                ? "No deleted customers match this search."
-                : "Add a customer to track credit and sales."
-            }
-          />
-        ) : (
-          <ResponsiveTable
-            rows={customers.data}
-            columns={columns}
-            getKey={(customer) => customer.id}
-          />
-        )}
-      </section>
-
-      {formOpen && (
-        <FormModal
-          title={editingCustomer ? "Edit customer" : "Add customer"}
-          onClose={closeForm}
-        >
-          <CustomerForm
-            key={editingCustomer?.id ?? "new-customer"}
-            customer={editingCustomer}
-            error={saveMutation.error?.message}
-            pending={saveMutation.isPending}
-            onCancel={closeForm}
-            onSubmit={save}
-          />
-        </FormModal>
-      )}
+      <Modal
+        open={formOpen}
+        onClose={closeForm}
+        title={editingCustomer ? "Edit customer" : "Add customer"}
+        size="lg"
+        busy={saveMutation.isPending}
+      >
+        <CustomerForm
+          key={editingCustomer?.id ?? "new-customer"}
+          customer={editingCustomer}
+          error={saveMutation.error ? toUserMessage(saveMutation.error) : undefined}
+          pending={saveMutation.isPending}
+          onCancel={closeForm}
+          onSubmit={save}
+        />
+      </Modal>
     </div>
   );
 }

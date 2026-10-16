@@ -7,18 +7,29 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Plus, Search } from "lucide-react";
-import { formatNaira, type CreateProductDto, type ProductDto } from "@fabtyna/shared";
-import { FormModal } from "@/components/form-modal";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
+import { Package, Plus, Search } from "lucide-react";
+import type { CreateProductDto, ProductDto } from "@fabtyna/shared";
 import { ProductForm } from "@/components/products/product-form";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { Badge, StatusBadge, type BadgeTone } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardBody } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
+import { Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { productsApi } from "@/lib/api";
+import { toTechnicalDetail, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { confirm } from "@/stores/confirm-store";
+import { toast } from "@/stores/toast-store";
 import { useUIStore } from "@/stores/ui-store";
 
 function categoryLabel(category: ProductDto["category"]): string {
@@ -33,13 +44,11 @@ function channelLabel(channel: ProductDto["saleChannel"]): string {
   return "Both";
 }
 
-function channelBadgeClass(channel: ProductDto["saleChannel"]): string {
-  const base =
-    "mt-0.5 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium";
-  if (channel === "RETAIL") return `${base} bg-blue-500/15 text-blue-700 dark:text-blue-300`;
-  if (channel === "WHOLESALE") return `${base} bg-amber-500/15 text-amber-700 dark:text-amber-300`;
-  return `${base} bg-emerald-500/15 text-emerald-700 dark:text-emerald-300`;
-}
+const CHANNEL_TONE: Record<ProductDto["saleChannel"], BadgeTone> = {
+  RETAIL: "info",
+  WHOLESALE: "accent",
+  BOTH: "success",
+};
 
 export default function ProductsPage() {
   const queryClient = useQueryClient();
@@ -64,13 +73,8 @@ export default function ProductsPage() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: ({
-      id,
-      input,
-    }: {
-      id?: string;
-      input: CreateProductDto;
-    }) => (id ? productsApi.update(id, input) : productsApi.create(input)),
+    mutationFn: ({ id, input }: { id?: string; input: CreateProductDto }) =>
+      id ? productsApi.update(id, input) : productsApi.create(input),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
       closeForm();
@@ -105,19 +109,23 @@ export default function ProductsPage() {
     await saveMutation.mutateAsync({ id: editingProduct?.id, input });
   }
 
-  function deleteProduct(product: ProductDto) {
-    if (
-      !window.confirm(
-        `Delete ${product.name}? It will be hidden from lists and can be restored later.`,
-      )
-    ) {
-      return;
+  async function runAction(action: "delete" | "restore", product: ProductDto) {
+    const isDelete = action === "delete";
+    const ok = await confirm({
+      title: isDelete ? `Delete ${product.name}?` : `Restore ${product.name}?`,
+      description: isDelete
+        ? "The product will be hidden from lists and can be restored later."
+        : "The product will appear in the product list again.",
+      confirmLabel: isDelete ? "Delete product" : "Restore",
+      tone: isDelete ? "danger" : "normal",
+    });
+    if (!ok) return;
+    try {
+      await actionMutation.mutateAsync({ action, id: product.id });
+      toast.success(isDelete ? `${product.name} deleted` : `${product.name} restored`);
+    } catch (err) {
+      toast.error(toUserMessage(err));
     }
-    actionMutation.mutate({ action: "delete", id: product.id });
-  }
-
-  function restoreProduct(product: ProductDto) {
-    actionMutation.mutate({ action: "restore", id: product.id });
   }
 
   const columns: ResponsiveTableColumn<ProductDto>[] = [
@@ -129,25 +137,27 @@ export default function ProductsPage() {
           <p className="text-xs text-muted-foreground">
             {product.sku ?? "No SKU"} · {categoryLabel(product.category)}
           </p>
-          <span className={channelBadgeClass(product.saleChannel)}>
+          <Badge tone={CHANNEL_TONE[product.saleChannel]} className="mt-0.5">
             {channelLabel(product.saleChannel)}
-          </span>
+          </Badge>
         </div>
       ),
     },
     {
       header: "Retail price",
+      align: "right",
       render: (product) => (
         <span className="text-sm text-muted-foreground">
-          {formatNaira(product.retailPriceKobo)} / unit
+          <Money kobo={product.retailPriceKobo} /> / unit
         </span>
       ),
     },
     {
       header: "Wholesale price",
+      align: "right",
       render: (product) => (
         <span className="text-sm text-muted-foreground">
-          {formatNaira(product.wholesalePriceKobo)} / {product.packName}
+          <Money kobo={product.wholesalePriceKobo} /> / {product.packName}
         </span>
       ),
     },
@@ -155,41 +165,46 @@ export default function ProductsPage() {
       header: "Pack & reorder",
       render: (product) => (
         <span className="text-sm text-muted-foreground">
-          {product.unitsPerPack} units / {product.packName}; reorder at {product.reorderLevelUnits} units
+          {product.unitsPerPack} units / {product.packName}; reorder at{" "}
+          {product.reorderLevelUnits} units
         </span>
       ),
     },
     {
+      header: "Status",
+      align: "center",
+      render: (product) => (
+        <StatusBadge status={product.deletedAt ? "Deleted" : "Active"} />
+      ),
+    },
+    {
       header: "Actions",
+      align: "right",
       render: (product) =>
         product.deletedAt ? (
           <div className="flex justify-end">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={actionMutation.isPending}
-              onClick={() => restoreProduct(product)}
-              className="h-8 rounded-md border border-border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+              onClick={() => void runAction("restore", product)}
             >
               Restore
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="flex items-center justify-end gap-1.5">
-            <button
-              type="button"
-              onClick={() => openEdit(product)}
-              className="h-8 rounded-md border border-border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
+            <Button variant="secondary" size="sm" onClick={() => openEdit(product)}>
               Edit
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
               disabled={actionMutation.isPending}
-              onClick={() => deleteProduct(product)}
-              className="h-8 rounded-md border border-destructive/20 px-3 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
+              onClick={() => void runAction("delete", product)}
             >
               Delete
-            </button>
+            </Button>
           </div>
         ),
     },
@@ -197,99 +212,103 @@ export default function ProductsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
-            Products
-          </h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Maintain products, pack sizes and selling prices.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <Plus aria-hidden="true" className="h-3.5 w-3.5" />
-          Add product
-        </button>
-      </div>
+      <PageHeader
+        title="Products"
+        description="Maintain products, pack sizes and selling prices."
+        actions={
+          <Button onClick={openCreate}>
+            <Plus aria-hidden="true" className="h-4 w-4" />
+            Add product
+          </Button>
+        }
+      />
 
-      <section className="space-y-4 rounded-xl border border-border/60 bg-card p-4 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <label className="relative min-w-0 flex-1 max-w-md">
-            <span className="sr-only">Search products</span>
-            <Search
-              aria-hidden="true"
-              className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-            />
-            <input
-              type="search"
-              value={search}
-              onChange={(event) => setFilter("productsSearch", event.target.value)}
-              placeholder="Search by name or SKU..."
-              className="h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-          </label>
-          <label className="inline-flex h-9 items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={showDeleted}
-              onChange={(event) =>
-                setFilter("productsShowDeleted", event.target.checked)
+      <Card>
+        <CardBody className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <label className="relative min-w-0 flex-1 sm:max-w-md">
+              <span className="sr-only">Search products</span>
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                type="search"
+                value={search}
+                onChange={(event) => setFilter("productsSearch", event.target.value)}
+                placeholder="Search by name or SKU..."
+                className="pl-9"
+              />
+            </label>
+            <label className="inline-flex min-h-11 cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={showDeleted}
+                onChange={(event) =>
+                  setFilter("productsShowDeleted", event.target.checked)
+                }
+                className="h-4 w-4 rounded border-input accent-primary"
+              />
+              Show deleted
+            </label>
+          </div>
+
+          {products.isPending ? (
+            <Skeleton variant="row" count={5} />
+          ) : products.isError ? (
+            <ErrorState
+              message={toUserMessage(products.error)}
+              detail={
+                process.env.NODE_ENV === "development"
+                  ? toTechnicalDetail(products.error)
+                  : undefined
               }
-              className="h-3.5 w-3.5 rounded border-input accent-primary"
+              onRetry={() => void products.refetch()}
             />
-            Show deleted
-          </label>
-        </div>
+          ) : products.data.length === 0 ? (
+            <EmptyState
+              icon={Package}
+              title={showDeleted ? "No deleted products" : "No products yet"}
+              description={
+                showDeleted
+                  ? "No deleted products match this search."
+                  : "Add a product to start setting up the catalogue."
+              }
+              action={
+                showDeleted ? undefined : (
+                  <Button onClick={openCreate}>
+                    <Plus aria-hidden="true" className="h-4 w-4" />
+                    Add product
+                  </Button>
+                )
+              }
+            />
+          ) : (
+            <ResponsiveTable
+              rows={products.data}
+              columns={columns}
+              getKey={(product) => product.id}
+            />
+          )}
+        </CardBody>
+      </Card>
 
-        {actionMutation.error && (
-          <p role="alert" className="text-xs text-destructive">
-            {actionMutation.error.message}
-          </p>
-        )}
-
-        {products.isPending ? (
-          <ListLoading />
-        ) : products.isError ? (
-          <ListError
-            message={products.error.message || "Products could not be loaded."}
-            retry={() => void products.refetch()}
-          />
-        ) : products.data.length === 0 ? (
-          <ListEmpty
-            message={
-              showDeleted
-                ? "No deleted products match this search."
-                : "Add a product to start setting up the catalogue."
-            }
-          />
-        ) : (
-          <ResponsiveTable
-            rows={products.data}
-            columns={columns}
-            getKey={(product) => product.id}
-          />
-        )}
-      </section>
-
-      {formOpen && (
-        <FormModal
-          title={editingProduct ? "Edit product" : "Add product"}
-          onClose={closeForm}
-        >
-          <ProductForm
-            key={editingProduct?.id ?? "new-product"}
-            product={editingProduct}
-            error={saveMutation.error?.message}
-            pending={saveMutation.isPending}
-            onCancel={closeForm}
-            onSubmit={save}
-          />
-        </FormModal>
-      )}
+      <Modal
+        open={formOpen}
+        onClose={closeForm}
+        title={editingProduct ? "Edit product" : "Add product"}
+        size="lg"
+        busy={saveMutation.isPending}
+      >
+        <ProductForm
+          key={editingProduct?.id ?? "new-product"}
+          product={editingProduct}
+          error={saveMutation.error ? toUserMessage(saveMutation.error) : undefined}
+          pending={saveMutation.isPending}
+          onCancel={closeForm}
+          onSubmit={save}
+        />
+      </Modal>
     </div>
   );
 }

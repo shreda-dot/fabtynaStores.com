@@ -18,6 +18,7 @@ import { transfersMockApi } from "./transfers.mock";
 import { adjustmentsMockApi } from "./adjustments.mock";
 import { reportsMockApi } from "./reports.mock";
 import { expensesMockApi } from "./expenses.mock";
+import { instrumentApi } from "./client";
 
 function notImplemented(): never {
   throw new Error("not implemented");
@@ -102,16 +103,19 @@ if (apiMode !== "mock" && apiMode !== "real") {
   throw new Error(`Unsupported NEXT_PUBLIC_API_MODE '${apiMode}'.`);
 }
 
-export const productsApi = apiMode === "mock" ? productsMockApi : productsRealApi;
-export const suppliersApi = apiMode === "mock" ? suppliersMockApi : suppliersRealApi;
-export const customersApi = apiMode === "mock" ? customersMockApi : customersRealApi;
-export const purchasesApi = apiMode === "mock" ? purchasesMockApi : purchasesRealApi;
-export const salesApi = apiMode === "mock" ? salesMockApi : salesRealApi;
-export const stockApi = apiMode === "mock" ? stockMockApi : stockRealApi;
-export const transfersApi = apiMode === "mock" ? transfersMockApi : transfersRealApi;
-export const adjustmentsApi = apiMode === "mock" ? adjustmentsMockApi : adjustmentsRealApi;
-export const reportsApi = apiMode === "mock" ? reportsMockApi : reportsRealApi;
-export const expensesApi = apiMode === "mock" ? expensesMockApi : expensesRealApi;
+// Every API goes through `instrumentApi` so all calls share the request
+// timeout, typed errors and network health reporting. The object shape is
+// unchanged.
+export const productsApi = instrumentApi(apiMode === "mock" ? productsMockApi : productsRealApi);
+export const suppliersApi = instrumentApi(apiMode === "mock" ? suppliersMockApi : suppliersRealApi);
+export const customersApi = instrumentApi(apiMode === "mock" ? customersMockApi : customersRealApi);
+export const purchasesApi = instrumentApi(apiMode === "mock" ? purchasesMockApi : purchasesRealApi);
+export const salesApi = instrumentApi(apiMode === "mock" ? salesMockApi : salesRealApi);
+export const stockApi = instrumentApi(apiMode === "mock" ? stockMockApi : stockRealApi);
+export const transfersApi = instrumentApi(apiMode === "mock" ? transfersMockApi : transfersRealApi);
+export const adjustmentsApi = instrumentApi(apiMode === "mock" ? adjustmentsMockApi : adjustmentsRealApi);
+export const reportsApi = instrumentApi(apiMode === "mock" ? reportsMockApi : reportsRealApi);
+export const expensesApi = instrumentApi(apiMode === "mock" ? expensesMockApi : expensesRealApi);
 
 export { resetDemoData } from "./mock-store";
 export type { ProductsApi } from "./products.api";

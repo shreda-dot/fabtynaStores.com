@@ -3,17 +3,49 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  HandCoins,
+  Receipt,
+  ShoppingCart,
+  TrendingDown,
+  Wallet,
+} from "lucide-react";
+import {
   formatNaira,
   getLagosBusinessDate,
   getLagosBusinessDayRange,
 } from "@fabtyna/shared";
 import { InfoHint } from "@/components/info-hint";
-import { ListLoading } from "@/components/list-feedback";
+import { Button } from "@/components/ui/button";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { ErrorState } from "@/components/ui/error-state";
+import { Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatCard, type StatTrend } from "@/components/ui/stat-card";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { reportsApi, salesApi, stockApi } from "@/lib/api";
+import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+function trendFor(
+  current: bigint,
+  previous: bigint,
+  upIsGood = true,
+): StatTrend {
+  const diff = current - previous;
+  if (diff === 0n) {
+    return { direction: "flat", label: "No change vs yesterday", upIsGood };
+  }
+  const absolute = diff < 0n ? -diff : diff;
+  const sign = diff > 0n ? "+" : "\u2212";
+  return {
+    direction: diff > 0n ? "up" : "down",
+    label: `${sign}${formatNaira(absolute)} vs yesterday`,
+    upIsGood,
+  };
+}
 
 export default function DashboardPage() {
   const stock = useQuery({
@@ -35,6 +67,9 @@ export default function DashboardPage() {
   const { start: dayStart, end: dayEnd } = getLagosBusinessDayRange(viewDate);
   const reportFrom = new Date(dayStart.getTime() - 6 * DAY_MS);
   const isToday = viewDate === businessDate;
+  const yesterdayDate = getLagosBusinessDate(
+    new Date(dayStart.getTime() - DAY_MS),
+  );
 
   const report = useQuery({
     queryKey: queryKeys.reports.salesSummary(
@@ -47,6 +82,10 @@ export default function DashboardPage() {
   const today = useMemo(
     () => report.data?.days.find((d) => d.date === viewDate) ?? null,
     [report.data, viewDate],
+  );
+  const yesterday = useMemo(
+    () => report.data?.days.find((d) => d.date === yesterdayDate) ?? null,
+    [report.data, yesterdayDate],
   );
 
   const totalRetailWorth =
@@ -75,32 +114,62 @@ export default function DashboardPage() {
     return { retail, wholesale };
   }, [sales.data, viewDate]);
 
-  const retailSupposed = BigInt(today?.retailSupposedRevenueKobo ?? "0");
-  const retailGotten = BigInt(today?.retailRevenueGottenKobo ?? "0");
-  const wholesaleSupposed = BigInt(today?.wholesaleSupposedRevenueKobo ?? "0");
-  const wholesaleGotten = BigInt(today?.wholesaleRevenueGottenKobo ?? "0");
-  const todayNetProfit = BigInt(today?.totalNetProfitKobo ?? "0");
-  const todayExpenses = BigInt(today?.totalExpensesKobo ?? "0");
+  const big = (value: string | undefined) => BigInt(value ?? "0");
+
+  const retailSupposed = big(today?.retailSupposedRevenueKobo);
+  const retailGotten = big(today?.retailRevenueGottenKobo);
+  const wholesaleSupposed = big(today?.wholesaleSupposedRevenueKobo);
+  const wholesaleGotten = big(today?.wholesaleRevenueGottenKobo);
+  const todayNetProfit = big(today?.totalNetProfitKobo);
+  const todayExpenses = big(today?.totalExpensesKobo);
+
+  const yRetailGotten = big(yesterday?.retailRevenueGottenKobo);
+  const yWholesaleGotten = big(yesterday?.wholesaleRevenueGottenKobo);
+  const yNetProfit = big(yesterday?.totalNetProfitKobo);
+  const yExpenses = big(yesterday?.totalExpensesKobo);
+
   const retailDebt = outstandingDebt.retail;
   const wholesaleDebt = outstandingDebt.wholesale;
+  const totalDebt = retailDebt + wholesaleDebt;
+
+  const totalGotten = retailGotten + wholesaleGotten;
+  const yTotalGotten = yRetailGotten + yWholesaleGotten;
+
+  const isLoading = stock.isPending || report.isPending || sales.isPending;
+  const isError = stock.isError || report.isError || sales.isError;
+
+  const breakdownRows: {
+    label: string;
+    retail: bigint;
+    wholesale: bigint;
+    isOwed?: boolean;
+  }[] = [
+    {
+      label: "Supposed (billed)",
+      retail: retailSupposed,
+      wholesale: wholesaleSupposed,
+    },
+    {
+      label: "Gotten (cash collected)",
+      retail: retailGotten,
+      wholesale: wholesaleGotten,
+    },
+    {
+      label: "Outstanding debt",
+      retail: retailDebt,
+      wholesale: wholesaleDebt,
+      isOwed: true,
+    },
+  ];
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Business day is based on Africa/Lagos time and resets at Lagos
-            midnight. Accounts are usually reviewed the next day — pick a date
-            to look back.
-          </p>
-        </div>
-        <div className="flex items-end gap-2">
-          <div className="space-y-1">
-            <label
-              htmlFor="business-date"
-              className="block text-xs font-medium text-muted-foreground"
-            >
+    <div className="w-full min-w-0 max-w-full space-y-6 overflow-x-hidden">
+      <PageHeader
+        title="Dashboard"
+        description="Business day follows Africa/Lagos time. Pick a date to look back."
+        actions={
+          <div className="flex items-center gap-2">
+            <label className="sr-only" htmlFor="business-date">
               Business date
             </label>
             <input
@@ -108,198 +177,210 @@ export default function DashboardPage() {
               type="date"
               value={viewDate}
               max={businessDate}
-              onChange={(event) => setSelectedDate(event.target.value)}
-              className="h-9 rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              onChange={(event) => {
+                if (event.target.value === "") return;
+                setSelectedDate(event.target.value);
+              }}
+              className="min-h-11 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             />
+            {!isToday && (
+              <Button variant="secondary" onClick={() => setSelectedDate(null)}>
+                Today
+              </Button>
+            )}
           </div>
-          {!isToday && (
-            <button
-              type="button"
-              onClick={() => setSelectedDate(null)}
-              className="h-9 rounded-md border border-border px-3 text-xs font-medium hover:bg-muted"
-            >
-              Today
-            </button>
-          )}
-        </div>
-      </div>
+        }
+      />
 
-      {stock.isPending || report.isPending || sales.isPending ? (
-        <ListLoading />
-      ) : (
+      {isError ? (
+        <ErrorState
+          message={toUserMessage(stock.error ?? report.error ?? sales.error)}
+          onRetry={() => {
+            void stock.refetch();
+            void report.refetch();
+            void sales.refetch();
+          }}
+        />
+      ) : isLoading ? (
         <div className="space-y-6">
-          <section className="space-y-4">
-            <h2 className="text-lg font-semibold">
-              {isToday ? "Today's sales" : `Sales for ${viewDate}`}
-            </h2>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="rounded-lg border border-border bg-card p-5">
-                <h3 className="text-base font-medium">Retail (fridge)</h3>
-                <dl className="mt-4 space-y-3 text-sm">
-                  <div className="flex items-center justify-between">
-                    <dt className="text-muted-foreground">Stock worth</dt>
-                    <dd className="font-medium">
-                      {formatNaira(totalRetailWorth.toString())}
-                    </dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="flex items-center gap-1 text-muted-foreground">
-                      Supposed revenue
-                      <InfoHint label="Explain supposed revenue">
-                        What was billed for sales on this business date, whether
-                        or not the customer has paid yet.
-                      </InfoHint>
-                    </dt>
-                    <dd className="font-medium">
-                      {formatNaira(retailSupposed.toString())}
-                    </dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="flex items-center gap-1 text-muted-foreground">
-                      Revenue gotten
-                      <InfoHint label="Explain revenue gotten">
-                        Cash actually collected on this business date.
-                      </InfoHint>
-                    </dt>
-                    <dd className="font-medium">
-                      {formatNaira(retailGotten.toString())}
-                    </dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="text-muted-foreground">Outstanding debt</dt>
-                    <dd
-                      className={`font-medium ${
-                        retailDebt > 0n ? "text-destructive" : ""
-                      }`}
-                    >
-                      {formatNaira(retailDebt.toString())}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-              <div className="rounded-lg border border-border bg-card p-5">
-                <h3 className="text-base font-medium">Wholesale (warehouse)</h3>
-                <dl className="mt-4 space-y-3 text-sm">
-                  <div className="flex items-center justify-between">
-                    <dt className="text-muted-foreground">Stock worth</dt>
-                    <dd className="font-medium">
-                      {formatNaira(totalWholesaleWorth.toString())}
-                    </dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="flex items-center gap-1 text-muted-foreground">
-                      Supposed revenue
-                      <InfoHint label="Explain supposed revenue">
-                        What was billed for sales on this business date, whether
-                        or not the customer has paid yet.
-                      </InfoHint>
-                    </dt>
-                    <dd className="font-medium">
-                      {formatNaira(wholesaleSupposed.toString())}
-                    </dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="flex items-center gap-1 text-muted-foreground">
-                      Revenue gotten
-                      <InfoHint label="Explain revenue gotten">
-                        Cash actually collected on this business date.
-                      </InfoHint>
-                    </dt>
-                    <dd className="font-medium">
-                      {formatNaira(wholesaleGotten.toString())}
-                    </dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="text-muted-foreground">Outstanding debt</dt>
-                    <dd
-                      className={`font-medium ${
-                        wholesaleDebt > 0n ? "text-destructive" : ""
-                      }`}
-                    >
-                      {formatNaira(wholesaleDebt.toString())}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-            </div>
-          </section>
-
-          <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <div className="rounded-lg border border-border bg-card p-5">
-              <p className="text-sm text-muted-foreground">
-                {isToday ? "Today's net profit" : "Net profit"}
-              </p>
-              <p
-                className={`mt-2 text-2xl font-semibold ${
-                  todayNetProfit < 0n ? "text-destructive" : ""
-                }`}
-              >
-                {formatNaira(todayNetProfit.toString())}
-              </p>
-            </div>
-            <div className="rounded-lg border border-border bg-card p-5">
-              <p className="text-sm text-muted-foreground">
-                {isToday ? "Today's expenses" : "Expenses"}
-              </p>
-              <p className="mt-2 text-2xl font-semibold">
-                {formatNaira(todayExpenses.toString())}
-              </p>
-            </div>
-          </section>
-
-          <section className="space-y-3 rounded-lg border border-border bg-card p-5">
-            <h2 className="flex items-center gap-2 text-lg font-semibold">
-              Why doesn&rsquo;t it tally?
-              <InfoHint label="Explain dashboard tally">
-                <span className="block">
-                  `Supposed revenue` is what you billed on this business date.
-                  `Revenue gotten` is the cash collected on this business date.
-                </span>
-                <span className="mt-2 block">
-                  `Outstanding debt` here is the current unpaid balance for
-                  sales created on this date, so it clears once those sales are
-                  paid later.
-                </span>
-              </InfoHint>
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              This shows the live gap between billed sales and cash collected
-              for the selected business date.
-            </p>
-            <ul className="space-y-2 text-sm">
-              <li className="flex items-center justify-between gap-4">
-                <span>Retail debts</span>
-                <span
-                  className={`font-medium ${
-                    retailDebt > 0n ? "text-destructive" : ""
-                  }`}
-                >
-                  {formatNaira(retailDebt.toString())}
-                </span>
-              </li>
-              <li className="flex items-center justify-between gap-4">
-                <span>Wholesale debts</span>
-                <span
-                  className={`font-medium ${
-                    wholesaleDebt > 0n ? "text-destructive" : ""
-                  }`}
-                >
-                  {formatNaira(wholesaleDebt.toString())}
-                </span>
-              </li>
-              <li className="flex items-center justify-between gap-4">
-                <span>Expenses</span>
-                <span className="font-medium">
-                  {formatNaira(todayExpenses.toString())}
-                </span>
-              </li>
-            </ul>
-            <p className="pt-2 text-xs text-muted-foreground">
-              Visit the Debtors page to see who still owes, and the Sales report
-              for the full breakdown.
-            </p>
-          </section>
+          <Skeleton variant="stat" count={4} />
+          <Skeleton variant="card" count={2} />
         </div>
+      ) : (
+        <>
+          <section className="space-y-4">
+            <h2 className="text-section font-semibold text-foreground">
+              {isToday ? "Today" : `Day summary: ${viewDate}`}
+            </h2>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <StatCard
+                label="Revenue gotten"
+                icon={Wallet}
+                value={
+                  <Money
+                    kobo={totalGotten}
+                    tone="neutral"
+                    className="block truncate text-xl font-bold tracking-tight sm:text-2xl md:text-3xl"
+                  />
+                }
+                trend={trendFor(totalGotten, yTotalGotten)}
+                hint={
+                  <InfoHint label="Explain revenue collected">
+                    Cash actually received on this business date, retail and
+                    wholesale together.
+                  </InfoHint>
+                }
+              />
+              <StatCard
+                label="Today's net profit"
+                icon={todayNetProfit < 0n ? TrendingDown : ShoppingCart}
+                tone={todayNetProfit < 0n ? "danger" : "default"}
+                value={
+                  <Money
+                    kobo={todayNetProfit}
+                    className="block truncate text-xl font-bold tracking-tight sm:text-2xl md:text-3xl"
+                  />
+                }
+                trend={trendFor(todayNetProfit, yNetProfit)}
+                hint={
+                  <InfoHint label="Explain net profit">
+                    Only cash actually received counts towards profit — unpaid
+                    debts are excluded.
+                  </InfoHint>
+                }
+              />
+              <StatCard
+                label="Today's expenses"
+                icon={Receipt}
+                value={
+                  <Money
+                    kobo={todayExpenses}
+                    tone="neutral"
+                    className="block truncate text-xl font-bold tracking-tight sm:text-2xl md:text-3xl"
+                  />
+                }
+                trend={trendFor(todayExpenses, yExpenses, false)}
+              />
+              <StatCard
+                label="Debt from this day's sales"
+                icon={HandCoins}
+                tone={totalDebt > 0n ? "danger" : "default"}
+                value={
+                  <Money
+                    kobo={totalDebt}
+                    className="block truncate text-xl font-bold tracking-tight sm:text-2xl md:text-3xl"
+                  />
+                }
+                hint="Unpaid balance for sales made on this date. It clears once those sales are paid."
+              />
+            </div>
+          </section>
+
+          <Card className="w-full overflow-hidden">
+            <CardHeader
+              title="Retail vs wholesale"
+              action={
+                <InfoHint label="Explain retail vs wholesale table">
+                  <span className="block">
+                    Supposed (billed) is what you sold on this business date.
+                    Gotten is the cash received on this date.
+                  </span>
+                  <span className="mt-2 block">
+                    Outstanding debt is the current unpaid balance of sales made on
+                    this date, so the rows will not always add up.
+                  </span>
+                </InfoHint>
+              }
+            />
+            <CardBody className="overflow-x-auto p-0 sm:p-6">
+              <table className="w-full min-w-[360px] text-sm">
+                <thead>
+                  <tr className="border-b border-border text-muted-foreground">
+                    <th scope="col" className="py-2.5 pl-4 pr-2 text-left font-medium sm:pl-0">
+                      {isToday ? "Today" : viewDate}
+                    </th>
+                    <th scope="col" className="px-2 py-2.5 text-right font-medium">
+                      Retail
+                    </th>
+                    <th scope="col" className="px-2 py-2.5 text-right font-medium">
+                      Wholesale
+                    </th>
+                    <th scope="col" className="py-2.5 pl-2 pr-4 text-right font-medium sm:pr-0">
+                      Total
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {breakdownRows.map((row) => {
+                    const total = row.retail + row.wholesale;
+                    return (
+                      <tr
+                        key={row.label}
+                        className="border-b border-border last:border-0"
+                      >
+                        <th
+                          scope="row"
+                          className="py-3 pl-4 pr-2 text-left font-medium text-foreground sm:pl-0"
+                        >
+                          {row.label}
+                        </th>
+                        <td className="tabular px-2 py-3 text-right">
+                          {row.isOwed ? (
+                            <Money kobo={row.retail} />
+                          ) : (
+                            <Money kobo={row.retail} tone="neutral" />
+                          )}
+                        </td>
+                        <td className="tabular px-2 py-3 text-right">
+                          {row.isOwed ? (
+                            <Money kobo={row.wholesale} />
+                          ) : (
+                            <Money kobo={row.wholesale} tone="neutral" />
+                          )}
+                        </td>
+                        <td className="tabular py-3 pl-2 pr-4 text-right font-semibold sm:pr-0">
+                          {row.isOwed ? (
+                            <Money kobo={total} />
+                          ) : (
+                            <Money kobo={total} tone="neutral" />
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </CardBody>
+          </Card>
+
+          <Card className="w-full overflow-hidden">
+            <CardHeader
+              title="Stock on hand"
+              action={
+                <InfoHint label="Explain stock worth">
+                  Current value of the stock on hand right now. It does not change
+                  with the date picker above.
+                </InfoHint>
+              }
+            />
+            <CardBody>
+              <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                <div className="flex items-center justify-between gap-4">
+                  <dt className="text-muted-foreground">Retail (fridge) worth</dt>
+                  <dd className="font-medium">
+                    <Money kobo={totalRetailWorth} tone="neutral" />
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <dt className="text-muted-foreground">Wholesale (warehouse) worth</dt>
+                  <dd className="font-medium">
+                    <Money kobo={totalWholesaleWorth} tone="neutral" />
+                  </dd>
+                </div>
+              </dl>
+            </CardBody>
+          </Card>
+        </>
       )}
     </div>
   );

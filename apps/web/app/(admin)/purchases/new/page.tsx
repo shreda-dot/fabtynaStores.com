@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
@@ -15,8 +15,20 @@ import {
   type Unit,
 } from "@fabtyna/shared";
 import { MoneyInput } from "@/components/money-input";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { ErrorState } from "@/components/ui/error-state";
+import { FormField } from "@/components/ui/form-field";
+import { Input, Select, Textarea } from "@/components/ui/input";
+import { Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/page-header";
+import { useNetworkStatus } from "@/hooks/use-network-status";
 import { productsApi, purchasesApi, suppliersApi } from "@/lib/api";
+import { toUserMessage } from "@/lib/api/client";
+import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { queryKeys } from "@/lib/query-keys";
+import { confirm } from "@/stores/confirm-store";
+import { toast } from "@/stores/toast-store";
 
 type PurchaseLineDraft = {
   id: string;
@@ -26,17 +38,12 @@ type PurchaseLineDraft = {
   pricePerUnitKobo: string;
 };
 
-let lineCounter = 0;
-function newLineId(): string {
-  lineCounter += 1;
-  return `line-${lineCounter}`;
-}
-
 const LOCATIONS: StockLocation[] = ["WAREHOUSE", "RETAIL_SHELF", "MARKET"];
 
 export default function NewPurchasePage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const uid = useId();
 
   const [supplierId, setSupplierId] = useState<string>("");
   const [location, setLocation] = useState<StockLocation>("WAREHOUSE");
@@ -47,13 +54,20 @@ export default function NewPurchasePage() {
   const [notes, setNotes] = useState<string>("");
   const [lines, setLines] = useState<PurchaseLineDraft[]>([
     {
-      id: newLineId(),
+      id: `${uid}-0`,
       productId: "",
       unit: "PACK",
       quantity: "",
       pricePerUnitKobo: "",
     },
   ]);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const lineSeq = useRef(1);
+  const submitting = useRef(false);
+
+  const network = useNetworkStatus();
+  const businessDate = useLagosBusinessDate();
 
   const productsQuery = useQuery({
     queryKey: queryKeys.products.list("", false),
@@ -72,21 +86,34 @@ export default function NewPurchasePage() {
     return map;
   }, [productsQuery.data]);
 
+  /**
+   * Mirrors `receivePurchase` in the domain so the preview matches the saved
+   * line total: lineTotalKobo = quantity × price per unit (pack or unit).
+   */
   function lineTotalKobo(line: PurchaseLineDraft): bigint {
     const qty = Number(line.quantity);
     const price = line.pricePerUnitKobo;
-    if (!Number.isFinite(qty) || qty <= 0 || !/^[0-9]+$/.test(price)) return 0n;
+    if (!Number.isSafeInteger(qty) || qty <= 0 || !/^[0-9]+$/.test(price)) {
+      return 0n;
+    }
     return BigInt(qty) * BigInt(price);
   }
 
   const totalKobo = lines.reduce((sum, line) => sum + lineTotalKobo(line), 0n);
 
+  const supportQueryFailed = productsQuery.isError || suppliersQuery.isError;
+
   const createMutation = useMutation({
     mutationFn: (input: CreatePurchaseDto) => purchasesApi.create(input),
     onSuccess: (purchase) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+      toast.success(
+        `Purchase ${purchase.reference ?? purchase.id.slice(0, 8)} received — ${formatNaira(totalKobo)}.`,
+      );
       router.push(`/purchases/${purchase.id}`);
     },
   });
@@ -95,6 +122,12 @@ export default function NewPurchasePage() {
     setLines((prev) =>
       prev.map((line) => (line.id === id ? { ...line, ...patch } : line)),
     );
+  }
+
+  function newLineId(): string {
+    const id = `${uid}-${lineSeq.current}`;
+    lineSeq.current += 1;
+    return id;
   }
 
   function addLine() {
@@ -106,7 +139,7 @@ export default function NewPurchasePage() {
         quantity: "",
         pricePerUnitKobo: "",
       },
-      ...prev, // Prepend to the top of the list instead of appending
+      ...prev,
     ]);
   }
 
@@ -114,33 +147,92 @@ export default function NewPurchasePage() {
     setLines((prev) =>
       prev.length > 1 ? prev.filter((line) => line.id !== id) : prev,
     );
+    setErrors((prev) => {
+      const next = { ...prev };
+      for (const key of Object.keys(next)) {
+        if (key.includes(id)) delete next[key];
+      }
+      return next;
+    });
   }
 
-  function submit(event: React.FormEvent) {
-    event.preventDefault();
-    const validLines = lines
-      .filter(
-        (line) =>
-          line.productId !== "" &&
-          Number.isFinite(Number(line.quantity)) &&
-          Number(line.quantity) > 0 &&
-          /^[0-9]+$/.test(line.pricePerUnitKobo),
-      )
-      .map((line) => {
-        const product = productById.get(line.productId);
-        if (!product) throw new Error("Product not found.");
-        const qty = Number(line.quantity);
-        const lineTotal = lineTotalKobo(line).toString();
-        return {
-          productId: line.productId,
-          unit: line.unit,
-          quantity: qty,
-          lineTotalKobo: lineTotal,
-        };
-      });
+  function validateLine(line: PurchaseLineDraft): Record<string, string> {
+    const found: Record<string, string> = {};
+    if (line.productId === "") {
+      found[`line-${line.id}-product`] = "Select a product.";
+      return found;
+    }
+    const product = productById.get(line.productId);
+    if (!product) {
+      found[`line-${line.id}-product`] = "This product no longer exists.";
+      return found;
+    }
 
-    if (validLines.length === 0) {
-      createMutation.reset();
+    const qty = Number(line.quantity);
+    if (line.quantity.trim() === "" || !Number.isSafeInteger(qty) || qty <= 0) {
+      found[`line-${line.id}-qty`] =
+        line.unit === "PACK"
+          ? "Enter a whole number of packs (1 or more)."
+          : "Enter a whole number of units (1 or more).";
+    }
+
+    if (!/^[0-9]+$/.test(line.pricePerUnitKobo)) {
+      found[`price-${line.id}`] = "Enter a price for this line.";
+    } else if (lineTotalKobo(line) < 0n) {
+      found[`price-${line.id}`] = "The line total cannot be negative.";
+    }
+
+    return found;
+  }
+
+  function validateAll(): Record<string, string> {
+    const found: Record<string, string> = {};
+
+    if (purchasedAt === "") {
+      found["purchase-date"] = "Choose a date.";
+    } else if (purchasedAt > businessDate) {
+      found["purchase-date"] = "The date cannot be in the future.";
+    }
+
+    let hasValidLine = false;
+    for (const line of lines) {
+      const lineErrors = validateLine(line);
+      Object.assign(found, lineErrors);
+      if (Object.keys(lineErrors).length === 0) hasValidLine = true;
+    }
+    if (!hasValidLine && lines.length === 1) {
+      found["lines"] = "Add at least one complete line item.";
+    }
+
+    return found;
+  }
+
+  function focusFirstError(found: Record<string, string>) {
+    const order = [
+      "purchase-date",
+      "lines",
+      ...lines.flatMap((line) => [
+        `line-${line.id}-product`,
+        `line-${line.id}-qty`,
+        `price-${line.id}`,
+      ]),
+    ];
+    const firstId = order.find((id) => found[id] !== undefined);
+    if (!firstId) return;
+    const element = document.getElementById(firstId);
+    if (element instanceof HTMLElement) element.focus();
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (submitting.current || createMutation.isPending) return;
+    createMutation.reset();
+
+    const found = validateAll();
+    setErrors(found);
+    if (Object.keys(found).length > 0) {
+      focusFirstError(found);
+      toast.warning("Please fix the highlighted fields.");
       return;
     }
 
@@ -150,145 +242,195 @@ export default function NewPurchasePage() {
       purchasedAt: createLagosDateTime(purchasedAt).toISOString(),
       notes: notes.trim() === "" ? null : notes.trim(),
       reference: reference.trim() === "" ? null : reference.trim(),
-      lines: validLines,
+      lines: lines.map((line) => ({
+        productId: line.productId,
+        unit: line.unit,
+        quantity: Number(line.quantity),
+        lineTotalKobo: lineTotalKobo(line).toString(),
+      })),
     };
 
-    createMutation.mutate(input);
+    const supplierLabel =
+      suppliersQuery.data?.find((supplier) => supplier.id === supplierId)
+        ?.name ?? "No supplier";
+
+    submitting.current = true;
+    try {
+      await confirm({
+        title: "Save this purchase?",
+        description: "Confirm the details before receiving goods into stock.",
+        confirmLabel: "Receive purchase",
+        details: (
+          <dl className="space-y-1.5 text-sm">
+            <SummaryRow label="Supplier">{supplierLabel}</SummaryRow>
+            <SummaryRow label="Reference">
+              {reference.trim() === "" ? "—" : reference.trim()}
+            </SummaryRow>
+            <SummaryRow label="Date">{purchasedAt}</SummaryRow>
+            <SummaryRow label="Total">
+              <Money kobo={totalKobo} tone="neutral" />
+            </SummaryRow>
+            <div className="border-t border-border pt-1.5">
+              <dt className="text-muted-foreground">Lines</dt>
+              <dd className="mt-1 space-y-0.5">
+                {lines.map((line) => (
+                  <div key={line.id} className="flex justify-between gap-4">
+                    <span className="min-w-0 truncate">
+                      {productById.get(line.productId)?.name ?? "Product"} ·{" "}
+                      {line.quantity}
+                      {line.unit === "PACK" ? " pack(s)" : " unit(s)"}
+                    </span>
+                    <Money kobo={lineTotalKobo(line)} tone="neutral" />
+                  </div>
+                ))}
+              </dd>
+            </div>
+          </dl>
+        ),
+        onConfirm: () => createMutation.mutateAsync(input),
+      });
+    } finally {
+      submitting.current = false;
+    }
   }
 
+  const errorCount = Object.keys(errors).length;
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
-      <div className="flex items-center gap-3">
-        <Link
-          href="/purchases"
-          className="inline-flex h-9 items-center gap-1 rounded-md border border-border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-        >
-          <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5" />
-          Back
-        </Link>
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
-            New purchase
-          </h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Receive goods into stock.
-          </p>
-        </div>
-      </div>
+    <div className="mx-auto max-w-5xl space-y-6">
+      <PageHeader
+        title="New purchase"
+        description="Receive goods into stock."
+        actions={
+          <Link
+            href="/purchases"
+            className={buttonClasses({ variant: "secondary" })}
+          >
+            <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+            Back to purchases
+          </Link>
+        }
+      />
 
-      <form onSubmit={submit} className="space-y-6">
-        <section className="space-y-4 rounded-xl border border-border/60 bg-card p-4 shadow-sm sm:p-5">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <label
-                htmlFor="supplier"
-                className="block text-xs font-medium text-foreground"
-              >
-                Supplier (optional)
-              </label>
-              <select
-                id="supplier"
-                value={supplierId}
-                onChange={(event) => setSupplierId(event.target.value)}
-                className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                <option value="">No supplier</option>
-                {suppliersQuery.data?.map((supplier) => (
-                  <option key={supplier.id} value={supplier.id}>
-                    {supplier.name}
-                  </option>
+      {supportQueryFailed && (
+        <ErrorState
+          title="Some data could not be loaded"
+          message="Products or suppliers failed to load, so this purchase cannot be validated."
+          onRetry={() => {
+            void productsQuery.refetch();
+            void suppliersQuery.refetch();
+          }}
+        />
+      )}
+
+      <form onSubmit={submit} className="space-y-6" noValidate>
+        {errorCount > 0 && (
+          <div
+            role="alert"
+            className="rounded-md border border-danger/30 bg-danger-surface p-4 text-sm text-danger"
+          >
+            <p className="font-medium">
+              {errorCount === 1
+                ? "There is 1 problem to fix"
+                : `There are ${errorCount} problems to fix`}
+            </p>
+            <ul className="mt-1 list-disc pl-5">
+              {Object.entries(errors)
+                .slice(0, 5)
+                .map(([key, message]) => (
+                  <li key={key}>{message}</li>
                 ))}
-              </select>
+            </ul>
+          </div>
+        )}
+
+        <Card>
+          <CardHeader title="Details" />
+          <CardBody className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField id="purchase-supplier" label="Supplier (optional)">
+                <Select
+                  id="purchase-supplier"
+                  value={supplierId}
+                  onChange={(event) => setSupplierId(event.target.value)}
+                >
+                  <option value="">No supplier</option>
+                  {suppliersQuery.data?.map((supplier) => (
+                    <option key={supplier.id} value={supplier.id}>
+                      {supplier.name}
+                    </option>
+                  ))}
+                </Select>
+              </FormField>
+
+              <FormField id="purchase-location" label="Receiving location">
+                <Select
+                  id="purchase-location"
+                  value={location}
+                  onChange={(event) =>
+                    setLocation(event.target.value as StockLocation)
+                  }
+                >
+                  {LOCATIONS.map((loc) => (
+                    <option key={loc} value={loc}>
+                      {loc.replace(/_/g, " ")}
+                    </option>
+                  ))}
+                </Select>
+              </FormField>
+
+              <FormField
+                id="purchase-date"
+                label="Date"
+                error={errors["purchase-date"]}
+              >
+                <Input
+                  id="purchase-date"
+                  type="date"
+                  value={purchasedAt}
+                  max={businessDate}
+                  aria-invalid={errors["purchase-date"] !== undefined}
+                  onChange={(event) => setPurchasedAt(event.target.value)}
+                />
+              </FormField>
+
+              <FormField id="purchase-reference" label="Reference">
+                <Input
+                  id="purchase-reference"
+                  value={reference}
+                  onChange={(event) => setReference(event.target.value)}
+                  placeholder="Invoice or GRN number"
+                />
+              </FormField>
             </div>
 
-            <div className="space-y-1.5">
-              <label
-                htmlFor="location"
-                className="block text-xs font-medium text-foreground"
-              >
-                Receiving location
-              </label>
-              <select
-                id="location"
-                value={location}
-                onChange={(event) =>
-                  setLocation(event.target.value as StockLocation)
-                }
-                className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                {LOCATIONS.map((loc) => (
-                  <option key={loc} value={loc}>
-                    {loc.replace(/_/g, " ")}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-1.5">
-              <label
-                htmlFor="date"
-                className="block text-xs font-medium text-foreground"
-              >
-                Date
-              </label>
-              <input
-                id="date"
-                type="date"
-                value={purchasedAt}
-                onChange={(event) => setPurchasedAt(event.target.value)}
-                className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            <FormField id="purchase-notes" label="Notes">
+              <Textarea
+                id="purchase-notes"
+                value={notes}
+                rows={2}
+                onChange={(event) => setNotes(event.target.value)}
               />
-            </div>
+            </FormField>
+          </CardBody>
+        </Card>
 
-            <div className="space-y-1.5">
-              <label
-                htmlFor="reference"
-                className="block text-xs font-medium text-foreground"
-              >
-                Reference
-              </label>
-              <input
-                id="reference"
-                type="text"
-                value={reference}
-                onChange={(event) => setReference(event.target.value)}
-                placeholder="Invoice or GRN number"
-                className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <label
-              htmlFor="notes"
-              className="block text-xs font-medium text-foreground"
-            >
-              Notes
-            </label>
-            <textarea
-              id="notes"
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-              rows={2}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-          </div>
-        </section>
-
-        <section className="space-y-4 rounded-xl border border-border/60 bg-card p-4 shadow-sm sm:p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-foreground">Lines</h2>
-            <button
-              type="button"
-              onClick={addLine}
-              className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
-              <Plus aria-hidden="true" className="h-3.5 w-3.5" />
-              Add line
-            </button>
-          </div>
-
-          <div className="space-y-3">
+        <Card>
+          <CardHeader
+            title="Lines"
+            action={
+              <Button variant="secondary" size="sm" onClick={addLine}>
+                <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+                Add line
+              </Button>
+            }
+          />
+          <CardBody className="space-y-3">
+            {errors["lines"] && (
+              <p role="alert" className="text-sm text-danger">
+                {errors["lines"]}
+              </p>
+            )}
             {lines.map((line, index) => {
               const product = productById.get(line.productId);
               const unitsPerPack = product?.unitsPerPack ?? 24;
@@ -301,77 +443,82 @@ export default function NewPurchasePage() {
               return (
                 <div
                   key={line.id}
-                  className="space-y-3 rounded-lg border border-border/60 bg-background/50 p-3.5"
+                  className="space-y-3 rounded-md border border-border bg-background/50 p-3.5"
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-muted-foreground">
                       Line {index + 1}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => removeLine(line.id)}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-danger hover:bg-danger/10"
                       disabled={lines.length === 1}
-                      className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
+                      onClick={() => removeLine(line.id)}
                     >
                       <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
                       Remove
-                    </button>
+                    </Button>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="space-y-1.5">
-                      <label className="block text-xs font-medium text-foreground">
-                        Product
-                      </label>
-                      <select
+                    <FormField
+                      id={`line-${line.id}-product`}
+                      label="Product"
+                      error={errors[`line-${line.id}-product`]}
+                    >
+                      <Select
+                        id={`line-${line.id}-product`}
                         value={line.productId}
+                        aria-invalid={
+                          errors[`line-${line.id}-product`] !== undefined
+                        }
                         onChange={(event) =>
                           updateLine(line.id, { productId: event.target.value })
                         }
-                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
                         <option value="">Select product</option>
-                        {productsQuery.data?.map((product) => (
-                          <option key={product.id} value={product.id}>
-                            {product.name}
+                        {productsQuery.data?.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.name}
                           </option>
                         ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="block text-xs font-medium text-foreground">
-                        Unit
-                      </label>
-                      <select
+                      </Select>
+                    </FormField>
+                    <FormField id={`line-${line.id}-unit`} label="Unit">
+                      <Select
+                        id={`line-${line.id}-unit`}
                         value={line.unit}
                         onChange={(event) =>
                           updateLine(line.id, {
                             unit: event.target.value as Unit,
                           })
                         }
-                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
-                        <option value="PACK">
-                          Pack ({unitsPerPack} units)
-                        </option>
+                        <option value="PACK">Pack ({unitsPerPack} units)</option>
                         <option value="UNIT">Single unit</option>
-                      </select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="block text-xs font-medium text-foreground">
-                        Quantity
-                      </label>
-                      <input
+                      </Select>
+                    </FormField>
+                    <FormField
+                      id={`line-${line.id}-qty`}
+                      label="Quantity"
+                      error={errors[`line-${line.id}-qty`]}
+                    >
+                      <Input
+                        id={`line-${line.id}-qty`}
                         type="number"
+                        inputMode="numeric"
                         min={1}
                         step={1}
                         value={line.quantity}
+                        aria-invalid={
+                          errors[`line-${line.id}-qty`] !== undefined
+                        }
                         onChange={(event) =>
                           updateLine(line.id, { quantity: event.target.value })
                         }
-                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         placeholder="e.g. 2"
                       />
-                    </div>
+                    </FormField>
                     <MoneyInput
                       id={`price-${line.id}`}
                       label={`Price per ${line.unit === "PACK" ? "pack" : "unit"}`}
@@ -380,44 +527,79 @@ export default function NewPurchasePage() {
                         updateLine(line.id, { pricePerUnitKobo: value })
                       }
                     />
+                    {errors[`price-${line.id}`] && (
+                      <p
+                        role="alert"
+                        className="text-sm text-danger sm:col-span-2"
+                      >
+                        {errors[`price-${line.id}`]}
+                      </p>
+                    )}
                   </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs pt-1 border-t border-border/40">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-1 text-xs">
                     <span className="text-muted-foreground">
                       {Number.isFinite(quantityUnits) && quantityUnits > 0
                         ? `${quantityUnits} units`
                         : "—"}
                     </span>
                     <span className="font-medium text-foreground">
-                      Line total: {formatNaira(total.toString())}
+                      Line total: <Money kobo={total} tone="neutral" />
                     </span>
                   </div>
                 </div>
               );
             })}
-          </div>
-        </section>
+          </CardBody>
+        </Card>
 
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between bg-card p-4 rounded-xl border border-border/60 shadow-sm">
-          <div className="text-left sm:text-right w-full sm:w-auto">
-            <p className="text-xs text-muted-foreground">Total</p>
-            <p className="text-lg font-semibold text-foreground">
-              {formatNaira(totalKobo.toString())}
-            </p>
-          </div>
-          {createMutation.error && (
-            <p role="alert" className="text-xs text-destructive">
-              {createMutation.error.message}
-            </p>
-          )}
-          <button
-            type="submit"
-            disabled={createMutation.isPending}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-5 text-xs font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 w-full sm:w-auto"
-          >
-            {createMutation.isPending ? "Receiving…" : "Receive"}
-          </button>
-        </div>
+        <Card>
+          <CardBody className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="text-left sm:text-right">
+              <p className="text-xs text-muted-foreground">Total</p>
+              <p className="text-lg font-semibold text-foreground">
+                <Money kobo={totalKobo} tone="neutral" />
+              </p>
+            </div>
+            <div className="flex flex-col gap-2">
+              {createMutation.isError && (
+                <p role="alert" className="text-sm text-danger">
+                  {toUserMessage(createMutation.error)}
+                </p>
+              )}
+              {network.offline && (
+                <p className="text-sm text-warning">
+                  You&rsquo;re offline. Changes can&rsquo;t be saved until you
+                  reconnect.
+                </p>
+              )}
+              <Button
+                type="submit"
+                size="lg"
+                className="w-full sm:w-auto"
+                loading={createMutation.isPending}
+                disabled={network.offline}
+              >
+                Receive purchase
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
       </form>
+    </div>
+  );
+}
+
+function SummaryRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="font-medium text-foreground">{children}</dd>
     </div>
   );
 }

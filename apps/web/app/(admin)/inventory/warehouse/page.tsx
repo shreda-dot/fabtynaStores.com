@@ -2,16 +2,23 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Warehouse } from "lucide-react";
 import Link from "next/link";
-import { formatNaira, formatStockUnits } from "@fabtyna/shared";
+import { formatStockUnits } from "@fabtyna/shared";
 import { InfoHint } from "@/components/info-hint";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { buttonClasses } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatCard } from "@/components/ui/stat-card";
 import { stockApi } from "@/lib/api";
+import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 
 function roundHalfUp(numerator: bigint, denominator: bigint): bigint {
@@ -66,117 +73,119 @@ export default function WarehouseInventoryPage() {
     },
     {
       header: "In warehouse",
-      render: (item) =>
-        formatStockUnits(item.units, item.row.unitsPerPack, item.row.packName),
+      align: "right",
+      render: (item) => (
+        <span className="tabular">
+          {formatStockUnits(item.units, item.row.unitsPerPack, item.row.packName)}
+        </span>
+      ),
     },
     {
       header: "Packs",
-      render: (item) => item.packs.toFixed(1),
+      align: "right",
+      render: (item) => <span className="tabular">{item.packs.toFixed(1)}</span>,
     },
     {
       header: "Buy worth",
-      render: (item) => formatNaira(item.buyWorth.toString()),
+      align: "right",
+      render: (item) => <Money kobo={item.buyWorth} />,
     },
     {
       header: "Wholesale worth",
-      render: (item) => formatNaira(item.sellWorth.toString()),
+      align: "right",
+      render: (item) => <Money kobo={item.sellWorth} />,
     },
     {
       header: "Balance",
-      render: (item) => (
-        <span className={item.balance < 0n ? "text-destructive" : ""}>
-          {formatNaira(item.balance.toString())}
-        </span>
-      ),
+      align: "right",
+      render: (item) => <Money kobo={item.balance} />,
     },
   ];
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Warehouse</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Wholesale stock stored in the warehouse.
-          </p>
-        </div>
-        <Link
-          href="/purchases/new"
-          className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90"
-        >
-          <ArrowRight aria-hidden="true" className="h-4 w-4" />
-          Receive stock
-        </Link>
-      </div>
+      <PageHeader
+        title="Warehouse"
+        description="Wholesale stock stored in the warehouse."
+        actions={
+          <Link
+            href="/purchases/new"
+            className={buttonClasses({ variant: "primary" })}
+          >
+            <ArrowRight aria-hidden="true" className="h-4 w-4" />
+            Receive stock
+          </Link>
+        }
+      />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="flex items-center gap-1 text-sm text-muted-foreground">
-            Wholesale worth if sold
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Wholesale worth if sold"
+          value={<Money kobo={totalSellWorth} tone="neutral" />}
+          hint={
             <InfoHint label="Explain wholesale worth if sold">
-              This uses your current wholesale selling price for the stock
+              Your current wholesale selling price applied to the stock
               presently in the warehouse.
             </InfoHint>
-          </p>
-          <p className="mt-1 text-2xl font-semibold">
-            {formatNaira(totalSellWorth.toString())}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="flex items-center gap-1 text-sm text-muted-foreground">
-            Wholesale worth when bought
+          }
+        />
+        <StatCard
+          label="Wholesale worth when bought"
+          value={<Money kobo={totalBuyWorth} tone="neutral" />}
+          hint={
             <InfoHint label="Explain wholesale worth when bought">
-              This is the cost value of the same warehouse stock based on what
-              it was bought for.
+              The cost value of the same warehouse stock — what it was bought
+              for.
             </InfoHint>
-          </p>
-          <p className="mt-1 text-2xl font-semibold">
-            {formatNaira(totalBuyWorth.toString())}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="flex items-center gap-1 text-sm text-muted-foreground">
-            Balance
+          }
+        />
+        <StatCard
+          label="Balance"
+          value={<Money kobo={totalBalance} />}
+          tone={totalBalance < 0n ? "danger" : "default"}
+          hint={
             <InfoHint label="Explain warehouse balance">
-              Balance is `wholesale worth if sold` minus `wholesale worth when
-              bought`. It helps you see whether your current selling margin is
-              stronger or tighter.
+              Balance is “wholesale worth if sold” minus “wholesale worth when
+              bought”. It shows how strong or tight your current selling margin
+              is.
             </InfoHint>
-          </p>
-          <p
-            className={`mt-1 text-2xl font-semibold ${
-              totalBalance < 0n ? "text-destructive" : ""
-            }`}
-          >
-            {formatNaira(totalBalance.toString())}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">
-            Total units in warehouse
-          </p>
-          <p className="mt-1 text-2xl font-semibold">{totalUnits}</p>
-        </div>
+          }
+        />
+        <StatCard
+          label="Total units in warehouse"
+          value={<span className="tabular">{totalUnits}</span>}
+        />
       </div>
 
-      <section className="space-y-4 rounded-lg border border-border bg-card p-4 sm:p-5">
-        {stock.isPending ? (
-          <ListLoading />
-        ) : stock.isError ? (
-          <ListError
-            message={stock.error.message || "Stock could not be loaded."}
-            retry={() => void stock.refetch()}
-          />
-        ) : rows.length === 0 ? (
-          <ListEmpty message="No stock in the warehouse. Receive stock by creating a purchase." />
-        ) : (
-          <ResponsiveTable
-            rows={rows}
-            columns={columns}
-            getKey={(item) => item.row.productId}
-          />
-        )}
-      </section>
+      {stock.isPending ? (
+        <Skeleton variant="row" count={6} />
+      ) : stock.isError ? (
+        <ErrorState
+          message={toUserMessage(stock.error)}
+          onRetry={() => void stock.refetch()}
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon={Warehouse}
+          title="No stock in the warehouse"
+          description="Warehouse stock appears here once you receive items through a purchase."
+          action={
+            <Link
+              href="/purchases/new"
+              className={buttonClasses({ variant: "primary" })}
+            >
+              <ArrowRight aria-hidden="true" className="h-4 w-4" />
+              Receive stock
+            </Link>
+          }
+        />
+      ) : (
+        <ResponsiveTable
+          rows={rows}
+          columns={columns}
+          getKey={(item) => item.row.productId}
+        />
+      )}
     </div>
   );
 }

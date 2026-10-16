@@ -1,12 +1,24 @@
 "use client";
 
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { formatLagosDateTime, formatStockUnits } from "@fabtyna/shared";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
+import {
+  ResponsiveTable,
+  type ResponsiveTableColumn,
+} from "@/components/responsive-table";
+import { buttonClasses } from "@/components/ui/button";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 import { productsApi, transfersApi } from "@/lib/api";
+import type { TransferLineWithProductDto } from "@/lib/api/transfers.api";
+import { ApiError, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 
 export default function TransferDetailPage() {
@@ -23,109 +35,164 @@ export default function TransferDetailPage() {
     queryFn: () => productsApi.list({ search: "", includeDeleted: false }),
   });
 
-  const unitsPerPackById = new Map(
-    (products.data ?? []).map((p) => [p.id, p.unitsPerPack]),
+  const productById = useMemo(() => {
+    const map = new Map<
+      string,
+      { name: string; unitsPerPack: number; packName: string }
+    >();
+    for (const product of products.data ?? []) {
+      map.set(product.id, {
+        name: product.name,
+        unitsPerPack: product.unitsPerPack,
+        packName: product.packName,
+      });
+    }
+    return map;
+  }, [products.data]);
+
+  const backLink = (
+    <Link href="/transfers" className={buttonClasses({ variant: "secondary" })}>
+      <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+      Back
+    </Link>
   );
-  const packNameById = new Map(
-    (products.data ?? []).map((p) => [p.id, p.packName]),
-  );
+
+  if (transfer.isPending) {
+    return (
+      <div className="space-y-6">
+        <Skeleton variant="text" count={2} className="max-w-sm" />
+        <Skeleton variant="stat" count={4} />
+        <Skeleton variant="row" count={4} />
+      </div>
+    );
+  }
+
+  if (transfer.isError) {
+    const notFound =
+      transfer.error instanceof ApiError && transfer.error.kind === "not-found";
+    if (notFound) {
+      return (
+        <EmptyState
+          title="Transfer not found"
+          description="This transfer may have been removed, or the link is incorrect."
+          action={
+            <Link href="/transfers" className={buttonClasses({})}>
+              Back to transfers
+            </Link>
+          }
+          className="mt-8"
+        />
+      );
+    }
+    return (
+      <ErrorState
+        title="Transfer could not be loaded"
+        message={toUserMessage(transfer.error)}
+        onRetry={() => void transfer.refetch()}
+        className="mt-8"
+      />
+    );
+  }
+
+  if (!transfer.data) {
+    return (
+      <EmptyState
+        title="Transfer not found"
+        description="This transfer may have been removed, or the link is incorrect."
+        action={
+          <Link href="/transfers" className={buttonClasses({})}>
+            Back to transfers
+          </Link>
+        }
+        className="mt-8"
+      />
+    );
+  }
+
+  const t = transfer.data;
+  const reference = t.reference ?? t.id.slice(0, 8);
+
+  const lineColumns: ResponsiveTableColumn<TransferLineWithProductDto>[] = [
+    {
+      header: "Product",
+      render: (line) =>
+        productById.get(line.productId)?.name ??
+        line.productName ??
+        line.productId.slice(0, 8),
+    },
+    {
+      header: "Quantity",
+      align: "right",
+      render: (line) => {
+        const product = productById.get(line.productId);
+        return (
+          <span className="tabular">
+            {product
+              ? formatStockUnits(
+                  line.quantityUnits,
+                  product.unitsPerPack,
+                  product.packName,
+                )
+              : `${line.quantityUnits} units`}
+          </span>
+        );
+      },
+    },
+  ];
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Link
-          href="/transfers"
-          className="inline-flex h-9 items-center gap-1 rounded-md border border-border px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
-        >
-          <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5" />
-          Back
-        </Link>
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">
-            Transfer details
-          </h1>
-        </div>
+      <PageHeader
+        title={`Transfer ${reference}`}
+        description={
+          <span className="inline-flex flex-wrap items-center gap-1.5">
+            <span>{formatLagosDateTime(t.transferredAt)}</span>
+            <span aria-hidden="true">·</span>
+            <span>
+              {t.from.replace(/_/g, " ")} → {t.to.replace(/_/g, " ")}
+            </span>
+          </span>
+        }
+        actions={backLink}
+      />
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Card>
+          <CardBody>
+            <p className="text-sm text-muted-foreground">From</p>
+            <p className="mt-1 font-medium">{t.from.replace(/_/g, " ")}</p>
+          </CardBody>
+        </Card>
+        <Card>
+          <CardBody>
+            <p className="text-sm text-muted-foreground">To</p>
+            <p className="mt-1 font-medium">{t.to.replace(/_/g, " ")}</p>
+          </CardBody>
+        </Card>
+        <Card>
+          <CardBody>
+            <p className="text-sm text-muted-foreground">Date</p>
+            <p className="mt-1 font-medium">{formatLagosDateTime(t.transferredAt)}</p>
+          </CardBody>
+        </Card>
+        <Card>
+          <CardBody>
+            <p className="text-sm text-muted-foreground">Reason</p>
+            <p className="mt-1 font-medium">{t.reason ?? "—"}</p>
+          </CardBody>
+        </Card>
       </div>
 
-      {transfer.isPending ? (
-        <ListLoading />
-      ) : transfer.isError ? (
-        <ListError
-          message={transfer.error.message || "Transfer could not be loaded."}
-          retry={() => void transfer.refetch()}
-        />
-      ) : !transfer.data ? (
-        <ListEmpty message="Transfer not found." />
-      ) : (
-        <div className="space-y-6">
-          <section className="grid gap-4 rounded-lg border border-border bg-card p-4 sm:grid-cols-2 sm:p-5 lg:grid-cols-5">
-            <div>
-              <p className="text-xs text-muted-foreground">Reference</p>
-              <p className="mt-1 font-medium">
-                {transfer.data.reference ?? "—"}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">From</p>
-              <p className="mt-1 font-medium">
-                {transfer.data.from.replace(/_/g, " ")}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">To</p>
-              <p className="mt-1 font-medium">
-                {transfer.data.to.replace(/_/g, " ")}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Date</p>
-              <p className="mt-1 font-medium">
-                {formatLagosDateTime(transfer.data.transferredAt)}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Reason</p>
-              <p className="mt-1 font-medium">{transfer.data.reason ?? "—"}</p>
-            </div>
-          </section>
-
-          <section className="rounded-lg border border-border bg-card p-4 sm:p-5">
-            <h2 className="mb-3 text-sm font-semibold">Items transferred</h2>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-border text-xs text-muted-foreground">
-                    <th className="py-2 pr-4 font-medium">Product</th>
-                    <th className="py-2 pr-4 font-medium">Quantity</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {transfer.data.lines.map((line) => {
-                    const unitsPerPack = unitsPerPackById.get(line.productId);
-                    const packName = packNameById.get(line.productId);
-                    return (
-                      <tr key={line.id} className="border-b border-border/60">
-                        <td className="py-2 pr-4 font-medium">
-                          {line.productName}
-                        </td>
-                        <td className="py-2 pr-4">
-                          {unitsPerPack && packName
-                            ? formatStockUnits(
-                                line.quantityUnits,
-                                unitsPerPack,
-                                packName,
-                              )
-                            : `${line.quantityUnits} units`}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </div>
-      )}
+      <Card>
+        <CardHeader title="Items transferred" />
+        <CardBody>
+          <ResponsiveTable
+            rows={t.lines}
+            columns={lineColumns}
+            getKey={(line) => line.id}
+          />
+        </CardBody>
+      </Card>
     </div>
   );
 }

@@ -2,22 +2,24 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { ArrowLeftRight, Plus } from "lucide-react";
 import Link from "next/link";
-import {
-  formatLagosDate,
-  formatNaira,
-  getLagosBusinessDate,
-} from "@fabtyna/shared";
+import { formatLagosDate, getLagosBusinessDate } from "@fabtyna/shared";
 import { DateFilter } from "@/components/date-filter";
 import { InfoHint } from "@/components/info-hint";
-import { ListEmpty, ListError, ListLoading } from "@/components/list-feedback";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { stockApi, transfersApi } from "@/lib/api";
+import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import type { StockTransferDto } from "@fabtyna/shared";
 
@@ -48,6 +50,11 @@ export default function TransfersPage() {
           new Date(a.transferredAt).getTime(),
       );
   }, [transfers.data, filterDate]);
+
+  const totalWorth = (stock.data ?? []).reduce(
+    (sum, row) => sum + BigInt(row.worthAtCostKobo),
+    0n,
+  );
 
   const columns: ResponsiveTableColumn<StockTransferDto>[] = [
     {
@@ -90,41 +97,33 @@ export default function TransfersPage() {
     },
   ];
 
-  const totalWorth =
-    stock.data?.reduce((sum, row) => sum + BigInt(row.worthAtCostKobo), 0n) ??
-    0n;
-
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Transfers</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+      <PageHeader
+        title="Transfers"
+        description={
+          <>
             Move stock between locations. Current stock value at cost{" "}
             <InfoHint label="Explain current stock value at cost">
               This is the purchase-cost value of all stock currently on hand
               across locations. A transfer only changes where the stock sits,
               not the total stock value by itself.
             </InfoHint>
-            :{" "}
-            <span className="font-medium">
-              {formatNaira(totalWorth.toString())}
-            </span>
-          </p>
-        </div>
-        <Link
-          href="/transfers/new"
-          className="inline-flex min-h-12 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90"
-        >
-          <Plus aria-hidden="true" className="h-4 w-4" />
-          New transfer
-        </Link>
-      </div>
+            : <Money kobo={totalWorth} tone="neutral" />
+          </>
+        }
+        actions={
+          <Link href="/transfers/new" className={buttonClasses({ size: "md" })}>
+            <Plus aria-hidden="true" className="h-4 w-4" />
+            New transfer
+          </Link>
+        }
+      />
 
-      <section className="space-y-4 rounded-lg border border-border bg-card p-4 sm:p-5">
+      <section className="space-y-4 rounded-md border border-border bg-card p-4 sm:p-5">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <DateFilter
-            id="f-date"
+            id="transfers-date"
             value={filterDate}
             onChange={setFilterDate}
             max={businessDate}
@@ -132,16 +131,44 @@ export default function TransfersPage() {
         </div>
 
         {transfers.isPending ? (
-          <ListLoading />
+          <Skeleton variant="row" count={6} />
         ) : transfers.isError ? (
-          <ListError
-            message={
-              transfers.error.message || "Transfers could not be loaded."
-            }
-            retry={() => void transfers.refetch()}
+          <ErrorState
+            title="Transfers could not be loaded"
+            message={toUserMessage(transfers.error)}
+            onRetry={() => void transfers.refetch()}
           />
         ) : rows.length === 0 ? (
-          <ListEmpty message="No transfers match these filters." />
+          filterDate !== "" ? (
+            <EmptyState
+              title="No transfers match these filters"
+              description="Try clearing the date filter."
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setFilterDate("")}
+                >
+                  Clear filter
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              icon={ArrowLeftRight}
+              title="No transfers yet"
+              description="Move stock between the warehouse, shelf and market to keep counts accurate."
+              action={
+                <Link
+                  href="/transfers/new"
+                  className={buttonClasses({ variant: "secondary", size: "sm" })}
+                >
+                  <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+                  New transfer
+                </Link>
+              }
+            />
+          )
         ) : (
           <ResponsiveTable
             rows={rows}

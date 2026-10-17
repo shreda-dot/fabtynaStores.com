@@ -8,6 +8,7 @@ import {
   EXPECTED_FOREIGN_KEYS,
   EXPECTED_MIGRATIONS,
   EXPECTED_PARTIAL_INDEXES,
+  EXPECTED_TABLES,
   EXPECTED_TRIGGERS,
 } from "./expected-schema.js";
 
@@ -16,8 +17,9 @@ import {
  *
  * It answers three questions and nothing else — it is strictly read-only:
  *   1. Has every migration on disk been applied, finished, and left untouched?
- *   2. Does every CHECK constraint, trigger and partial index we expect exist?
- *   3. Are there none we did not expect of those same three kinds?
+ *   2. Does every table, CHECK constraint, trigger and partial index we expect
+ *      exist?
+ *   3. Are there none we did not expect of those same four kinds?
  *
  * It never prints or returns the connection string; callers only ever see the
  * database name and host.
@@ -28,6 +30,7 @@ const MIGRATIONS_DIR = fileURLToPath(new URL("../../prisma/migrations", import.m
 export type VerifyKind =
   | "migration"
   | "checksum"
+  | "table"
   | "check constraint"
   | "trigger"
   | "partial index"
@@ -57,6 +60,7 @@ export interface VerifyResult {
   migrationHistory: MigrationHistoryEntry[];
   found: {
     migrations: string[];
+    tables: string[];
     checkConstraints: string[];
     triggers: string[];
     partialIndexes: string[];
@@ -141,11 +145,21 @@ export async function runDbVerify(connectionString: string): Promise<VerifyResul
         ORDER BY conname`,
     );
 
+    const tableRows = await client.query<{ relname: string }>(
+      `SELECT c.relname
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind = 'r'
+          AND n.nspname = 'public'
+        ORDER BY c.relname`,
+    );
+
     const appliedMigrations = migrationRows.rows.map((row) => row.migration_name);
     const foundCheckConstraints = checkRows.rows.map((row) => row.conname);
     const foundTriggers = triggerRows.rows.map((row) => row.tgname);
     const foundPartialIndexes = indexRows.rows.map((row) => row.indexname);
     const foundForeignKeys = foreignKeyRows.rows.map((row) => row.conname);
+    const foundTables = tableRows.rows.map((row) => row.relname);
 
     const items: VerifyItem[] = [];
 
@@ -228,6 +242,18 @@ export async function runDbVerify(connectionString: string): Promise<VerifyResul
       );
     }
 
+    // Hand-written tables are checked one-directionally for the same reason:
+    // every table the Prisma schema declares would otherwise be an unexpected
+    // name. Only the names listed here are pinned.
+    const foundTableSet = new Set(foundTables);
+    for (const name of EXPECTED_TABLES) {
+      items.push(
+        foundTableSet.has(name)
+          ? { kind: "table", name, ok: true }
+          : { kind: "table", name, ok: false, detail: "missing from the database" },
+      );
+    }
+
     const failures = items.filter((item) => !item.ok);
 
     const migrationHistory: MigrationHistoryEntry[] = migrationRows.rows.map((row) => ({
@@ -244,6 +270,7 @@ export async function runDbVerify(connectionString: string): Promise<VerifyResul
       migrationHistory,
       found: {
         migrations: appliedMigrations,
+        tables: foundTables,
         checkConstraints: foundCheckConstraints,
         triggers: foundTriggers,
         partialIndexes: foundPartialIndexes,

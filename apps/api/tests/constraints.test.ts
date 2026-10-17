@@ -106,6 +106,38 @@ async function insertPurchase(
   );
 }
 
+async function seedLoan(c: Client): Promise<string> {
+  const id = nextId("ct_loan");
+  await c.query(
+    `INSERT INTO loans (id, "lenderName", "principalKobo", "agreedInterestKobo", "disbursedAt")
+     VALUES ($1, $2, $3::bigint, $4::bigint, now())`,
+    [id, "Constraint Test Lender", "100000", "10000"],
+  );
+  return id;
+}
+
+async function seedLoanRepayment(c: Client, loanId: string): Promise<string> {
+  const id = nextId("ct_repayment");
+  await c.query(
+    `INSERT INTO loan_repayments (id, "loanId", "amountKobo", "interestPortionKobo", "paidAt")
+     VALUES ($1, $2, $3::bigint, $4::bigint, now())`,
+    [id, loanId, "20000", "10000"],
+  );
+  return id;
+}
+
+async function insertExpense(
+  c: Client,
+  expense: { category: string; loanRepaymentId: string | null },
+): Promise<void> {
+  await c.query(
+    `INSERT INTO expenses
+       (id, channel, category, description, "amountKobo", "expenseDate", "loanRepaymentId", "updatedAt")
+     VALUES ($1, 'BOTH', $2::"ExpenseCategory", 'Constraint Test Expense', $3::bigint, now(), $4, now())`,
+    [nextId("ct_expense"), expense.category, "1000", expense.loanRepaymentId],
+  );
+}
+
 beforeAll(async () => {
   client = new Client({ connectionString, ssl: { rejectUnauthorized: false } });
   await client.connect();
@@ -273,6 +305,111 @@ describe("ck_purchases_unpaid_requires_supplier", () => {
 
       const { rows } = await c.query(`select count(*)::int as n from purchases`);
       expect(rows[0].n).toBe(1);
+    });
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * STEP 1 — the loan-repayment to expense link is one-directional
+ *
+ * `loan_repayments.expenseId` and `fk_loan_repayments_expense` no longer
+ * exist (migration `20261017060000`). A repayment's expense is now reached
+ * through the reverse relation `expenses.loanRepaymentId`, which is unique
+ * (index `expenses_loanRepaymentId_key`) and referenced by
+ * `fk_expenses_loan_repayment`. These tests prove the column/FK are gone, that
+ * a second expense for one repayment is rejected by the unique index, and that
+ * `trg_expenses_loan_link` still enforces the LOAN_INTEREST category.
+ * ------------------------------------------------------------------ */
+describe("loan-repayment to expense link (one-directional)", () => {
+  it("removed loan_repayments.expenseId and fk_loan_repayments_expense", async () => {
+    const { rows: cols } = await client.query(
+      `select 1
+         from information_schema.columns
+        where table_name = 'loan_repayments'
+          and column_name = 'expenseId'`,
+    );
+    expect(cols).toHaveLength(0);
+
+    const { rows: fks } = await client.query(
+      `select 1 from pg_constraint where conname = 'fk_loan_repayments_expense'`,
+    );
+    expect(fks).toHaveLength(0);
+  });
+
+  it("keeps fk_expenses_loan_repayment and the unique index on expenses.loanRepaymentId", async () => {
+    const { rows: fks } = await client.query(
+      `select 1
+         from pg_constraint
+        where conrelid = 'expenses'::regclass
+          and conname = 'fk_expenses_loan_repayment'`,
+    );
+    expect(fks).toHaveLength(1);
+
+    const { rows: idx } = await client.query(
+      `select 1
+         from pg_indexes
+        where tablename = 'expenses'
+          and indexname = 'expenses_loanRepaymentId_key'`,
+    );
+    expect(idx).toHaveLength(1);
+  });
+
+  it("ACCEPTS a LOAN_INTEREST expense that references a repayment", async () => {
+    await inRollback(async (c) => {
+      const loanId = await seedLoan(c);
+      const repaymentId = await seedLoanRepayment(c, loanId);
+      await insertExpense(c, {
+        category: "LOAN_INTEREST",
+        loanRepaymentId: repaymentId,
+      });
+
+      const { rows } = await c.query(
+        `select count(*)::int as n from expenses where "loanRepaymentId" = $1`,
+        [repaymentId],
+      );
+      expect(rows[0].n).toBe(1);
+    });
+  });
+
+  it("REJECTS a second expense pointing at the same repayment (unique index)", async () => {
+    await expect(
+      inRollback(async (c) => {
+        const loanId = await seedLoan(c);
+        const repaymentId = await seedLoanRepayment(c, loanId);
+        await insertExpense(c, {
+          category: "LOAN_INTEREST",
+          loanRepaymentId: repaymentId,
+        });
+        // Same repayment again — the unique index must reject it.
+        await insertExpense(c, {
+          category: "LOAN_INTEREST",
+          loanRepaymentId: repaymentId,
+        });
+      }),
+    ).rejects.toMatchObject({
+      code: "23505",
+      constraint: "expenses_loanRepaymentId_key",
+    });
+  });
+
+  it("REJECTS a linked expense whose category is not LOAN_INTEREST (trg_expenses_loan_link)", async () => {
+    await expect(
+      inRollback(async (c) => {
+        const loanId = await seedLoan(c);
+        const repaymentId = await seedLoanRepayment(c, loanId);
+        await insertExpense(c, { category: "RENT", loanRepaymentId: repaymentId });
+      }),
+    ).rejects.toMatchObject({ code: "P0001" });
+  });
+
+  it("ACCEPTS a manual LOAN_INTEREST expense with no repayment", async () => {
+    await inRollback(async (c) => {
+      await insertExpense(c, { category: "LOAN_INTEREST", loanRepaymentId: null });
+
+      const { rows } = await c.query(
+        `select count(*)::int as n from expenses where "loanRepaymentId" is null`,
+      );
+      expect(rows[0].n).toBeGreaterThanOrEqual(1);
     });
   });
 });

@@ -91,7 +91,12 @@ export const createPurchaseLineDtoSchema = z
   .object({
     productId: idSchema,
     unit: unitSchema,
-    quantity: z.number().int().positive(),
+    /**
+     * Fractional for PACK lines, so a wholesale purchase can be recorded as
+     * half a crate (0.5 x 24 = 12 units). A UNIT line must resolve to whole
+     * units; `receivePurchase` enforces that in scaled integer arithmetic.
+     */
+    quantity: z.number().positive(),
     lineTotalKobo: nonnegativeKoboStringSchema,
   })
   .strict();

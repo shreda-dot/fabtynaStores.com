@@ -68,7 +68,6 @@ export const loanRepaymentDtoSchema = z
     loanId: idSchema,
     amountKobo: positiveKoboStringSchema,
     interestPortionKobo: nonnegativeKoboStringSchema,
-    expenseId: idSchema.nullable(),
     note: z.string().nullable(),
     paidAt: isoDateTimeSchema,
     createdAt: isoDateTimeSchema,

@@ -108,10 +108,17 @@ export default function NewPurchasePage() {
   function lineTotalKobo(line: PurchaseLineDraft): bigint {
     const qty = Number(line.quantity);
     const price = line.pricePerUnitKobo;
-    if (!Number.isSafeInteger(qty) || qty <= 0 || !/^[0-9]+$/.test(price)) {
+    if (!Number.isFinite(qty) || qty <= 0 || !/^[0-9]+$/.test(price)) {
       return 0n;
     }
-    return BigInt(qty) * BigInt(price);
+    const priceKobo = BigInt(price);
+    // A UNIT line is always whole units. A PACK line may be fractional (half a
+    // crate), so the money is rounded once, half-up, the way the domain does.
+    if (line.unit === "UNIT") {
+      if (!Number.isInteger(qty)) return 0n;
+      return BigInt(qty) * priceKobo;
+    }
+    return BigInt(Math.round(qty * Number(priceKobo)));
   }
 
   const totalKobo = lines.reduce((sum, line) => sum + lineTotalKobo(line), 0n);
@@ -197,11 +204,20 @@ export default function NewPurchasePage() {
     }
 
     const qty = Number(line.quantity);
-    if (line.quantity.trim() === "" || !Number.isSafeInteger(qty) || qty <= 0) {
+    if (line.quantity.trim() === "" || !Number.isFinite(qty) || qty <= 0) {
       found[`line-${line.id}-qty`] =
         line.unit === "PACK"
-          ? "Enter a whole number of packs (1 or more)."
-          : "Enter a whole number of units (1 or more).";
+          ? "Enter a quantity of packs greater than 0."
+          : "Enter a quantity of units greater than 0.";
+    } else if (line.unit === "UNIT" && !Number.isInteger(qty)) {
+      found[`line-${line.id}-qty`] =
+        "Unit quantities must be whole numbers.";
+    } else if (line.unit === "PACK") {
+      const totalUnits = qty * product.unitsPerPack;
+      if (!Number.isSafeInteger(totalUnits) || totalUnits <= 0) {
+        found[`line-${line.id}-qty`] =
+          `Quantity must add up to whole units (1 pack = ${product.unitsPerPack} units).`;
+      }
     }
 
     if (!/^[0-9]+$/.test(line.pricePerUnitKobo)) {
@@ -631,15 +647,20 @@ export default function NewPurchasePage() {
                     </FormField>
                     <FormField
                       id={`line-${line.id}-qty`}
-                      label="Quantity"
+                      label={`Quantity (${line.unit === "PACK" ? "crates" : "units"})`}
                       error={errors[`line-${line.id}-qty`]}
+                      hint={
+                        Number.isFinite(quantityUnits) && quantityUnits > 0
+                          ? `${quantityUnits} units`
+                          : undefined
+                      }
                     >
                       <Input
                         id={`line-${line.id}-qty`}
                         type="number"
-                        inputMode="numeric"
-                        min={1}
-                        step={1}
+                        inputMode="decimal"
+                        min={line.unit === "PACK" ? 0.01 : 1}
+                        step={line.unit === "PACK" ? "any" : 1}
                         value={line.quantity}
                         aria-invalid={
                           errors[`line-${line.id}-qty`] !== undefined
@@ -647,7 +668,11 @@ export default function NewPurchasePage() {
                         onChange={(event) =>
                           updateLine(line.id, { quantity: event.target.value })
                         }
-                        placeholder="e.g. 2"
+                        placeholder={
+                          line.unit === "PACK"
+                            ? "e.g. 0.5, 0.75, 2"
+                            : "e.g. 6"
+                        }
                       />
                     </FormField>
                     <MoneyInput

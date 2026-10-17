@@ -40,6 +40,38 @@ function roundHalfUp(numerator: bigint, denominator: bigint): bigint {
   return (numerator + denominator / 2n) / denominator;
 }
 
+/**
+ * Decimal places kept on a line quantity. Matches `NUMERIC(12, 4)` in
+ * `sale_lines.quantity` / `purchase_lines.quantity`.
+ */
+const QUANTITY_SCALE = 4;
+const QUANTITY_SCALE_FACTOR = 10n ** BigInt(QUANTITY_SCALE);
+
+/**
+ * Turns a line quantity into an exact scaled integer (scale 4) so that
+ * fractional quantities — a wholesale customer buying half a crate — can be
+ * converted to base units and to money without ever multiplying two floats.
+ */
+function toScaledQuantity(quantity: number): bigint {
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new RangeError("Line quantity must be a positive number.");
+  }
+  const text = quantity.toString();
+  if (text.includes("e") || text.includes("E")) {
+    throw new RangeError("Line quantity must not use exponent notation.");
+  }
+  const [wholePart, fractionPart = ""] = text.split(".");
+  if (fractionPart.length > QUANTITY_SCALE) {
+    throw new RangeError(
+      `Line quantity must not have more than ${QUANTITY_SCALE} decimal places.`,
+    );
+  }
+  return (
+    BigInt(wholePart) * QUANTITY_SCALE_FACTOR +
+    BigInt(fractionPart.padEnd(QUANTITY_SCALE, "0"))
+  );
+}
+
 export type IdGenerator = () => string;
 
 export interface ReceivePurchaseLineInput {
@@ -111,18 +143,30 @@ export function receivePurchase(
     if (!product) {
       throw new RangeError(`Product '${line.productId}' not found.`);
     }
-    if (!Number.isSafeInteger(line.quantity) || line.quantity <= 0) {
-      throw new RangeError("Purchase line quantity must be a positive safe integer.");
-    }
     if (line.lineTotalKobo < 0n) {
       throw new RangeError("Purchase line total must not be negative.");
     }
 
     const unitsPerPackSnapshot = product.unitsPerPack;
-    const quantityUnits =
+    // A PACK line may be fractional (half a crate), so the conversion to base
+    // units is done in scaled integers — never by multiplying two floats —
+    // exactly as `recordSale` does for the sales side.
+    const scaledQuantity = toScaledQuantity(line.quantity);
+    const scaledUnits =
       line.unit === "UNIT"
-        ? line.quantity
-        : line.quantity * unitsPerPackSnapshot;
+        ? scaledQuantity
+        : scaledQuantity * BigInt(unitsPerPackSnapshot);
+
+    if (scaledUnits % QUANTITY_SCALE_FACTOR !== 0n) {
+      throw new RangeError(
+        "Purchase line quantity must result in a positive whole number of units.",
+      );
+    }
+
+    const quantityUnits = Number(scaledUnits / QUANTITY_SCALE_FACTOR);
+    if (!Number.isSafeInteger(quantityUnits) || quantityUnits <= 0) {
+      throw new RangeError("Purchase line quantity must be a positive whole number of units.");
+    }
 
     const unitCostKobo = roundHalfUp(line.lineTotalKobo, BigInt(quantityUnits));
 
@@ -782,21 +826,31 @@ export function recordSale(
     }
 
     const unitsPerPackSnapshot = product.unitsPerPack;
-    const quantityUnits =
+    const scaledQuantity = toScaledQuantity(line.quantity);
+    const scaledUnits =
       line.unit === "UNIT"
-        ? line.quantity
-        : line.quantity * unitsPerPackSnapshot;
+        ? scaledQuantity
+        : scaledQuantity * BigInt(unitsPerPackSnapshot);
 
+    if (scaledUnits % QUANTITY_SCALE_FACTOR !== 0n) {
+      throw new RangeError(
+        "Sale line quantity must result in a positive whole number of units.",
+      );
+    }
+
+    const quantityUnits = Number(scaledUnits / QUANTITY_SCALE_FACTOR);
     if (!Number.isSafeInteger(quantityUnits) || quantityUnits <= 0) {
       throw new RangeError(
         "Sale line quantity must result in a positive whole number of units.",
       );
     }
 
-    const lineTotalKobo =
-      line.unit === "UNIT"
-        ? BigInt(line.quantity) * line.unitPriceKobo
-        : BigInt(Math.round(line.quantity * Number(line.unitPriceKobo)));
+    // Money is never multiplied as a float: the quantity is scaled to an
+    // integer first, so a fraction such as 1/2 of a 24-pack cannot drift.
+    const lineTotalKobo = roundHalfUp(
+      scaledQuantity * line.unitPriceKobo,
+      QUANTITY_SCALE_FACTOR,
+    );
 
     const currentAtLocation = existingMovements
       .filter(
@@ -927,6 +981,7 @@ export function voidSale(
   existingMovements: readonly StockMovement[],
   existingCustomerLedger: readonly CustomerLedgerEntry[],
   newId: IdGenerator,
+  existingSalePayments: readonly SalePayment[] = [],
 ): VoidSaleResult {
   if (!Number.isFinite(voidedAt.getTime())) {
     throw new RangeError("Void date must be valid.");
@@ -938,6 +993,29 @@ export function voidSale(
   }
   if (sale.status === "VOIDED") {
     throw new RangeError("This sale has already been voided.");
+  }
+
+  // Payments are immutable and cannot be silently discarded by a void, so a
+  // debtor sale is blocked here: voiding it would reverse the SALE ledger entry
+  // and leave the later payment stranded, turning the customer's balance from
+  // zero into a credit with nothing to apply it to. A cash sale also has a
+  // payment row, but it wrote no on-account ledger entry, so there is nothing
+  // for the void to duplicate and it stays voidable. This mirrors the database
+  // trigger `trg_sale_void_guard` (migration `20261017092000_sale_void_guard`),
+  // including its exact predicate, so the domain and the database agree.
+  const salePaymentIds = new Set(
+    existingSalePayments.filter((p) => p.saleId === saleId).map((p) => p.id),
+  );
+  const hasOnAccountPayment = existingCustomerLedger.some(
+    (e) =>
+      e.type === "PAYMENT" &&
+      e.salePaymentId !== null &&
+      salePaymentIds.has(e.salePaymentId),
+  );
+  if (hasOnAccountPayment) {
+    throw new RangeError(
+      "This sale has an on-account payment recorded and cannot be voided. Reverse the payment instead of voiding the sale.",
+    );
   }
 
   const lines = existingSaleLines.filter((l) => l.saleId === saleId);
@@ -1058,7 +1136,10 @@ export function recordSalePayment(
       customerId: sale.customerId,
       type: "PAYMENT",
       amountKobo: -input.amountKobo,
-      saleId: sale.id,
+      // Deliberately null: `ux_customer_ledger_sale_active` allows only one
+      // live entry per sale, and the SALE entry already holds it. The payment
+      // is attributed through `salePaymentId` instead.
+      saleId: null,
       salePaymentId: salePayment.id,
       customerPaymentId: null,
       saleReturnId: null,

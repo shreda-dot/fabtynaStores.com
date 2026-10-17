@@ -7,7 +7,7 @@
  * are created empty, and new fields are back-filled only when absent.
  */
 
-export const MOCK_STORE_CURRENT_VERSION = 5;
+export const MOCK_STORE_CURRENT_VERSION = 6;
 
 type PersistedShape = Record<string, unknown>;
 
@@ -106,6 +106,19 @@ export function migrateMockStoreData(
       loanRepaymentId:
         expense.loanRepaymentId === undefined ? null : expense.loanRepaymentId,
     };
+  });
+
+  // v5 -> v6: the loan-repayment -> expense link became one-directional, so
+  // `loanRepayments[].expenseId` no longer exists in the DTO. Saved payloads
+  // still carry it; drop only that key so a round-trip through the now-strict
+  // `loanRepaymentDtoSchema` keeps parsing. No rows are dropped and no other
+  // key is touched.
+  next.loanRepayments = asArray(next.loanRepayments).map((row) => {
+    const repayment = asRecord(row);
+    if (repayment === null || !("expenseId" in repayment)) return row;
+    const rest = { ...repayment };
+    delete rest.expenseId;
+    return rest;
   });
 
   return { version: MOCK_STORE_CURRENT_VERSION, data: next };

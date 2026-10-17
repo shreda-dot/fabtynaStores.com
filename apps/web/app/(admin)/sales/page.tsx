@@ -354,7 +354,7 @@ function SalesContent() {
       )}
 
       <section className="space-y-4 rounded-md border border-border bg-card p-4 sm:p-5">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           <FormField id="sales-search" label="Search">
             <div className="flex min-h-11 items-center gap-2 rounded-md border border-input bg-surface px-3 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring">
               <Search

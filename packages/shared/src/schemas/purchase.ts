@@ -15,7 +15,8 @@ export const purchaseLineDtoSchema = z
     purchaseId: idSchema,
     productId: idSchema,
     unit: unitSchema,
-    quantity: z.number().int().positive(),
+    // Fractional for PACK lines (half a crate) — see `createPurchaseLineDtoSchema`.
+    quantity: z.number().positive(),
     unitsPerPackSnapshot: z.number().int().positive(),
     quantityUnits: z.number().int().positive(),
     unitCostKobo: nonnegativeKoboStringSchema,

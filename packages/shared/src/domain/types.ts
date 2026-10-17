@@ -378,8 +378,6 @@ export interface LoanRepayment {
   amountKobo: bigint;
   /** Portion of `amountKobo` that is interest. Drives the linked expense. */
   interestPortionKobo: bigint;
-  /** Set when an interest expense was generated for this repayment. */
-  expenseId: string | null;
   note: string | null;
   paidAt: Date;
   createdAt: Date;

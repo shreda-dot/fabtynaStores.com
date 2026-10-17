@@ -35,13 +35,20 @@ function ratioBpsFloor(numerator: bigint, denominator: bigint): number {
  * Derived statuses (never stored)
  * ------------------------------------------------------------------ */
 
-export function purchaseBalanceKobo(purchase: Purchase): bigint {
+// These three read only a handful of fields, and list rows (`PurchaseListItemDto`
+// = `PurchaseDto` + `supplierName` + `lineCount`) carry extra projection keys.
+// Taking the exact fields they use keeps a list page from having to build a
+// whole `Purchase` just to ask about its balance.
+type PurchaseTotals = Pick<Purchase, "totalKobo" | "paidKobo">;
+type PurchaseStatusFields = PurchaseTotals & Pick<Purchase, "dueDate" | "status">;
+
+export function purchaseBalanceKobo(purchase: PurchaseTotals): bigint {
   const balance = purchase.totalKobo - purchase.paidKobo;
   return balance > 0n ? balance : 0n;
 }
 
 export function purchasePaymentStatus(
-  purchase: Purchase,
+  purchase: PurchaseTotals,
 ): PurchasePaymentStatus {
   if (purchase.paidKobo <= 0n) return "UNPAID";
   if (purchase.paidKobo >= purchase.totalKobo) return "PAID";
@@ -49,7 +56,7 @@ export function purchasePaymentStatus(
 }
 
 export function isPurchaseOverdue(
-  purchase: Purchase,
+  purchase: PurchaseStatusFields,
   todayLagosDate: string,
 ): boolean {
   return (

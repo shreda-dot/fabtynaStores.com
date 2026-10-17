@@ -6,7 +6,6 @@ import { Plus } from "lucide-react";
 import Link from "next/link";
 import {
   formatLagosDate,
-  fromPurchaseDto,
   getLagosBusinessDate,
   isPurchaseOverdue,
   purchaseBalanceKobo,
@@ -27,6 +26,20 @@ import { purchasesApi } from "@/lib/api";
 import type { PurchaseListItemDto } from "@/lib/api/purchases.api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+
+/**
+ * List rows are `PurchaseDto` plus the `supplierName` / `lineCount` projection
+ * keys, so the strict `fromPurchaseDto` conversion cannot be used here. The
+ * status helpers only need the fields below, converted to their domain types.
+ */
+function purchaseStatusFields(purchase: PurchaseListItemDto) {
+  return {
+    totalKobo: BigInt(purchase.totalKobo),
+    paidKobo: BigInt(purchase.paidKobo),
+    dueDate: purchase.dueDate,
+    status: purchase.status,
+  };
+}
 
 export default function PurchasesPage() {
   const [filterDate, setFilterDate] = useState("");
@@ -91,7 +104,7 @@ export default function PurchasesPage() {
       header: "Balance",
       align: "right",
       render: (purchase) => {
-        const balance = purchaseBalanceKobo(fromPurchaseDto(purchase));
+        const balance = purchaseBalanceKobo(purchaseStatusFields(purchase));
         return balance > 0n ? (
           <Money kobo={balance} />
         ) : (
@@ -104,7 +117,7 @@ export default function PurchasesPage() {
     {
       header: "Payment",
       render: (purchase) => {
-        const model = fromPurchaseDto(purchase);
+        const model = purchaseStatusFields(purchase);
         if (purchase.status === "VOIDED") {
           return <Badge tone="neutral">—</Badge>;
         }

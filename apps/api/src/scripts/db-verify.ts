@@ -81,6 +81,7 @@ function report(result: VerifyResult, source: string): void {
   const kinds: Array<{ label: string; kind: VerifyResult["items"][number]["kind"] }> = [
     { label: "Migrations", kind: "migration" },
     { label: "Migration file checksums", kind: "checksum" },
+    { label: "Hand-written tables", kind: "table" },
     { label: "CHECK constraints", kind: "check constraint" },
     { label: "Triggers", kind: "trigger" },
     { label: "Partial indexes", kind: "partial index" },
@@ -111,6 +112,7 @@ function report(result: VerifyResult, source: string): void {
 
   console.log("Inventory");
   console.log(`  applied migrations : ${found.migrations.length} (${found.migrations.join(", ")})`);
+  console.log(`  tables (all)       : ${found.tables.length}`);
   console.log(`  CHECK constraints  : ${found.checkConstraints.length}`);
   console.log(`    ${found.checkConstraints.join("\n    ")}`);
   console.log(`  triggers           : ${found.triggers.length}`);

@@ -185,6 +185,7 @@ export const salesMockApi: SalesApi = {
         draft.stockMovements,
         draft.customerLedgerEntries,
         newId,
+        draft.salePayments,
       );
       original.status = "VOIDED";
       original.updatedAt = amendedAt;
@@ -252,6 +253,7 @@ export const salesMockApi: SalesApi = {
         draft.stockMovements,
         draft.customerLedgerEntries,
         newId,
+        draft.salePayments,
       );
 
       const sale = draft.sales.find((s) => s.id === id);

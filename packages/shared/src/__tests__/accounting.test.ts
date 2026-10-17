@@ -206,6 +206,72 @@ describe("receivePurchase with supplier credit", () => {
       ),
     ).toThrow("supplier is required");
   });
+
+  it("accepts a fractional PACK quantity (half a crate)", () => {
+    // unitsPerPack defaults to 12 in makeProduct, so 0.5 packs is 6 units.
+    const product = makeProduct({ id: "p1" });
+    const result = receivePurchase(
+      {
+        supplierId: "s1",
+        createdById: "admin",
+        location: "WAREHOUSE",
+        purchasedAt: baseDate,
+        notes: null,
+        reference: null,
+        lines: [{ productId: "p1", unit: "PACK", quantity: 0.5, lineTotalKobo: 6000n }],
+      },
+      [product],
+      [],
+      newId,
+    );
+
+    expect(result.purchaseLines[0]!.quantity).toBe(0.5);
+    expect(result.purchaseLines[0]!.quantityUnits).toBe(6);
+    expect(result.purchaseLines[0]!.unitCostKobo).toBe(1000n);
+    expect(result.movements[0]!.quantityUnits).toBe(6);
+    expect(result.purchase.totalKobo).toBe(6000n);
+  });
+
+  it("rejects a PACK quantity that does not resolve to whole units", () => {
+    // 0.3 x 12 = 3.6 units: a fractional quantity of base units is impossible.
+    const product = makeProduct({ id: "p1" });
+    expect(() =>
+      receivePurchase(
+        {
+          supplierId: "s1",
+          createdById: "admin",
+          location: "WAREHOUSE",
+          purchasedAt: baseDate,
+          notes: null,
+          reference: null,
+          lines: [{ productId: "p1", unit: "PACK", quantity: 0.3, lineTotalKobo: 6000n }],
+        },
+        [product],
+        [],
+        newId,
+      ),
+    ).toThrow("whole number of units");
+  });
+
+  it("rejects a fractional UNIT quantity", () => {
+    const product = makeProduct({ id: "p1" });
+    expect(() =>
+      receivePurchase(
+        {
+          supplierId: "s1",
+          createdById: "admin",
+          location: "WAREHOUSE",
+          purchasedAt: baseDate,
+          notes: null,
+          reference: null,
+          lines: [{ productId: "p1", unit: "UNIT", quantity: 0.5, lineTotalKobo: 500n }],
+        },
+        [product],
+        [],
+        newId,
+      ),
+    ).toThrow("whole number of units");
+  });
 });
 
 describe("recordPurchasePayment", () => {
@@ -427,7 +493,7 @@ describe("loan charges, repayments and status", () => {
     ).toThrow("Interest portion may not exceed");
   });
 
-  it("creates a linked LOAN_INTEREST expense only for the interest portion", () => {
+  it("links a LOAN_INTEREST expense to the repayment for the interest portion only", () => {
     const { loan, ledgerEntries } = loanWithLedger();
     const withInterest = recordLoanRepayment(
       { loanId: loan.id, amountKobo: 20000n, interestPortionKobo: 10000n, paidAt: baseDate, note: null },
@@ -435,22 +501,37 @@ describe("loan charges, repayments and status", () => {
       ledgerEntries,
       newId,
     );
-    expect(withInterest.expense).not.toBeNull();
-    expect(withInterest.expense!.category).toBe("LOAN_INTEREST");
-    expect(withInterest.expense!.channel).toBe("BOTH");
-    expect(withInterest.expense!.amountKobo).toBe(10000n);
-    expect(withInterest.expense!.loanRepaymentId).toBe(withInterest.repayment.id);
-    expect(withInterest.repayment.expenseId).toBe(withInterest.expense!.id);
-    expect(withInterest.expense!.description).toContain("Bank");
-
     const principalOnly = recordLoanRepayment(
       { loanId: loan.id, amountKobo: 20000n, interestPortionKobo: 0n, paidAt: baseDate, note: null },
       [loan],
       ledgerEntries,
       newId,
     );
+
+    expect(withInterest.expense).not.toBeNull();
     expect(principalOnly.expense).toBeNull();
-    expect(principalOnly.repayment.expenseId).toBeNull();
+
+    // The link is one-directional now: `LoanRepayment` no longer stores an
+    // `expenseId`, so a repayment's expense is derived by matching
+    // `loanRepaymentId` on the expense itself.
+    const allExpenses = [withInterest.expense, principalOnly.expense];
+    const expensesFor = (repaymentId: string) =>
+      allExpenses.filter(
+        (e): e is NonNullable<typeof e> =>
+          e !== null && e.loanRepaymentId === repaymentId,
+      );
+
+    const linked = expensesFor(withInterest.repayment.id);
+    expect(linked).toHaveLength(1);
+    expect(linked[0]!.category).toBe("LOAN_INTEREST");
+    expect(linked[0]!.channel).toBe("BOTH");
+    expect(linked[0]!.amountKobo).toBe(
+      withInterest.repayment.interestPortionKobo,
+    );
+    expect(linked[0]!.description).toContain("Bank");
+
+    // A principal-only repayment has no expense referencing it.
+    expect(expensesFor(principalOnly.repayment.id)).toHaveLength(0);
   });
 
   it("derives ACTIVE / OVERDUE / PAID status", () => {
@@ -744,7 +825,7 @@ describe("migrateMockStoreData", () => {
 
     const result = migrateMockStoreData(3, v3);
     expect(result).not.toBeNull();
-    expect(result!.version).toBe(5);
+    expect(result!.version).toBe(6);
 
     const purchases = result!.data.purchases as Array<Record<string, unknown>>;
     // Legacy purchase with no paidKobo defaults to fully paid.
@@ -774,6 +855,36 @@ describe("migrateMockStoreData", () => {
     const once = migrateMockStoreData(5, current)!;
     const twice = migrateMockStoreData(5, once.data)!;
     expect(twice.data.purchases).toEqual(once.data.purchases);
+  });
+
+  it("drops the obsolete loanRepayments.expenseId without losing the row", () => {
+    // v5 payloads still carried the (now removed) back-reference.
+    const v5 = {
+      loanRepayments: [
+        {
+          id: "rep1",
+          loanId: "l1",
+          amountKobo: "5000",
+          interestPortionKobo: "1000",
+          expenseId: "exp1",
+          note: null,
+          paidAt: "2026-10-01T00:00:00.000Z",
+          createdAt: "2026-10-01T00:00:00.000Z",
+        },
+        { id: "rep2", amountKobo: "1", extra: "kept" },
+      ],
+    };
+
+    const result = migrateMockStoreData(5, v5);
+    expect(result).not.toBeNull();
+    expect(result!.version).toBe(6);
+
+    const repayments = result!.data.loanRepayments as Array<Record<string, unknown>>;
+    expect(repayments).toHaveLength(2);
+    expect(repayments[0]).not.toHaveProperty("expenseId");
+    expect(repayments[0]).toMatchObject({ id: "rep1", amountKobo: "5000" });
+    // A row without the key is returned untouched, keeping unknown keys.
+    expect(repayments[1]).toEqual({ id: "rep2", amountKobo: "1", extra: "kept" });
   });
 
   it("refuses a future version so the caller can reseed", () => {

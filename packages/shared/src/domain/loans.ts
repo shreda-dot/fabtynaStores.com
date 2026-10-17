@@ -174,12 +174,14 @@ export function recordLoanRepayment(
   const repaymentId = newId();
   const expenseId = input.interestPortionKobo > 0n ? newId() : null;
 
+  // The repayment no longer stores the expense; the expense is reached through
+  // its own `loanRepaymentId` (one-directional link). `expenseId` below is the
+  // NEW expense's own id, not a back-reference on the repayment.
   const repayment: LoanRepayment = {
     id: repaymentId,
     loanId: input.loanId,
     amountKobo: input.amountKobo,
     interestPortionKobo: input.interestPortionKobo,
-    expenseId,
     note: input.note,
     paidAt: input.paidAt,
     createdAt: input.paidAt,

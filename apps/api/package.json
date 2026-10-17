@@ -10,6 +10,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "db:verify": "tsx src/scripts/db-verify.ts",
+    "db:audit": "tsx src/scripts/db-audit.ts",
     "db:seed:admin": "tsx src/scripts/seed-admin.ts",
     "hash-password": "tsx src/scripts/hash-password.ts",
     "prisma:format": "prisma format",

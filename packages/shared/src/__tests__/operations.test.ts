@@ -665,7 +665,7 @@ describe("salesSummary", () => {
 
     const recorded = recordSale(
       {
-        customerId: null,
+        customerId: "c1",
         customerName: "Wholesale buyer",
         createdById: "admin",
         channel: "WHOLESALE",
@@ -700,6 +700,122 @@ describe("salesSummary", () => {
 
     expect(result.totals.totalSupposedRevenueKobo).toBe(20000n);
     expect(result.totals.totalStandardRevenueKobo).toBe(20000n);
+  });
+});
+
+describe("recordSale", () => {
+  function stockedProductAndMovements() {
+    const product = makeProduct({
+      id: "p1",
+      unitsPerPack: 24,
+      averageCostKobo: 0n,
+    });
+    const received = receivePurchase(
+      {
+        supplierId: "s1",
+        createdById: "admin",
+        location: "WAREHOUSE",
+        purchasedAt: baseDate,
+        notes: null,
+        reference: null,
+        lines: [
+          { productId: "p1", unit: "PACK", quantity: 1, lineTotalKobo: 24000n },
+        ],
+      },
+      [product],
+      [],
+      newId,
+    );
+    return {
+      product: {
+        ...product,
+        averageCostKobo: received.productUpdates[0].averageCostKobo,
+      },
+      movements: received.movements,
+    };
+  }
+
+  it("rejects an unpaid sale with no customer", () => {
+    const { product, movements } = stockedProductAndMovements();
+
+    expect(() =>
+      recordSale(
+        {
+          customerId: null,
+          customerName: "Walk-in buyer",
+          createdById: "admin",
+          channel: "RETAIL",
+          location: "WAREHOUSE",
+          soldAt: baseDate,
+          notes: null,
+          reference: null,
+          paidKobo: 0n,
+          lines: [
+            { productId: "p1", unit: "UNIT", quantity: 2, unitPriceKobo: 500n },
+          ],
+        },
+        [product],
+        movements,
+        newId,
+      ),
+    ).toThrow("A customer is required when a sale is not fully paid.");
+  });
+
+  it("records an unpaid sale when a customer is set and writes the ledger entry", () => {
+    const { product, movements } = stockedProductAndMovements();
+
+    const recorded = recordSale(
+      {
+        customerId: "c1",
+        customerName: null,
+        createdById: "admin",
+        channel: "RETAIL",
+        location: "WAREHOUSE",
+        soldAt: baseDate,
+        notes: null,
+        reference: null,
+        paidKobo: 200n,
+        lines: [
+          { productId: "p1", unit: "UNIT", quantity: 2, unitPriceKobo: 500n },
+        ],
+      },
+      [product],
+      movements,
+      newId,
+    );
+
+    expect(recorded.sale.status).toBe("COMPLETED");
+    expect(recorded.sale.totalKobo).toBe(1000n);
+    expect(recorded.customerLedgerEntry?.amountKobo).toBe(800n);
+    expect(recorded.customerLedgerEntry?.customerId).toBe("c1");
+  });
+
+  it("records a fully paid sale without a customer and writes no ledger entry", () => {
+    const { product, movements } = stockedProductAndMovements();
+
+    const recorded = recordSale(
+      {
+        customerId: null,
+        customerName: null,
+        createdById: "admin",
+        channel: "RETAIL",
+        location: "WAREHOUSE",
+        soldAt: baseDate,
+        notes: null,
+        reference: null,
+        paidKobo: 1000n,
+        lines: [
+          { productId: "p1", unit: "UNIT", quantity: 2, unitPriceKobo: 500n },
+        ],
+      },
+      [product],
+      movements,
+      newId,
+    );
+
+    expect(recorded.sale.status).toBe("COMPLETED");
+    expect(recorded.customerLedgerEntry).toBeNull();
+    expect(recorded.salePayment?.amountKobo).toBe(1000n);
   });
 });
 

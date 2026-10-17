@@ -15,3 +15,7 @@ apps/api/.claude/
 apps/api/.windsurf/
 apps/api/skills-lock.json
 docs/PROJECT_RULES.md
+.pnpm-store/
+.pnpm-cache/
+.pnpm-state/
+pnpm-state.json

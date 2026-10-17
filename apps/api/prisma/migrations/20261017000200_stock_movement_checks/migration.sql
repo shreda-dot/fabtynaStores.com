@@ -1,19 +1,20 @@
 -- =====================================================================
--- DRAFT — Stock movement source and sign CHECK constraints
+-- Stock movement source and sign CHECK constraints
 -- =====================================================================
--- source rule: exactly one source foreign key must be non-null.
---   (purchaseLineId, saleLineId, transferLegId, adjustmentLineId, returnLineId)
--- sign rule by type:
+-- Source rule: exactly one source foreign key must be non-null
+--   (purchaseLineId, saleLineId, transferLegId, adjustmentLineId, returnLineId).
+-- Sign rule by type:
 --   PURCHASE    -> quantityUnits > 0  (stock in)
 --   SALE        -> quantityUnits < 0  (stock out)
---   RETURN      -> quantityUnits > 0  (restocked; non-restock returns use a
---                                       negative ADJUSTMENT movement instead)
+--   RETURN      -> quantityUnits > 0  (restocked; a non-restock return is
+--                                      recorded as a negative ADJUSTMENT)
 --   ADJUSTMENT  -> quantityUnits <> 0 (either sign)
 --   TRANSFER    -> quantityUnits <> 0 (sign must match the owning leg's
---                                       direction; enforced by the trigger in
---                                       04_immutability_triggers.sql because a
---                                       CHECK cannot read the related leg row)
--- cost rule: unitCostKobo >= 0
+--                                      direction; a CHECK cannot read the
+--                                      related leg row, so that half is
+--                                      enforced by a trigger in
+--                                      `20261017000400_immutability_triggers`)
+-- Cost rule: unitCostKobo >= 0
 
 ALTER TABLE stock_movements
   ADD CONSTRAINT ck_stock_movement_single_source
@@ -30,11 +31,11 @@ ALTER TABLE stock_movements
 ALTER TABLE stock_movements
   ADD CONSTRAINT ck_stock_movement_quantity_sign
   CHECK (
-    (type = 'PURCHASE'   AND "quantityUnits" > 0)
-    OR (type = 'SALE'      AND "quantityUnits" < 0)
-    OR (type = 'RETURN'    AND "quantityUnits" > 0)
-    OR (type = 'ADJUSTMENT' AND "quantityUnits" <> 0)
-    OR (type = 'TRANSFER'   AND "quantityUnits" <> 0)
+    (type = 'PURCHASE'      AND "quantityUnits" > 0)
+    OR (type = 'SALE'          AND "quantityUnits" < 0)
+    OR (type = 'RETURN'        AND "quantityUnits" > 0)
+    OR (type = 'ADJUSTMENT'    AND "quantityUnits" <> 0)
+    OR (type = 'TRANSFER'      AND "quantityUnits" <> 0)
   );
 
 ALTER TABLE stock_movements

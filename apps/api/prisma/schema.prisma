@@ -1,16 +1,69 @@
+// Fabtyna Stores — canonical database schema.
+//
+// Source of truth for this schema is the running application, not the original
+// plan document: `packages/shared/src/domain/types.ts` (domain model) plus the
+// Zod DTOs in `packages/shared/src/schemas/**` and the 23 collections in
+// `apps/web/lib/api/mock-store.ts`.
+//
+// Conventions
+//   * All money is integer kobo (`BigInt`). DTOs expose them as integer strings.
+//   * All timestamps are `DateTime` (timestamptz). Business dates that the app
+//     stores as a `YYYY-MM-DD` string (a Lagos business date produced by
+//     `getLagosBusinessDate()`) are stored as `String` so they round-trip
+//     without a timezone shift.
+//   * Ledgers (stock movements, customer/supplier/account ledgers, loan ledger,
+//     payments, cash snapshots) are append-only. Corrections are new reversal
+//     rows linked through `reversesEntryId`.
+//   * Sign conventions, source exclusivity, reversal uniqueness, immutability,
+//     value sanity and the credit/lifecycle rules are enforced by hand-written
+//     SQL that lives *inside* the Prisma migration history
+//     (`apps/api/prisma/migrations/**`). Prisma cannot express CHECK
+//     constraints, partial unique indexes, triggers or status transitions, so
+//     those are authored by hand in the migration folders.
+//   * THE MIGRATIONS ARE THE SINGLE SOURCE OF TRUTH for the database. There is
+//     no `sql-drafts/` folder: every constraint, index and trigger that used to
+//     live there has been folded into a named migration. See
+//     `docs/backend-schema.md` for the full inventory.
+//
+// Deliberate additions beyond the current frontend model (see audit report):
+//   * `Account` / `AccountLedgerEntry` / `AccountType` and the `accountId`
+//     column on payments — retained by explicit decision.
+//   * Some ledger rows carry nullable source columns whose target entity is not
+//     modelled yet (`customerPaymentId`, `saleReturnId`, `customerRefundId`,
+//     `otherIncomeId`, `accountTransferId`, `returnLineId`). They are kept as
+//     plain nullable columns, without relations, so the persisted shape matches
+//     the shared DTOs.
+
 generator client {
   provider = "prisma-client"
   output   = "../generated/prisma"
 }
 
+// The connection string is deliberately NOT declared in this datasource block.
+// Prisma 7 resolves it per command: schema/migration commands read
+// `DIRECT_URL` from `prisma.config.ts` (direct Neon connection, bypassing the
+// pooler), while the runtime client gets the pooled `DATABASE_URL` through its
+// driver adapter (see `src/lib/prisma.ts`).
 datasource db {
   provider = "postgresql"
 }
+
+// =====================================================================
+// Enums — values mirror `packages/shared/src/domain/types.ts`
+// =====================================================================
 
 enum ProductCategory {
   BEER
   SOFT_DRINK
   OTHER
+}
+
+/// How a product may be sold. `BOTH` is valid on a product; a *sale* must be
+/// RETAIL or WHOLESALE only (enforced in the sales check constraint).
+enum SaleChannel {
+  RETAIL
+  WHOLESALE
+  BOTH
 }
 
 enum Unit {
@@ -49,10 +102,11 @@ enum SaleStatus {
   VOIDED
 }
 
+/// How money physically left/entered the business (app value set).
 enum PaymentMethod {
   CASH
-  BANK_TRANSFER
-  POS
+  TRANSFER
+  OTHER
 }
 
 enum CustomerType {
@@ -74,6 +128,7 @@ enum SupplierLedgerEntryType {
   ADJUSTMENT
 }
 
+/// Retained for the account subsystem. Not present in the frontend model yet.
 enum AccountType {
   CASH
   BANK
@@ -95,40 +150,89 @@ enum AccountEntryType {
   ADJUSTMENT
 }
 
-enum PaymentStatus {
-  COMPLETED
-  VOIDED
-}
-
 enum StockAdjustmentStatus {
   COMPLETED
   VOIDED
 }
 
-// All money fields are integer kobo. Convert to naira only for display.
-// Customer ledger amounts are signed: SALE +, PAYMENT -, RETURN -,
-// CUSTOMER_REFUND +. A customer refund increases the customer's balance owed.
-// Supplier ledger amounts are signed: PURCHASE +, PAYMENT -.
-// Account ledger amounts are signed: money in +, money out -, including
-// CUSTOMER_REFUND as money out.
-//
-// Partial unique indexes, sign/source CHECK constraints, and immutable-ledger
-// triggers are intentionally installed by hand-written SQL migrations. No
-// migration is created or applied as part of this schema update.
+enum ExpenseCategory {
+  RENT
+  UTILITY
+  SALARY
+  TRANSPORT
+  MAINTENANCE
+  SUPPLIES
+  MARKETING
+  LOAN_INTEREST
+  OTHER
+}
+
+enum LoanLedgerEntryType {
+  DISBURSEMENT
+  CHARGE
+  REPAYMENT
+}
+
+/// Who an admin user is. **NOT ENFORCED ANYWHERE YET.** There is no
+/// authorization layer: nothing reads this column, so every account still has
+/// full access. It exists so that when roles are wired up there is a value to
+/// read. `OWNER` is the first account created by `db:seed:admin`; `STAFF` is
+/// anyone added later with `--additional`, and the column default.
+enum AdminRole {
+  OWNER
+  STAFF
+}
+
+// =====================================================================
+// Identity and audit
+// =====================================================================
+
 model AdminUser {
-  id                 String              @id @default(cuid())
-  email              String              @unique
-  passwordHash       String
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-  purchases          Purchase[]
-  sales              Sale[]
-  stockTransfers     StockTransfer[]
-  stockAdjustments   StockAdjustment[]
-  auditLogs          AuditLog[]
+  id               String            @id @default(cuid())
+  email            String            @unique
+  passwordHash     String
+  /// Not enforced anywhere yet — see the `AdminRole` comment above.
+  role             AdminRole         @default(STAFF)
+  /// Accounts are deactivated, never deleted: `Purchase`, `Sale`,
+  /// `StockTransfer` and `StockAdjustment` reference this table with
+  /// `onDelete: Restrict`, so a hard delete would strip the actor from history.
+  isActive         Boolean           @default(true)
+  /// Last successful sign-in. Null until sign-in is implemented. Stored as
+  /// `timestamptz` per the documented convention
+  /// (`docs/backend-schema.md` §1); note it is the *only* `timestamptz` column
+  /// so far — every other timestamp column is `timestamp(3)`.
+  lastLoginAt      DateTime?         @db.Timestamptz(3)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  purchases        Purchase[]
+  sales            Sale[]
+  stockTransfers   StockTransfer[]
+  stockAdjustments StockAdjustment[]
+  auditLogs        AuditLog[]
 
   @@map("admin_users")
 }
+
+model AuditLog {
+  id         String     @id @default(cuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String
+  beforeData Json?
+  afterData  Json?
+  metadata   Json?
+  occurredAt DateTime   @default(now())
+  actor      AdminUser? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId, occurredAt])
+  @@index([actorId, occurredAt])
+  @@map("audit_logs")
+}
+
+// =====================================================================
+// Catalogue and parties
+// =====================================================================
 
 model Product {
   id                 String                @id @default(cuid())
@@ -137,6 +241,8 @@ model Product {
   category           ProductCategory
   packName           String                @default("crate")
   unitsPerPack       Int
+  /// Which shelf/price list this product is sellable from.
+  saleChannel        SaleChannel           @default(BOTH)
   retailPriceKobo    BigInt
   wholesalePriceKobo BigInt
   averageCostKobo    BigInt                @default(0)
@@ -149,10 +255,10 @@ model Product {
   stockMovements     StockMovement[]
   transferLines      StockTransferLine[]
   adjustmentLines    StockAdjustmentLine[]
-  returnLines        SaleReturnLine[]
 
-  // A matching partial unique index on (sku) WHERE deletedAt IS NULL is
-  // created in a hand-written SQL migration; Prisma cannot express it here.
+  // Partial unique index on (sku) WHERE deletedAt IS NULL and the
+  // `sku = upper(trim(sku))` CHECK live in the hand-written SQL migrations;
+  // Prisma cannot express either here.
   @@index([sku])
   @@index([name])
   @@index([deletedAt])
@@ -160,18 +266,18 @@ model Product {
 }
 
 model Supplier {
-  id                 String                @id @default(cuid())
-  name               String
-  phone              String?
-  email              String?
-  address            String?
-  notes              String?
-  deletedAt          DateTime?
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
-  purchases          Purchase[]
-  payments           SupplierPayment[]
-  ledgerEntries      SupplierLedgerEntry[]
+  id            String                @id @default(cuid())
+  name          String
+  phone         String?
+  email         String?
+  address       String?
+  notes         String?
+  deletedAt     DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  purchases     Purchase[]
+  payments      SupplierPayment[]
+  ledgerEntries SupplierLedgerEntry[]
 
   @@index([name])
   @@index([deletedAt])
@@ -191,16 +297,17 @@ model Customer {
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
   sales           Sale[]
-  payments        CustomerPayment[]
   ledgerEntries   CustomerLedgerEntry[]
-  returns         SaleReturn[]
-  refunds         CustomerRefund[]
 
   @@index([name])
   @@index([phone])
   @@index([deletedAt])
   @@map("customers")
 }
+
+// =====================================================================
+// Purchases (supplier credit / payables)
+// =====================================================================
 
 model Purchase {
   id                    String                @id @default(cuid())
@@ -210,6 +317,13 @@ model Purchase {
   reference             String?               @unique
   notes                 String?
   totalKobo             BigInt                @default(0)
+  /// Amount already paid to the supplier. Denormalised from `SupplierPayment`
+  /// rows for cheap list rendering. No trigger keeps this in step: the payment
+  /// service owns it and the drift-audit query in
+  /// `20261017000500_value_checks` proves there is no gap.
+  paidKobo              BigInt                @default(0)
+  /// Lagos business date (YYYY-MM-DD) the balance becomes overdue. Null = none.
+  dueDate               String?
   purchasedAt           DateTime              @default(now())
   receivedAt            DateTime?
   createdAt             DateTime              @default(now())
@@ -217,10 +331,16 @@ model Purchase {
   supplier              Supplier?             @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   createdBy             AdminUser             @relation(fields: [createdById], references: [id], onDelete: Restrict)
   lines                 PurchaseLine[]
+  payments              SupplierPayment[]
   supplierLedgerEntries SupplierLedgerEntry[]
 
+  // Hand-written SQL, not Prisma constraints:
+  //   * `paidKobo <= totalKobo` (migration `20261017000500_value_checks`);
+  //   * `paidKobo < totalKobo` requires `supplierId IS NOT NULL` (migration
+  //     `20261017000700_sale_purchase_rules`), mirroring createPurchase().
   @@index([purchasedAt])
   @@index([supplierId, purchasedAt])
+  @@index([dueDate])
   @@map("purchases")
 }
 
@@ -242,17 +362,74 @@ model PurchaseLine {
   @@map("purchase_lines")
 }
 
+/// Immutable record of one payment made to a supplier. Mirrors `SalePayment`.
+/// The matching (negative) `SupplierLedgerEntry` references this row through
+/// `supplierPaymentId`, keeping the ledger source-exclusivity invariant intact.
+model SupplierPayment {
+  id                   String                @id @default(cuid())
+  supplierId           String
+  purchaseId           String
+  accountId            String?
+  method               PaymentMethod
+  amountKobo           BigInt
+  note                 String?
+  paidAt               DateTime              @default(now())
+  createdAt            DateTime              @default(now())
+  supplier             Supplier              @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  purchase             Purchase              @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+  account              Account?              @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  ledgerEntries        SupplierLedgerEntry[]
+  accountLedgerEntries AccountLedgerEntry[]
+
+  @@index([supplierId, paidAt])
+  @@index([purchaseId, paidAt])
+  @@index([accountId, paidAt])
+  @@map("supplier_payments")
+}
+
+/// Reversal convention: keep type and source ids, negate the amount exactly,
+/// and set `reversesEntryId` to the original. A row can be reversed once only;
+/// a reversal cannot itself be reversed. Signed: PURCHASE +, PAYMENT -.
+model SupplierLedgerEntry {
+  id                String                  @id @default(cuid())
+  supplierId        String
+  type              SupplierLedgerEntryType
+  amountKobo        BigInt
+  purchaseId        String?
+  supplierPaymentId String?
+  reversesEntryId   String?
+  note              String?
+  occurredAt        DateTime                @default(now())
+  supplier          Supplier                @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  purchase          Purchase?               @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+  supplierPayment   SupplierPayment?        @relation(fields: [supplierPaymentId], references: [id], onDelete: Restrict)
+  reversesEntry     SupplierLedgerEntry?    @relation("SupplierLedgerReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversedBy        SupplierLedgerEntry[]   @relation("SupplierLedgerReversals")
+
+  @@index([supplierId, occurredAt])
+  @@index([purchaseId])
+  @@index([supplierPaymentId])
+  @@index([reversesEntryId])
+  @@map("supplier_ledger_entries")
+}
+
+// =====================================================================
+// Stock
+// =====================================================================
+
 model StockTransfer {
   id            String              @id @default(cuid())
   createdById   String
   from          StockLocation
   to            StockLocation
   reason        String?
+  reference     String?             @unique
   transferredAt DateTime            @default(now())
   createdAt     DateTime            @default(now())
   createdBy     AdminUser           @relation(fields: [createdById], references: [id], onDelete: Restrict)
   lines         StockTransferLine[]
 
+  // `from <> to` is a hand-written CHECK constraint.
   @@index([transferredAt])
   @@map("stock_transfers")
 }
@@ -270,8 +447,8 @@ model StockTransferLine {
   @@map("stock_transfer_lines")
 }
 
-// A transfer has separate IN and OUT legs so each immutable stock movement
-// has exactly one uniquely attributable source row.
+/// A transfer has separate IN and OUT legs so each immutable stock movement has
+/// exactly one uniquely attributable source row.
 model StockTransferLeg {
   id             String            @id @default(cuid())
   transferLineId String
@@ -314,6 +491,10 @@ model StockAdjustmentLine {
   @@map("stock_adjustment_lines")
 }
 
+/// One immutable stock movement. Exactly one source column must be set
+/// (`returnLineId` is reserved — no return entity is modelled yet, so it is a
+/// plain column without a relation). Never-negative stock is enforced in the
+/// service with a row lock; single-source and sign rules are SQL CHECKs.
 model StockMovement {
   id               String               @id @default(cuid())
   productId        String
@@ -334,7 +515,6 @@ model StockMovement {
   saleLine         SaleLine?            @relation(fields: [saleLineId], references: [id], onDelete: Restrict)
   transferLeg      StockTransferLeg?    @relation(fields: [transferLegId], references: [id], onDelete: Restrict)
   adjustmentLine   StockAdjustmentLine? @relation(fields: [adjustmentLineId], references: [id], onDelete: Restrict)
-  returnLine       SaleReturnLine?      @relation(fields: [returnLineId], references: [id], onDelete: Restrict)
   reversesEntry    StockMovement?       @relation("StockMovementReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
   reversedBy       StockMovement[]      @relation("StockMovementReversals")
 
@@ -349,17 +529,27 @@ model StockMovement {
   @@map("stock_movements")
 }
 
+// =====================================================================
+// Sales
+// =====================================================================
+
 model Sale {
   id                    String                @id @default(cuid())
   createdById           String
   customerId            String?
+  /// Optional denormalised display name for ad-hoc customers. The application
+  /// never populates it today — every create path (sales/new, the retail-debtor
+  /// dialog) sends `null` and uses `customerId` instead. Kept nullable and
+  /// untouched for the shared DTO shape.
+  customerName          String?
+  channel               SaleChannel
   status                SaleStatus            @default(DRAFT)
   reference             String?               @unique
   notes                 String?
-  discountKobo          BigInt                @default(0)
   totalKobo             BigInt                @default(0)
+  /// Amount already received. Denormalised from `SalePayment` rows.
+  paidKobo              BigInt                @default(0)
   soldAt                DateTime              @default(now())
-  completedAt           DateTime?
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
   createdBy             AdminUser             @relation(fields: [createdById], references: [id], onDelete: Restrict)
@@ -367,18 +557,22 @@ model Sale {
   lines                 SaleLine[]
   payments              SalePayment[]
   customerLedgerEntries CustomerLedgerEntry[]
-  returns               SaleReturn[]
 
-  // At completion, payment total must not exceed totalKobo. If it is less,
-  // customerId is required. This is a transactional service rule, not a
-  // database-wide constraint because a draft can be incomplete.
+  // Hand-written SQL, not Prisma constraints:
+  //   * `channel <> 'BOTH'` and `paidKobo <= totalKobo` (migration
+  //     `20261017000500_value_checks`);
+  //   * `paidKobo < totalKobo` requires `customerId IS NOT NULL` (migration
+  //     `20261017000700_sale_purchase_rules`), mirroring
+  //     validateCompletedSalePayment();
+  //   * `VOIDED` is terminal and a COMPLETED sale cannot return to DRAFT
+  //     (same migration, enforced by a BEFORE UPDATE trigger).
   @@index([soldAt])
   @@index([customerId, soldAt])
   @@map("sales")
 }
 
 model SaleLine {
-  id                   String           @id @default(cuid())
+  id                   String          @id @default(cuid())
   saleId               String
   productId            String
   location             StockLocation
@@ -389,26 +583,25 @@ model SaleLine {
   unitPriceKobo        BigInt
   costPerUnitKobo      BigInt
   lineTotalKobo        BigInt
-  sale                 Sale             @relation(fields: [saleId], references: [id], onDelete: Restrict)
-  product              Product          @relation(fields: [productId], references: [id], onDelete: Restrict)
+  sale                 Sale            @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  product              Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
   stockMovements       StockMovement[]
-  saleReturnLines      SaleReturnLine[]
 
   @@index([productId, saleId])
   @@map("sale_lines")
 }
 
+/// Immutable sale payment. `accountId` is retained for the account subsystem;
+/// the app does not populate it yet.
 model SalePayment {
   id                    String                @id @default(cuid())
   saleId                String
-  accountId             String
-  method                PaymentMethod
+  accountId             String?
   amountKobo            BigInt
-  status                PaymentStatus         @default(COMPLETED)
-  voidedAt              DateTime?
   paidAt                DateTime              @default(now())
+  createdAt             DateTime              @default(now())
   sale                  Sale                  @relation(fields: [saleId], references: [id], onDelete: Restrict)
-  account               Account               @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  account               Account?              @relation(fields: [accountId], references: [id], onDelete: Restrict)
   customerLedgerEntries CustomerLedgerEntry[]
   accountLedgerEntries  AccountLedgerEntry[]
 
@@ -417,29 +610,12 @@ model SalePayment {
   @@map("sale_payments")
 }
 
-model CustomerPayment {
-  id                   String                @id @default(cuid())
-  customerId           String
-  accountId            String
-  method               PaymentMethod
-  amountKobo           BigInt
-  status               PaymentStatus         @default(COMPLETED)
-  voidedAt             DateTime?
-  notes                String?
-  paidAt               DateTime              @default(now())
-  customer             Customer              @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  account              Account               @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  ledgerEntries        CustomerLedgerEntry[]
-  accountLedgerEntries AccountLedgerEntry[]
-
-  @@index([customerId, paidAt])
-  @@index([accountId, paidAt])
-  @@map("customer_payments")
-}
-
-// A reversal row has the same type and source ids as the original, and the
-// exact negated amount; reversesEntryId points to that original. Each row can
-// be reversed at most once, and a reversal cannot itself be reversed.
+/// Reversal convention as for the other ledgers. Signed: SALE +, PAYMENT -,
+/// RETURN -, CUSTOMER_REFUND +. Debtor aging applies payments to the oldest
+/// unpaid sales at query time; there is no payment-allocation table.
+///
+/// `customerPaymentId`, `saleReturnId` and `customerRefundId` are reserved for
+/// entities that are not modelled yet; they are plain nullable columns.
 model CustomerLedgerEntry {
   id                String                  @id @default(cuid())
   customerId        String
@@ -456,14 +632,9 @@ model CustomerLedgerEntry {
   customer          Customer                @relation(fields: [customerId], references: [id], onDelete: Restrict)
   sale              Sale?                   @relation(fields: [saleId], references: [id], onDelete: Restrict)
   salePayment       SalePayment?            @relation(fields: [salePaymentId], references: [id], onDelete: Restrict)
-  customerPayment   CustomerPayment?        @relation(fields: [customerPaymentId], references: [id], onDelete: Restrict)
-  saleReturn        SaleReturn?             @relation(fields: [saleReturnId], references: [id], onDelete: Restrict)
-  customerRefund    CustomerRefund?         @relation(fields: [customerRefundId], references: [id], onDelete: Restrict)
   reversesEntry     CustomerLedgerEntry?    @relation("CustomerLedgerReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
   reversedBy        CustomerLedgerEntry[]   @relation("CustomerLedgerReversals")
 
-  // Debtor aging is computed at query time by applying payments to the
-  // customer's oldest unpaid sales first. No payment-allocation table exists.
   @@index([customerId, occurredAt])
   @@index([saleId])
   @@index([salePaymentId])
@@ -474,77 +645,29 @@ model CustomerLedgerEntry {
   @@map("customer_ledger_entries")
 }
 
-model SupplierPayment {
-  id                   String                @id @default(cuid())
-  supplierId           String
-  accountId            String
-  method               PaymentMethod
-  amountKobo           BigInt
-  status               PaymentStatus         @default(COMPLETED)
-  voidedAt             DateTime?
-  notes                String?
-  paidAt               DateTime              @default(now())
-  supplier             Supplier              @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  account              Account               @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  ledgerEntries        SupplierLedgerEntry[]
-  accountLedgerEntries AccountLedgerEntry[]
-
-  @@index([supplierId, paidAt])
-  @@index([accountId, paidAt])
-  @@map("supplier_payments")
-}
-
-// Reversal convention: keep type and source ids, negate amount exactly, and
-// set reversesEntryId to the original. A row can be reversed once only; a
-// reversal cannot itself be reversed.
-model SupplierLedgerEntry {
-  id                String                  @id @default(cuid())
-  supplierId        String
-  type              SupplierLedgerEntryType
-  amountKobo        BigInt
-  purchaseId        String?
-  supplierPaymentId String?
-  reversesEntryId   String?
-  note              String?
-  occurredAt        DateTime                @default(now())
-  supplier          Supplier                @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  purchase          Purchase?               @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
-  supplierPayment   SupplierPayment?        @relation(fields: [supplierPaymentId], references: [id], onDelete: Restrict)
-  reversesEntry     SupplierLedgerEntry?    @relation("SupplierLedgerReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
-  reversedBy        SupplierLedgerEntry[]   @relation("SupplierLedgerReversals")
-
-  @@index([supplierId, occurredAt])
-  @@index([purchaseId])
-  @@index([supplierPaymentId])
-  @@index([reversesEntryId])
-  @@map("supplier_ledger_entries")
-}
+// =====================================================================
+// Accounts (retained subsystem; not yet wired to the frontend)
+// =====================================================================
 
 model Account {
-  id                String               @id @default(cuid())
-  name              String
-  type              AccountType
-  deletedAt         DateTime?
-  createdAt         DateTime             @default(now())
-  updatedAt         DateTime             @updatedAt
-  entries           AccountLedgerEntry[]
-  salePayments      SalePayment[]
-  customerPayments  CustomerPayment[]
-  supplierPayments  SupplierPayment[]
-  expenses          Expense[]
-  dailyClosings     DailyClosing[]
-  outgoingTransfers AccountTransfer[]    @relation("AccountTransferFrom")
-  incomingTransfers AccountTransfer[]    @relation("AccountTransferTo")
-  otherIncome       OtherIncome[]
-  customerRefunds   CustomerRefund[]
+  id               String               @id @default(cuid())
+  name             String
+  type             AccountType
+  deletedAt        DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  entries          AccountLedgerEntry[]
+  salePayments     SalePayment[]
+  supplierPayments SupplierPayment[]
 
   @@index([deletedAt, type])
   @@map("accounts")
 }
 
-// Reversal convention: keep type and source ids, negate amount exactly, and
-// set reversesEntryId to the original. A row can be reversed once only; a
-// reversal cannot itself be reversed.
+/// Reversal convention as for the other ledgers. Signed: money in +, money out
+/// minus. `customerPaymentId`, `otherIncomeId`, `accountTransferId` and
+/// `customerRefundId` are reserved for entities not modelled yet (plain
+/// nullable columns).
 model AccountLedgerEntry {
   id                String               @id @default(cuid())
   accountId         String
@@ -562,12 +685,8 @@ model AccountLedgerEntry {
   occurredAt        DateTime             @default(now())
   account           Account              @relation(fields: [accountId], references: [id], onDelete: Restrict)
   salePayment       SalePayment?         @relation(fields: [salePaymentId], references: [id], onDelete: Restrict)
-  customerPayment   CustomerPayment?     @relation(fields: [customerPaymentId], references: [id], onDelete: Restrict)
   supplierPayment   SupplierPayment?     @relation(fields: [supplierPaymentId], references: [id], onDelete: Restrict)
   expense           Expense?             @relation(fields: [expenseId], references: [id], onDelete: Restrict)
-  otherIncome       OtherIncome?         @relation(fields: [otherIncomeId], references: [id], onDelete: Restrict)
-  accountTransfer   AccountTransfer?     @relation(fields: [accountTransferId], references: [id], onDelete: Restrict)
-  customerRefund    CustomerRefund?      @relation(fields: [customerRefundId], references: [id], onDelete: Restrict)
   reversesEntry     AccountLedgerEntry?  @relation("AccountLedgerReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
   reversedBy        AccountLedgerEntry[] @relation("AccountLedgerReversals")
 
@@ -583,164 +702,113 @@ model AccountLedgerEntry {
   @@map("account_ledger_entries")
 }
 
-model AccountTransfer {
-  id            String               @id @default(cuid())
-  fromAccountId String
-  toAccountId   String
-  amountKobo    BigInt
-  reference     String?
-  notes         String?
-  transferredAt DateTime             @default(now())
-  fromAccount   Account              @relation("AccountTransferFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
-  toAccount     Account              @relation("AccountTransferTo", fields: [toAccountId], references: [id], onDelete: Restrict)
-  ledgerEntries AccountLedgerEntry[]
+// =====================================================================
+// Expenses
+// =====================================================================
 
-  @@index([transferredAt])
-  @@map("account_transfers")
-}
-
-model OtherIncome {
-  id            String               @id @default(cuid())
-  accountId     String
-  amountKobo    BigInt
-  description   String
-  receivedAt    DateTime             @default(now())
-  account       Account              @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  ledgerEntries AccountLedgerEntry[]
-
-  @@index([receivedAt])
-  @@map("other_income")
-}
-
-model CustomerRefund {
-  id                    String                @id @default(cuid())
-  customerId            String
-  accountId             String
-  saleReturnId          String?
-  amountKobo            BigInt
-  method                PaymentMethod
-  voidedAt              DateTime?
-  refundedAt            DateTime              @default(now())
-  customer              Customer              @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  account               Account               @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  saleReturn            SaleReturn?           @relation(fields: [saleReturnId], references: [id], onDelete: Restrict)
-  customerLedgerEntries CustomerLedgerEntry[]
-  accountLedgerEntries  AccountLedgerEntry[]
-
-  @@index([customerId, refundedAt])
-  @@index([accountId, refundedAt])
-  @@map("customer_refunds")
-}
-
-model ExpenseCategory {
-  id       String    @id @default(cuid())
-  name     String    @unique
-  expenses Expense[]
-
-  @@map("expense_categories")
-}
-
+/// `channel` is the shelf the cost belongs to; `BOTH` expenses are split
+/// between retail and wholesale in daily-total reports. `loanRepaymentId` is
+/// set when the row was generated by a loan repayment's interest portion; the
+/// FK is added by the SQL migrations (Prisma cannot express the mutual
+/// reference between `Expense` and `LoanRepayment` cleanly).
 model Expense {
-  id            String               @id @default(cuid())
-  categoryId    String
-  accountId     String
-  amountKobo    BigInt
-  description   String
-  voidedAt      DateTime?
-  spentAt       DateTime             @default(now())
-  createdAt     DateTime             @default(now())
-  category      ExpenseCategory      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  account       Account              @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  ledgerEntries AccountLedgerEntry[]
+  id              String               @id @default(cuid())
+  channel         SaleChannel
+  category        ExpenseCategory
+  description     String
+  amountKobo      BigInt
+  expenseDate     DateTime
+  loanRepaymentId String?              @unique
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  ledgerEntries   AccountLedgerEntry[]
 
-  @@index([spentAt])
-  @@index([categoryId, spentAt])
+  // `amountKobo > 0` is a hand-written CHECK constraint.
+  @@index([expenseDate])
+  @@index([channel, expenseDate])
+  @@index([category, expenseDate])
   @@map("expenses")
 }
 
-model DailyClosing {
-  id                 String   @id @default(cuid())
-  accountId          String
-  businessDate       DateTime @db.Date
-  expectedAmountKobo BigInt
-  countedAmountKobo  BigInt
-  varianceKobo       BigInt
-  notes              String?
-  closedAt           DateTime @default(now())
-  account            Account  @relation(fields: [accountId], references: [id], onDelete: Restrict)
+// =====================================================================
+// Loans
+// =====================================================================
 
-  // Compute businessDate in Africa/Lagos before persistence; do not derive it
-  // from a UTC date. Reports must apply the same timezone rule.
-  @@unique([accountId, businessDate])
-  @@index([businessDate])
-  @@map("daily_closings")
+model Loan {
+  id                 String            @id @default(cuid())
+  lenderName         String
+  principalKobo      BigInt
+  /// Total interest/fee agreed up front. May be zero.
+  agreedInterestKobo BigInt            @default(0)
+  disbursedAt        DateTime          @default(now())
+  /// Lagos business date (YYYY-MM-DD). Null = no due date.
+  dueDate            String?
+  note               String?
+  createdAt          DateTime          @default(now())
+  ledgerEntries      LoanLedgerEntry[]
+  repayments         LoanRepayment[]
+
+  @@index([disbursedAt])
+  @@index([dueDate])
+  @@map("loans")
 }
 
-model SaleReturn {
-  id                    String                @id @default(cuid())
-  saleId                String?
-  customerId            String?
-  reason                String
-  returnedAt            DateTime              @default(now())
-  createdAt             DateTime              @default(now())
-  sale                  Sale?                 @relation(fields: [saleId], references: [id], onDelete: Restrict)
-  customer              Customer?             @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  lines                 SaleReturnLine[]
-  customerLedgerEntries CustomerLedgerEntry[]
-  refunds               CustomerRefund[]
+/// Immutable loan ledger. Outstanding = DISBURSEMENT + CHARGE - REPAYMENT.
+/// `loanRepaymentId` is set on REPAYMENT entries only (source exclusivity).
+model LoanLedgerEntry {
+  id              String              @id @default(cuid())
+  loanId          String
+  type            LoanLedgerEntryType
+  amountKobo      BigInt
+  loanRepaymentId String?
+  reversesEntryId String?
+  note            String?
+  occurredAt      DateTime            @default(now())
+  loan            Loan                @relation(fields: [loanId], references: [id], onDelete: Restrict)
+  loanRepayment   LoanRepayment?      @relation(fields: [loanRepaymentId], references: [id], onDelete: Restrict)
+  reversesEntry   LoanLedgerEntry?    @relation("LoanLedgerReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversedBy      LoanLedgerEntry[]   @relation("LoanLedgerReversals")
 
-  @@index([returnedAt])
-  @@map("sale_returns")
+  @@index([loanId, occurredAt])
+  @@index([loanRepaymentId])
+  @@index([reversesEntryId])
+  @@map("loan_ledger_entries")
 }
 
-model SaleReturnLine {
-  id                   String          @id @default(cuid())
-  saleReturnId         String
-  saleLineId           String?
-  productId            String
-  location             StockLocation
-  unit                 Unit
-  quantity             Int
-  unitsPerPackSnapshot Int
-  quantityUnits        Int
-  unitPriceKobo        BigInt
-  costPerUnitKobo      BigInt
-  restock              Boolean         @default(true)
-  saleReturn           SaleReturn      @relation(fields: [saleReturnId], references: [id], onDelete: Restrict)
-  saleLine             SaleLine?       @relation(fields: [saleLineId], references: [id], onDelete: Restrict)
-  product              Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
-  stockMovements       StockMovement[]
+/// One repayment. `interestPortionKobo` drives a linked `LOAN_INTEREST`
+/// expense (its `expenseId`). `expenseId` and `Expense.loanRepaymentId` point
+/// at each other; the FK is added by the SQL migrations.
+model LoanRepayment {
+  id                  String            @id @default(cuid())
+  loanId              String
+  amountKobo          BigInt
+  interestPortionKobo BigInt            @default(0)
+  expenseId           String?
+  note                String?
+  paidAt              DateTime          @default(now())
+  createdAt           DateTime          @default(now())
+  loan                Loan              @relation(fields: [loanId], references: [id], onDelete: Restrict)
+  ledgerEntries       LoanLedgerEntry[]
 
-  // When restock is false, create a loss ADJUSTMENT movement at the current
-  // product average cost; do not create a positive RETURN movement.
-  @@index([productId])
-  @@index([saleLineId])
-  @@map("sale_return_lines")
+  @@index([loanId, paidAt])
+  @@index([expenseId])
+  @@map("loan_repayments")
 }
 
-model Counter {
-  name      String   @id
-  nextValue Int      @default(1)
-  updatedAt DateTime @updatedAt
+// =====================================================================
+// Cash
+// =====================================================================
 
-  // Invoice and purchase references are allocated atomically in the same
-  // transaction as the corresponding document.
-  @@map("counters")
-}
+/// Immutable manual cash/bank balance. The latest row by `asOfDate` then
+/// `createdAt` is the balance used in financial-position calculations.
+model CashSnapshot {
+  id         String   @id @default(cuid())
+  /// Lagos business date (YYYY-MM-DD).
+  asOfDate   String
+  amountKobo BigInt
+  note       String?
+  createdAt  DateTime @default(now())
 
-model AuditLog {
-  id         String     @id @default(cuid())
-  actorId    String?
-  action     String
-  entityType String
-  entityId   String
-  beforeData Json?
-  afterData  Json?
-  metadata   Json?
-  occurredAt DateTime   @default(now())
-  actor      AdminUser? @relation(fields: [actorId], references: [id], onDelete: Restrict)
-
-  @@index([entityType, entityId, occurredAt])
-  @@index([actorId, occurredAt])
-  @@map("audit_logs")
+  @@index([asOfDate])
+  @@map("cash_snapshots")
 }

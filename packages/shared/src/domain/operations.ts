@@ -849,6 +849,17 @@ export function recordSale(
     throw new RangeError("Paid amount may not exceed the sale total.");
   }
 
+  const unpaidKobo = totalKobo - input.paidKobo;
+
+  // A sale that is not fully paid creates a SALE entry on the customer ledger,
+  // so it cannot be anonymous. This mirrors validateCompletedSalePayment() and
+  // the `ck_sales_unpaid_requires_customer` CHECK added in migration
+  // `20261017000700_sale_purchase_rules`, so an invalid sale fails in the
+  // domain layer with the same message the database would raise.
+  if (unpaidKobo > 0n && input.customerId === null) {
+    throw new RangeError("A customer is required when a sale is not fully paid.");
+  }
+
   const sale: Sale = {
     id: saleId,
     customerId: input.customerId,
@@ -866,7 +877,6 @@ export function recordSale(
   };
 
   let customerLedgerEntry: CustomerLedgerEntry | null = null;
-  const unpaidKobo = totalKobo - input.paidKobo;
   if (input.customerId !== null && unpaidKobo > 0n) {
     customerLedgerEntry = {
       id: newId(),

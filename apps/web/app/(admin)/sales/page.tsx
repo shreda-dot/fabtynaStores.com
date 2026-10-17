@@ -21,7 +21,7 @@ import {
   type SaleStatus,
 } from "@fabtyna/shared";
 import { DateFilter } from "@/components/date-filter";
-import { RecordDebtorDialog } from "@/components/debtors/Record-debtor-dialog";
+import { RecordDebtorDialog } from "@/components/debtors/record-debtor-dialog";
 import { ResponsiveTable } from "@/components/responsive-table";
 import type { ResponsiveTableColumn } from "@/components/responsive-table";
 import { Badge, StatusBadge } from "@/components/ui/badge";

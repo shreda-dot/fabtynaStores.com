@@ -1,4 +1,6 @@
 import type {
+  Account,
+  AccountLedgerEntry,
   CustomerLedgerEntry,
   Expense,
   PaymentMethod,
@@ -21,7 +23,10 @@ import type {
   Unit,
 } from "./types.ts";
 import {
+  accountBalanceKobo,
+  assertAccountWillRemainNonnegative,
   assertStockWillRemainNonnegative,
+  buildAccountLedgerEntry,
   buildLedgerReversal,
   buildStockMovementReversal,
   calculateWeightedAverageCostKobo,
@@ -29,6 +34,30 @@ import {
   totalUnitsForProduct,
 } from "./index.ts";
 import { getLagosBusinessDate } from "../lagos-time.ts";
+
+/**
+ * Names an account for an error message. Falls back to the id so a caller that
+ * did not pass its account list still gets a message naming the account.
+ */
+function accountRef(
+  accounts: readonly Account[],
+  accountId: string,
+): { id: string; name: string } {
+  const account = accounts.find((candidate) => candidate.id === accountId);
+  return account
+    ? { id: account.id, name: account.name }
+    : { id: accountId, name: accountId };
+}
+
+export function requireAccountId(
+  accountId: string | null | undefined,
+  what: string,
+): string {
+  if (accountId === null || accountId === undefined || accountId === "") {
+    throw new RangeError(`An account is required when ${what}.`);
+  }
+  return accountId;
+}
 
 function roundHalfUp(numerator: bigint, denominator: bigint): bigint {
   if (denominator <= 0n) {
@@ -101,6 +130,12 @@ export interface ReceivePurchaseInput {
   amountPaidNowKobo?: bigint;
   /** How the up-front payment was made. Optional; defaults to CASH. */
   paymentMethod?: PaymentMethod;
+  /**
+   * The account the up-front payment left. Required whenever anything is paid
+   * now, because money that left the business must be recorded against an
+   * account.
+   */
+  accountId?: string | null;
   lines: ReceivePurchaseLineInput[];
 }
 
@@ -114,6 +149,12 @@ export interface ReceivePurchaseResult {
   supplierPayment: SupplierPayment | null;
   /** The negative PAYMENT ledger entry for the up-front payment. */
   supplierPaymentLedgerEntry: SupplierLedgerEntry | null;
+  /**
+   * The account entry for the up-front payment: SUPPLIER_PAYMENT when a
+   * supplier was paid, PURCHASE_PAYMENT when a supplier-less cash purchase was
+   * paid. Null when nothing was paid now.
+   */
+  accountLedgerEntry: AccountLedgerEntry | null;
   productUpdates: Array<{ id: string; averageCostKobo: bigint }>;
 }
 
@@ -251,6 +292,7 @@ export function receivePurchase(
   let supplierLedgerEntry: SupplierLedgerEntry | null = null;
   let supplierPayment: SupplierPayment | null = null;
   let supplierPaymentLedgerEntry: SupplierLedgerEntry | null = null;
+  let accountLedgerEntry: AccountLedgerEntry | null = null;
 
   if (input.supplierId !== null) {
     supplierLedgerEntry = {
@@ -264,12 +306,20 @@ export function receivePurchase(
       note: null,
       occurredAt: input.purchasedAt,
     };
+  }
 
-    if (amountPaidNowKobo > 0n) {
+  if (amountPaidNowKobo > 0n) {
+    // Money left the business, so it must leave a named account. The store
+    // layer resolves the account (by method for legacy data, by choice for new
+    // records); the domain only insists that one is supplied.
+    const accountId = requireAccountId(input.accountId, "a purchase is paid now");
+
+    if (input.supplierId !== null) {
       supplierPayment = {
         id: newId(),
         supplierId: input.supplierId,
         purchaseId,
+        accountId,
         amountKobo: amountPaidNowKobo,
         method: input.paymentMethod ?? "CASH",
         note: "Paid at receipt",
@@ -287,6 +337,29 @@ export function receivePurchase(
         note: null,
         occurredAt: input.purchasedAt,
       };
+      accountLedgerEntry = buildAccountLedgerEntry(
+        {
+          accountId,
+          type: "SUPPLIER_PAYMENT",
+          amountKobo: -amountPaidNowKobo,
+          supplierPaymentId: supplierPayment.id,
+          occurredAt: input.purchasedAt,
+        },
+        newId,
+      );
+    } else {
+      // A supplier-less cash purchase has no supplier payment row to hang the
+      // outflow on, so the account entry is keyed on the purchase itself.
+      accountLedgerEntry = buildAccountLedgerEntry(
+        {
+          accountId,
+          type: "PURCHASE_PAYMENT",
+          amountKobo: -amountPaidNowKobo,
+          purchaseId,
+          occurredAt: input.purchasedAt,
+        },
+        newId,
+      );
     }
   }
 
@@ -297,6 +370,7 @@ export function receivePurchase(
     supplierLedgerEntry,
     supplierPayment,
     supplierPaymentLedgerEntry,
+    accountLedgerEntry,
     productUpdates,
   };
 }
@@ -584,7 +658,50 @@ export function buildAdjustment(
 export interface VoidResult {
   reversalMovements: StockMovement[];
   reversalSupplierLedgerEntry: SupplierLedgerEntry | null;
+  /** Money that must travel back into the account when the document is voided. */
+  reversalAccountLedgerEntries: AccountLedgerEntry[];
   productUpdates: Array<{ id: string; averageCostKobo: bigint }>;
+}
+
+/**
+ * Builds the account reversals for a void. Refuses up front — before writing
+ * anything — when the money has already been spent and the reversal would take
+ * an account below zero, so the caller gets a message naming the account
+ * instead of a raw CHECK violation.
+ */
+function buildAccountReversals(
+  targets: readonly AccountLedgerEntry[],
+  existingAccountLedger: readonly AccountLedgerEntry[],
+  accounts: readonly Account[],
+  reversedAt: Date,
+  newId: IdGenerator,
+): AccountLedgerEntry[] {
+  if (targets.length === 0) return [];
+
+  const deltaByAccount = new Map<string, bigint>();
+  for (const target of targets) {
+    deltaByAccount.set(
+      target.accountId,
+      (deltaByAccount.get(target.accountId) ?? 0n) - target.amountKobo,
+    );
+  }
+  for (const [accountId, delta] of deltaByAccount) {
+    assertAccountWillRemainNonnegative(
+      accountRef(accounts, accountId),
+      accountBalanceKobo(accountId, existingAccountLedger),
+      delta,
+      "reversal",
+    );
+  }
+
+  const created: AccountLedgerEntry[] = [];
+  const all: AccountLedgerEntry[] = [...existingAccountLedger];
+  for (const target of targets) {
+    const reversal = buildLedgerReversal(target, all, newId(), reversedAt);
+    all.push(reversal);
+    created.push(reversal);
+  }
+  return created;
 }
 
 export function voidPurchase(
@@ -596,6 +713,8 @@ export function voidPurchase(
   existingSupplierLedger: readonly SupplierLedgerEntry[],
   newId: IdGenerator,
   existingSupplierPayments: readonly SupplierPayment[] = [],
+  existingAccountLedger: readonly AccountLedgerEntry[] = [],
+  existingAccounts: readonly Account[] = [],
 ): VoidResult {
   if (!Number.isFinite(voidedAt.getTime())) {
     throw new RangeError("Void date must be valid.");
@@ -681,9 +800,27 @@ export function voidPurchase(
     );
   }
 
+  // A supplier-less cash purchase posted a PURCHASE_PAYMENT entry and no
+  // supplier payment row, so voiding it must put that money back. A purchase
+  // with a supplier is blocked above when any supplier payment exists.
+  const accountTargets = existingAccountLedger.filter(
+    (entry) =>
+      entry.type === "PURCHASE_PAYMENT" &&
+      entry.purchaseId === purchaseId &&
+      entry.reversesEntryId === null,
+  );
+  const reversalAccountLedgerEntries = buildAccountReversals(
+    accountTargets,
+    existingAccountLedger,
+    existingAccounts,
+    voidedAt,
+    newId,
+  );
+
   return {
     reversalMovements,
     reversalSupplierLedgerEntry,
+    reversalAccountLedgerEntries,
     productUpdates,
   };
 }
@@ -758,6 +895,7 @@ export function voidAdjustment(
   return {
     reversalMovements,
     reversalSupplierLedgerEntry: null,
+    reversalAccountLedgerEntries: [],
     productUpdates,
   };
 }
@@ -779,6 +917,8 @@ export interface RecordSaleInput {
   notes: string | null;
   reference: string | null;
   paidKobo: bigint;
+  /** The account taking the money. Required whenever `paidKobo > 0`. */
+  accountId?: string | null;
   lines: RecordSaleLineInput[];
 }
 
@@ -788,6 +928,8 @@ export interface RecordSaleResult {
   movements: StockMovement[];
   customerLedgerEntry: CustomerLedgerEntry | null;
   salePayment: SalePayment | null;
+  /** The positive SALE_PAYMENT account entry for money taken now. */
+  accountLedgerEntry: AccountLedgerEntry | null;
 }
 
 export function recordSale(
@@ -949,14 +1091,27 @@ export function recordSale(
   }
 
   let salePayment: SalePayment | null = null;
+  let accountLedgerEntry: AccountLedgerEntry | null = null;
   if (input.paidKobo > 0n) {
+    const accountId = requireAccountId(input.accountId, "a sale is paid");
     salePayment = {
       id: newId(),
       saleId,
+      accountId,
       amountKobo: input.paidKobo,
       paidAt: input.soldAt,
       createdAt: input.soldAt,
     };
+    accountLedgerEntry = buildAccountLedgerEntry(
+      {
+        accountId,
+        type: "SALE_PAYMENT",
+        amountKobo: input.paidKobo,
+        salePaymentId: salePayment.id,
+        occurredAt: input.soldAt,
+      },
+      newId,
+    );
   }
 
   return {
@@ -965,12 +1120,15 @@ export function recordSale(
     movements,
     customerLedgerEntry,
     salePayment,
+    accountLedgerEntry,
   };
 }
 
 export interface VoidSaleResult {
   reversalMovements: StockMovement[];
   reversalCustomerLedgerEntry: CustomerLedgerEntry | null;
+  /** Money that must travel back out of the account when the sale is voided. */
+  reversalAccountLedgerEntries: AccountLedgerEntry[];
 }
 
 export function voidSale(
@@ -982,6 +1140,8 @@ export function voidSale(
   existingCustomerLedger: readonly CustomerLedgerEntry[],
   newId: IdGenerator,
   existingSalePayments: readonly SalePayment[] = [],
+  existingAccountLedger: readonly AccountLedgerEntry[] = [],
+  existingAccounts: readonly Account[] = [],
 ): VoidSaleResult {
   if (!Number.isFinite(voidedAt.getTime())) {
     throw new RangeError("Void date must be valid.");
@@ -1067,9 +1227,28 @@ export function voidSale(
     );
   }
 
+  // Every sale payment took money into an account, so voiding the sale has to
+  // put it back. If that cash has already been spent the reversal is refused
+  // with a message naming the account, rather than leaving a negative balance.
+  const accountTargets = existingAccountLedger.filter(
+    (entry) =>
+      entry.type === "SALE_PAYMENT" &&
+      entry.salePaymentId !== null &&
+      salePaymentIds.has(entry.salePaymentId) &&
+      entry.reversesEntryId === null,
+  );
+  const reversalAccountLedgerEntries = buildAccountReversals(
+    accountTargets,
+    existingAccountLedger,
+    existingAccounts,
+    voidedAt,
+    newId,
+  );
+
   return {
     reversalMovements,
     reversalCustomerLedgerEntry,
+    reversalAccountLedgerEntries,
   };
 }
 
@@ -1077,12 +1256,16 @@ export interface RecordSalePaymentInput {
   saleId: string;
   amountKobo: bigint;
   paidAt: Date;
+  /** The account taking the money. Required because a payment moves money. */
+  accountId?: string | null;
 }
 
 export interface RecordSalePaymentResult {
   sale: Sale;
   customerLedgerEntry: CustomerLedgerEntry | null;
   salePayment: SalePayment;
+  /** The positive SALE_PAYMENT account entry for the money taken. */
+  accountLedgerEntry: AccountLedgerEntry;
 }
 
 export function recordSalePayment(
@@ -1096,6 +1279,8 @@ export function recordSalePayment(
   if (input.amountKobo <= 0n) {
     throw new RangeError("Payment amount must be positive.");
   }
+
+  const accountId = requireAccountId(input.accountId, "a sale payment is recorded");
 
   const sale = existingSales.find((s) => s.id === input.saleId);
   if (!sale) {
@@ -1124,10 +1309,24 @@ export function recordSalePayment(
   const salePayment: SalePayment = {
     id: newId(),
     saleId: sale.id,
+    accountId,
     amountKobo: input.amountKobo,
     paidAt: input.paidAt,
     createdAt: input.paidAt,
   };
+
+  // Money that came in must land somewhere: every payment posts a positive
+  // SALE_PAYMENT entry against the account it was taken into.
+  const accountLedgerEntry = buildAccountLedgerEntry(
+    {
+      accountId,
+      type: "SALE_PAYMENT",
+      amountKobo: input.amountKobo,
+      salePaymentId: salePayment.id,
+      occurredAt: input.paidAt,
+    },
+    newId,
+  );
 
   let customerLedgerEntry: CustomerLedgerEntry | null = null;
   if (sale.customerId !== null) {
@@ -1154,6 +1353,7 @@ export function recordSalePayment(
     sale: updatedSale,
     customerLedgerEntry,
     salePayment,
+    accountLedgerEntry,
   };
 }
 
@@ -1163,12 +1363,16 @@ export interface RecordPurchasePaymentInput {
   paidAt: Date;
   method: PaymentMethod;
   note: string | null;
+  /** The account the money left. Required because a payment moves money. */
+  accountId?: string | null;
 }
 
 export interface RecordPurchasePaymentResult {
   purchase: Purchase;
   supplierPayment: SupplierPayment;
   supplierLedgerEntry: SupplierLedgerEntry;
+  /** The negative SUPPLIER_PAYMENT account entry for the money paid out. */
+  accountLedgerEntry: AccountLedgerEntry;
 }
 
 /**
@@ -1187,6 +1391,11 @@ export function recordPurchasePayment(
   if (input.amountKobo <= 0n) {
     throw new RangeError("Payment amount must be positive.");
   }
+
+  const accountId = requireAccountId(
+    input.accountId,
+    "a supplier payment is recorded",
+  );
 
   const purchase = existingPurchases.find((p) => p.id === input.purchaseId);
   if (!purchase) {
@@ -1221,6 +1430,7 @@ export function recordPurchasePayment(
     id: newId(),
     supplierId: purchase.supplierId,
     purchaseId: purchase.id,
+    accountId,
     amountKobo: input.amountKobo,
     method: input.method,
     note: input.note,
@@ -1240,7 +1450,25 @@ export function recordPurchasePayment(
     occurredAt: input.paidAt,
   };
 
-  return { purchase: updatedPurchase, supplierPayment, supplierLedgerEntry };
+  // Money that left the business must leave a named account: a supplier
+  // payment posts a negative SUPPLIER_PAYMENT entry keyed on the payment row.
+  const accountLedgerEntry = buildAccountLedgerEntry(
+    {
+      accountId,
+      type: "SUPPLIER_PAYMENT",
+      amountKobo: -input.amountKobo,
+      supplierPaymentId: supplierPayment.id,
+      occurredAt: input.paidAt,
+    },
+    newId,
+  );
+
+  return {
+    purchase: updatedPurchase,
+    supplierPayment,
+    supplierLedgerEntry,
+    accountLedgerEntry,
+  };
 }
 
 export interface SalesSummaryDay {
@@ -1453,6 +1681,7 @@ export function salesSummary(
 
   for (const expense of existingExpenses) {
     if (
+      expense.voidedAt !== null ||
       expense.expenseDate.getTime() < from.getTime() ||
       expense.expenseDate.getTime() >= to.getTime()
     ) {

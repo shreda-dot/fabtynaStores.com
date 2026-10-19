@@ -1,4 +1,7 @@
 import type {
+    Account,
+    AccountLedgerEntry,
+    AccountTransfer,
     CashSnapshot,
     Expense,
     LoanLedgerEntry,
@@ -18,6 +21,16 @@ import {
     validateLoanLedgerReversals,
     validatePurchasePaymentFields,
 } from "./accounting.ts";
+import {
+    accountBalanceKobo,
+    validateAccount,
+    validateAccountLedgerEntry,
+    validateAccountLedgerReversals,
+    validateAccountTransfer,
+    validateAtMostOneLiveOpeningBalance,
+    validateExpenseVoidFields,
+    validateLoanInterestHasNoAccountEntry,
+} from "./accounts.ts";
 
 const NON_REVERSAL_MOVEMENT_SIGNS: Record<
     StockMovement["type"],
@@ -374,6 +387,10 @@ export interface InvariantStoreState {
     loanLedgerEntries?: readonly LoanLedgerEntry[];
     cashSnapshots?: readonly CashSnapshot[];
     expenses?: readonly Expense[];
+    /** Account additions — validated only when supplied. */
+    accounts?: readonly Account[];
+    accountLedgerEntries?: readonly AccountLedgerEntry[];
+    accountTransfers?: readonly AccountTransfer[];
 }
 
 export function assertStoreInvariants(state: InvariantStoreState): void {
@@ -413,6 +430,9 @@ export function assertStoreInvariants(state: InvariantStoreState): void {
         if (payment.amountKobo <= 0n) {
             throw new RangeError("A supplier payment amount must be positive.");
         }
+        if (payment.accountId.trim() === "") {
+            throw new RangeError("A supplier payment must name the account it left.");
+        }
     }
     for (const entry of state.loanLedgerEntries ?? []) {
         validateLoanLedgerEntry(entry);
@@ -432,6 +452,34 @@ export function assertStoreInvariants(state: InvariantStoreState): void {
                 "An expense linked to a loan repayment must use the LOAN_INTEREST category.",
             );
         }
+        validateExpenseVoidFields(expense);
+    }
+
+    for (const account of state.accounts ?? []) {
+        validateAccount(account);
+    }
+    for (const entry of state.accountLedgerEntries ?? []) {
+        validateAccountLedgerEntry(entry);
+    }
+    if (state.accountLedgerEntries) {
+        validateAccountLedgerReversals(state.accountLedgerEntries);
+        validateAtMostOneLiveOpeningBalance(state.accountLedgerEntries);
+    }
+    for (const transfer of state.accountTransfers ?? []) {
+        validateAccountTransfer(transfer);
+    }
+    for (const account of state.accounts ?? []) {
+        if (accountBalanceKobo(account.id, state.accountLedgerEntries ?? []) < 0n) {
+            throw new RangeError(
+                `Account '${account.name}' balance cannot be negative.`,
+            );
+        }
+    }
+    if (state.accountLedgerEntries && state.expenses) {
+        validateLoanInterestHasNoAccountEntry(
+            state.expenses,
+            state.accountLedgerEntries,
+        );
     }
 }
 

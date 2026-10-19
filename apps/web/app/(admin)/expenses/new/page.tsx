@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -14,13 +14,14 @@ import {
   type SaleChannel,
 } from "@fabtyna/shared";
 import { MoneyInput } from "@/components/money-input";
+import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody, CardFooter, CardHeader } from "@/components/ui/card";
 import { FormField } from "@/components/ui/form-field";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { expensesApi } from "@/lib/api";
+import { accountingApi, expensesApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { toast } from "@/stores/toast-store";
@@ -68,12 +69,17 @@ export default function NewExpensePage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const network = useNetworkStatus();
+  const accountsQuery = useQuery({
+    queryKey: queryKeys.accounting.accounts,
+    queryFn: () => accountingApi.listAccounts(),
+  });
 
   const [channel, setChannel] = useState<SaleChannel>("RETAIL");
   const [category, setCategory] = useState<ExpenseCategory>("OTHER");
   const [description, setDescription] = useState("");
   const [amountKobo, setAmountKobo] = useState("");
   const [expenseDate, setExpenseDate] = useState(() => getLagosBusinessDate());
+  const [accountId, setAccountId] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const submitting = useRef(false);
@@ -83,6 +89,7 @@ export default function NewExpensePage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.expenses.all });
       await queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
       toast.success(`Expense of ${formatNaira(amountKobo)} recorded.`);
       router.push("/expenses");
     },
@@ -108,11 +115,15 @@ export default function NewExpensePage() {
     if (amountError !== "") found[AMOUNT_ID] = amountError;
     const dateError = validateDate(expenseDate);
     if (dateError !== "") found[DATE_ID] = dateError;
+    if (defaultAccountId(accountsQuery.data ?? []) === "") {
+      found["expense-account"] =
+        "Add an active account before recording this expense.";
+    }
     return found;
   }
 
   function focusFirstError(found: Record<string, string>) {
-    const order = [DESCRIPTION_ID, AMOUNT_ID, DATE_ID];
+    const order = [DESCRIPTION_ID, AMOUNT_ID, "expense-account", DATE_ID];
     const firstId = order.find((id) => found[id] !== undefined);
     if (!firstId) return;
     const element = document.getElementById(firstId);
@@ -138,6 +149,7 @@ export default function NewExpensePage() {
       description: description.trim(),
       amountKobo,
       expenseDate: createLagosDateTime(expenseDate).toISOString(),
+      accountId: accountId || defaultAccountId(accountsQuery.data ?? []),
     };
 
     submitting.current = true;
@@ -226,6 +238,25 @@ export default function NewExpensePage() {
                 </Select>
               </FormField>
             </div>
+
+            <AccountSelect
+              id="expense-account"
+              label="Paid from"
+              accounts={accountsQuery.data ?? []}
+              accountId={accountId}
+              onChange={setAccountId}
+              disabled={accountsQuery.isPending || accountsQuery.isError}
+            />
+            {errors["expense-account"] && (
+              <p role="alert" className="text-sm text-danger">
+                {errors["expense-account"]}
+              </p>
+            )}
+            {accountsQuery.isError && (
+              <p role="alert" className="text-sm text-danger">
+                Accounts could not be loaded: {toUserMessage(accountsQuery.error)}
+              </p>
+            )}
 
             <FormField
               id={DESCRIPTION_ID}

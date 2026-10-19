@@ -117,6 +117,8 @@ export const createPurchaseDtoSchema = z
     dueDate: lagosDateStringSchema.nullable(),
     /** How the up-front payment was made. Defaults to CASH. */
     paymentMethod: paymentMethodSchema.optional(),
+    /** The account the up-front payment left. Required by the domain when paid. */
+    accountId: idSchema.nullable().optional(),
     lines: z.array(createPurchaseLineDtoSchema).min(1),
   })
   .strict();
@@ -127,6 +129,8 @@ export const recordPurchasePaymentDtoSchema = z
     paidAt: isoDateTimeSchema,
     method: paymentMethodSchema,
     note: z.string().trim().nullable().optional(),
+    /** The account the money left. Required by the domain. */
+    accountId: idSchema.nullable().optional(),
   })
   .strict();
 

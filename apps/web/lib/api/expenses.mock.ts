@@ -1,14 +1,25 @@
 import {
   createExpenseDtoSchema,
   fromAuditLogDto,
+  assertAccountAcceptsNewEntries,
+  assertAccountWillRemainNonnegative,
+  assertNotFutureOccurredAt,
+  buildAccountLedgerEntry,
+  getLagosBusinessDate,
+  toAccountLedgerEntryDto,
   toAuditLogDto,
   toExpenseDto,
   type CreateExpenseDto,
   type Expense,
   type ExpenseDto,
+  type AccountLedgerEntry,
 } from "@fabtyna/shared";
 import type { ExpensesApi, ExpenseListOptions } from "./expenses.api";
-import { newId, readMockStore, transactMockStore } from "./mock-store";
+import {
+  newId,
+  readMockStore,
+  transactMockStore,
+} from "./mock-store";
 import { mockDelay } from "./mock-transport";
 
 function delay(): Promise<void> {
@@ -95,43 +106,110 @@ export const expensesMockApi: ExpensesApi = {
         amountKobo: BigInt(data.amountKobo),
         expenseDate: new Date(data.expenseDate),
         loanRepaymentId: null,
+        voidedAt: null,
+        voidReason: null,
         createdAt,
         updatedAt: createdAt,
       };
+      assertNotFutureOccurredAt(expense.expenseDate, getLagosBusinessDate());
+      let accountLedgerEntry: AccountLedgerEntry | null = null;
+      if (expense.category !== "LOAN_INTEREST") {
+        const accountId = data.accountId;
+        if (!accountId) {
+          throw new RangeError("Choose the account the expense will be paid from.");
+        }
+        const account = draft.accounts.find((item) => item.id === accountId);
+        if (!account) throw new Error("Account not found.");
+        assertAccountAcceptsNewEntries(account, false);
+        const balanceKobo = draft.accountLedgerEntries
+          .filter((entry) => entry.accountId === account.id)
+          .reduce((total, entry) => total + entry.amountKobo, 0n);
+        assertAccountWillRemainNonnegative(account, balanceKobo, -expense.amountKobo);
+        accountLedgerEntry = buildAccountLedgerEntry(
+          {
+            accountId: account.id,
+            type: "EXPENSE",
+            amountKobo: -expense.amountKobo,
+            expenseId: expense.id,
+            occurredAt: expense.expenseDate,
+            note: expense.description,
+          },
+          newId,
+        );
+      }
       draft.expenses.push(expense);
+      if (accountLedgerEntry) {
+        draft.accountLedgerEntries.push(accountLedgerEntry);
+      }
       audit(draft, "EXPENSE_CREATED", expense.id, null, toExpenseDto(expense));
       return expense;
     });
     return response(result);
   },
 
-  async update(id, input) {
+  async void(id, reason) {
     await delay();
-    const data = validated(input);
+    const normalizedReason = reason.trim();
+    if (normalizedReason === "") {
+      throw new RangeError("Enter a reason for voiding this expense.");
+    }
     const result = transactMockStore((draft) => {
       const expense = findExpense(draft.expenses, id);
+      if (expense.voidedAt !== null) {
+        throw new RangeError("This expense has already been voided.");
+      }
+      if (expense.loanRepaymentId !== null) {
+        throw new RangeError(
+          "A loan-interest expense cannot be voided separately from its repayment.",
+        );
+      }
       const before = toExpenseDto(expense);
-      Object.assign(expense, {
-        channel: data.channel,
-        category: data.category,
-        description: data.description.trim(),
-        amountKobo: BigInt(data.amountKobo),
-        expenseDate: new Date(data.expenseDate),
-        updatedAt: new Date(),
-      });
-      audit(draft, "EXPENSE_UPDATED", id, before, toExpenseDto(expense));
+      const accountEntry = draft.accountLedgerEntries.find(
+        (entry) =>
+          entry.expenseId === expense.id && entry.reversesEntryId === null,
+      );
+      if (accountEntry) {
+        const account = draft.accounts.find(
+          (item) => item.id === accountEntry.accountId,
+        );
+        if (!account) throw new Error("Account not found.");
+        assertAccountAcceptsNewEntries(account, true);
+        const balanceKobo = draft.accountLedgerEntries
+          .filter((entry) => entry.accountId === account.id)
+          .reduce((total, entry) => total + entry.amountKobo, 0n);
+        assertAccountWillRemainNonnegative(
+          account,
+          balanceKobo,
+          -accountEntry.amountKobo,
+        );
+        draft.accountLedgerEntries.push({
+          ...accountEntry,
+          id: newId(),
+          amountKobo: -accountEntry.amountKobo,
+          reversesEntryId: accountEntry.id,
+          occurredAt: new Date(),
+        });
+      }
+      const voidedAt = new Date();
+      expense.voidedAt = voidedAt;
+      expense.voidReason = normalizedReason;
+      expense.updatedAt = voidedAt;
+      audit(draft, "EXPENSE_VOIDED", id, before, toExpenseDto(expense));
+      if (accountEntry) {
+        audit(
+          draft,
+          "EXPENSE_ACCOUNT_ENTRY_REVERSED",
+          accountEntry.id,
+          toAccountLedgerEntryDto(accountEntry),
+          {
+            ...toAccountLedgerEntryDto(accountEntry),
+            amountKobo: (-accountEntry.amountKobo).toString(),
+            reversesEntryId: accountEntry.id,
+          },
+        );
+      }
       return expense;
     });
     return response(result);
-  },
-
-  async remove(id) {
-    await delay();
-    transactMockStore((draft) => {
-      const expense = findExpense(draft.expenses, id);
-      const before = toExpenseDto(expense);
-      draft.expenses = draft.expenses.filter((item) => item.id !== id);
-      audit(draft, "EXPENSE_DELETED", id, before, null);
-    });
   },
 };

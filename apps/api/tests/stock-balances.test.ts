@@ -9,10 +9,11 @@ import { runDbAudit } from "../src/db/audit.js";
  *
  * The table is a derived, one-row-per-(product, location) cache of
  * `SUM(stock_movements.quantityUnits)`. It is maintained only by the AFTER
- * INSERT trigger `fn_apply_stock_movement`, which does a single
- * `INSERT ... ON CONFLICT DO UPDATE` — one statement that takes a row lock and
- * evaluates the arithmetic and `ck_stock_balances_nonnegative` under it, so two
- * concurrent sales cannot both read the same stale balance and both succeed.
+ * INSERT trigger `fn_apply_stock_movement`, which updates an existing balance
+ * row first and inserts only when no row exists, retrying after a concurrent
+ * first insert. PostgreSQL checks a proposed INSERT row before resolving
+ * `ON CONFLICT`, so an `INSERT ... ON CONFLICT DO UPDATE` can reject a legal
+ * negative delta before it is merged with the positive current balance.
  *
  * The deterministic tests roll every write back. The concurrency test cannot:
  * the race is only observable when the winner commits, so it deliberately

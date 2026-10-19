@@ -16,6 +16,5 @@ export interface ExpensesApi {
   list(options?: ExpenseListOptions): Promise<ExpenseDto[]>;
   getById(id: string): Promise<ExpenseDto>;
   create(input: CreateExpenseDto): Promise<ExpenseDto>;
-  update(id: string, input: CreateExpenseDto): Promise<ExpenseDto>;
-  remove(id: string): Promise<void>;
+  void(id: string, reason: string): Promise<ExpenseDto>;
 }

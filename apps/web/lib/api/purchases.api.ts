@@ -34,6 +34,7 @@ export interface PurchasesApi {
     amountKobo: string,
     paidAt: string,
     method: SupplierPaymentDto["method"],
+    accountId: string,
     note?: string,
   ): Promise<PurchaseDetailDto>;
 }

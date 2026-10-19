@@ -1,21 +1,29 @@
 import type { z } from "zod";
 import {
+  accountDtoSchema,
   accountLedgerEntryDtoSchema,
+  accountTransferDtoSchema,
   accountingPositionOptionsDtoSchema,
   addLoanChargeDtoSchema,
   adminUserPublicDtoSchema,
   auditLogDtoSchema,
   cashSnapshotDtoSchema,
+  createAccountDtoSchema,
+  createAccountTransferDtoSchema,
   createAdjustmentDtoSchema,
   createCashSnapshotDtoSchema,
   createCustomerDtoSchema,
   createExpenseDtoSchema,
   createLoanDtoSchema,
+  createOpeningBalanceDtoSchema,
   createPurchaseDtoSchema,
   createSaleDtoSchema,
   createSupplierDtoSchema,
   createTransferDtoSchema,
   customerDtoSchema,
+  deactivateAccountDtoSchema,
+  reconcileAccountDtoSchema,
+  updateAccountDtoSchema,
   customerLedgerEntryDtoSchema,
   expenseDtoSchema,
   loanDtoSchema,
@@ -93,3 +101,18 @@ export type CreateCashSnapshotDto = z.infer<typeof createCashSnapshotDtoSchema>;
 export type AccountingPositionOptionsDto = z.infer<
   typeof accountingPositionOptionsDtoSchema
 >;
+
+/* Accounts --------------------------------------------------------------- */
+
+export type AccountDto = z.infer<typeof accountDtoSchema>;
+export type AccountTransferDto = z.infer<typeof accountTransferDtoSchema>;
+export type CreateAccountDto = z.infer<typeof createAccountDtoSchema>;
+export type UpdateAccountDto = z.infer<typeof updateAccountDtoSchema>;
+export type CreateAccountTransferDto = z.infer<
+  typeof createAccountTransferDtoSchema
+>;
+export type CreateOpeningBalanceDto = z.infer<
+  typeof createOpeningBalanceDtoSchema
+>;
+export type ReconcileAccountDto = z.infer<typeof reconcileAccountDtoSchema>;
+export type DeactivateAccountDto = z.infer<typeof deactivateAccountDtoSchema>;

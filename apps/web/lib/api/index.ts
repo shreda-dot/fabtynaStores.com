@@ -27,6 +27,7 @@ import { loansMockApi } from "./loans.mock";
 import { cashMockApi } from "./cash.mock";
 import { accountingMockApi } from "./accounting.mock";
 import { instrumentApi } from "./client";
+import { resetDemoData } from "./mock-store";
 
 function notImplemented(): never {
   throw new Error("not implemented");
@@ -102,8 +103,7 @@ const expensesRealApi: ExpensesApi = {
   list: async () => notImplemented(),
   getById: async () => notImplemented(),
   create: async () => notImplemented(),
-  update: async () => notImplemented(),
-  remove: async () => notImplemented(),
+  void: async () => notImplemented(),
 };
 
 const payablesRealApi: PayablesApi = {
@@ -127,6 +127,18 @@ const cashRealApi: CashApi = {
 
 const accountingRealApi: AccountingApi = {
   position: async () => notImplemented(),
+  moneyFlow: async () => notImplemented(),
+  listAccounts: async () => notImplemented(),
+  createAccount: async () => notImplemented(),
+  updateAccount: async () => notImplemented(),
+  deactivateAccount: async () => notImplemented(),
+  recordOpeningBalance: async () => notImplemented(),
+  reconcileAccount: async () => notImplemented(),
+  recordTransfer: async () => notImplemented(),
+  recordManualEntry: async () => notImplemented(),
+  listLedgerEntries: async () => notImplemented(),
+  getMigrationNotice: async () => notImplemented(),
+  dismissMigrationNotice: async () => notImplemented(),
 };
 
 const apiMode = process.env.NEXT_PUBLIC_API_MODE ?? "mock";
@@ -135,9 +147,6 @@ if (apiMode !== "mock" && apiMode !== "real") {
   throw new Error(`Unsupported NEXT_PUBLIC_API_MODE '${apiMode}'.`);
 }
 
-// Every API goes through `instrumentApi` so all calls share the request
-// timeout, typed errors and network health reporting. The object shape is
-// unchanged.
 export const productsApi = instrumentApi(apiMode === "mock" ? productsMockApi : productsRealApi);
 export const suppliersApi = instrumentApi(apiMode === "mock" ? suppliersMockApi : suppliersRealApi);
 export const customersApi = instrumentApi(apiMode === "mock" ? customersMockApi : customersRealApi);
@@ -153,7 +162,7 @@ export const loansApi = instrumentApi(apiMode === "mock" ? loansMockApi : loansR
 export const cashApi = instrumentApi(apiMode === "mock" ? cashMockApi : cashRealApi);
 export const accountingApi = instrumentApi(apiMode === "mock" ? accountingMockApi : accountingRealApi);
 
-export { resetDemoData } from "./mock-store";
+export { resetDemoData };
 export type { ProductsApi } from "./products.api";
 export type { SuppliersApi } from "./suppliers.api";
 export type { CustomersApi } from "./customers.api";

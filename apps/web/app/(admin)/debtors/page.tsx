@@ -8,19 +8,23 @@ import {
   formatLagosDate,
   formatNaira,
   getLagosBusinessDate,
+  type PaymentMethod,
 } from "@fabtyna/shared";
+import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
 import { DateFilter } from "@/components/date-filter";
 import { MoneyInput } from "@/components/money-input";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { FormField } from "@/components/ui/form-field";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
+import { Select } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
-import { salesApi } from "@/lib/api";
+import { accountingApi, salesApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
@@ -125,22 +129,39 @@ export default function DebtorsPage() {
   const [payingSaleId, setPayingSaleId] = useState<string | null>(null);
   const [paymentKobo, setPaymentKobo] = useState("");
   const [paymentError, setPaymentError] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [accountId, setAccountId] = useState("");
   const submitting = useRef(false);
+
+  const accountsQuery = useQuery({
+    queryKey: queryKeys.accounting.accounts,
+    queryFn: () => accountingApi.listAccounts(),
+    enabled: payingSaleId !== null,
+  });
 
   const payMutation = useMutation({
     mutationFn: ({
       saleId,
       amountKobo,
+      accountId,
     }: {
       saleId: string;
       amountKobo: string;
-    }) => salesApi.recordPayment(saleId, amountKobo, new Date().toISOString()),
+      accountId: string;
+    }) =>
+      salesApi.recordPayment(
+        saleId,
+        amountKobo,
+        new Date().toISOString(),
+        accountId,
+      ),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
       await queryClient.invalidateQueries({
         queryKey: queryKeys.customers.all,
       });
       await queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
       setPayingSaleId(null);
       setPaymentKobo("");
       setPaymentError("");
@@ -151,6 +172,8 @@ export default function DebtorsPage() {
     setPayingSaleId(saleId);
     setPaymentKobo(owed.toString());
     setPaymentError("");
+    setPaymentMethod("CASH");
+    setAccountId("");
   }
 
   async function submitPayment(sale: DebtorSale, groupName: string) {
@@ -171,6 +194,12 @@ export default function DebtorsPage() {
       setPaymentError(
         `Payment cannot be more than the outstanding balance of ${formatNaira(owed)}.`,
       );
+      return;
+    }
+    const selectedAccountId =
+      accountId || defaultAccountId(accountsQuery.data ?? [], paymentMethod);
+    if (selectedAccountId === "") {
+      setPaymentError("Add an active account before recording this payment.");
       return;
     }
 
@@ -213,6 +242,7 @@ export default function DebtorsPage() {
           payMutation.mutateAsync({
             saleId: sale.id,
             amountKobo: paymentKobo,
+            accountId: selectedAccountId,
           }),
       });
     } finally {
@@ -361,6 +391,35 @@ export default function DebtorsPage() {
                             defaultValueKobo={sale.amountOwedKobo.toString()}
                             onKoboChange={setPaymentKobo}
                           />
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <FormField id={`method-${sale.id}`} label="Payment method">
+                              <Select
+                                id={`method-${sale.id}`}
+                                value={paymentMethod}
+                                onChange={(event) =>
+                                  setPaymentMethod(event.target.value as PaymentMethod)
+                                }
+                              >
+                                <option value="CASH">Cash</option>
+                                <option value="TRANSFER">Transfer</option>
+                                <option value="OTHER">Other</option>
+                              </Select>
+                            </FormField>
+                            <AccountSelect
+                              id={`account-${sale.id}`}
+                              label="Received into"
+                              accounts={accountsQuery.data ?? []}
+                              accountId={accountId}
+                              onChange={setAccountId}
+                              method={paymentMethod}
+                              disabled={accountsQuery.isPending || accountsQuery.isError}
+                            />
+                          </div>
+                          {accountsQuery.isError && (
+                            <p role="alert" className="text-sm text-danger">
+                              Accounts could not be loaded: {toUserMessage(accountsQuery.error)}
+                            </p>
+                          )}
                           {paymentError && (
                             <p role="alert" className="text-sm text-danger">
                               {paymentError}

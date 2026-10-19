@@ -27,6 +27,8 @@ export const expenseDtoSchema = z
     amountKobo: positiveKoboStringSchema,
     expenseDate: isoDateTimeSchema,
     loanRepaymentId: idSchema.nullable(),
+    voidedAt: isoDateTimeSchema.nullable(),
+    voidReason: z.string().nullable(),
     createdAt: isoDateTimeSchema,
     updatedAt: isoDateTimeSchema,
   })
@@ -39,5 +41,7 @@ export const createExpenseDtoSchema = z
     description: z.string().trim().min(1),
     amountKobo: positiveKoboStringSchema,
     expenseDate: isoDateTimeSchema,
+    /** The account the money left. Optional; expenses without one do not touch money. */
+    accountId: idSchema.nullable().optional(),
   })
   .strict();

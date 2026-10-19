@@ -1,4 +1,7 @@
 import {
+  fromAccountDto,
+  fromAccountLedgerEntryDto,
+  fromAccountTransferDto,
   fromAuditLogDto,
   fromCashSnapshotDto,
   fromCustomerDto,
@@ -22,6 +25,9 @@ import {
   fromSupplierDto,
   fromSupplierLedgerEntryDto,
   fromSupplierPaymentDto,
+  toAccountDto,
+  toAccountLedgerEntryDto,
+  toAccountTransferDto,
   toAuditLogDto,
   toCashSnapshotDto,
   toCustomerDto,
@@ -45,6 +51,10 @@ import {
   toSupplierDto,
   toSupplierLedgerEntryDto,
   toSupplierPaymentDto,
+  type Account,
+  type AccountLedgerEntry,
+  type AccountTransfer,
+  type AccountType,
   type AuditLog,
   type CashSnapshot,
   type Customer,
@@ -70,6 +80,9 @@ import {
   type SupplierPayment,
 } from "@fabtyna/shared";
 import type {
+  AccountDto,
+  AccountLedgerEntryDto,
+  AccountTransferDto,
   AuditLogDto,
   CashSnapshotDto,
   CustomerDto,
@@ -124,6 +137,9 @@ export type MockStore = {
   loanRepayments: LoanRepayment[];
   cashSnapshots: CashSnapshot[];
   auditLogs: AuditLog[];
+  accounts: Account[];
+  accountLedgerEntries: AccountLedgerEntry[];
+  accountTransfers: AccountTransfer[];
 };
 
 type PersistedMockStore = {
@@ -150,6 +166,9 @@ type PersistedMockStore = {
   loanRepayments: LoanRepaymentDto[];
   cashSnapshots: CashSnapshotDto[];
   auditLogs: AuditLogDto[];
+  accounts: AccountDto[];
+  accountLedgerEntries: AccountLedgerEntryDto[];
+  accountTransfers: AccountTransferDto[];
 };
 
 type PersistedPayload = {
@@ -184,6 +203,35 @@ function normalizeSku(sku: string | null): string | null {
   if (sku === null) return null;
   const trimmed = sku.trim().toUpperCase();
   return trimmed === "" ? null : trimmed;
+}
+
+/**
+ * Fixed ids for the two accounts every store starts with. They match the ids
+ * the v6 -> v7 migration stamps onto migrated payloads, so a migrated store and
+ * a freshly seeded one agree on which account money lands in.
+ */
+const DEFAULT_CASH_ACCOUNT_ID = "acct-cash-on-hand";
+const DEFAULT_BANK_ACCOUNT_ID = "acct-moniepoint";
+
+/**
+ * Picks the account a money movement belongs to. Until the account pickers
+ * ship, callers name nothing and the movement lands in the first active
+ * account of the preferred type: the bank account for a transfer, otherwise
+ * cash on hand.
+ */
+export function resolveAccountId(
+  accounts: readonly Account[],
+  requested: string | null | undefined,
+  preferredType: AccountType = "CASH",
+): string {
+  if (requested) return requested;
+  const active = accounts.filter((account) => account.isActive);
+  const match =
+    active.find((account) => account.type === preferredType) ?? active[0];
+  if (!match) {
+    throw new Error("No active account is available to record this money movement.");
+  }
+  return match.id;
 }
 
 function seedDemoData(): MockStore {
@@ -313,6 +361,30 @@ function seedDemoData(): MockStore {
     loanRepayments: [],
     cashSnapshots: [],
     auditLogs: [],
+    accounts: [
+      {
+        id: DEFAULT_CASH_ACCOUNT_ID,
+        name: "Cash on hand",
+        type: "CASH",
+        isActive: true,
+        deactivatedAt: null,
+        note: "Money physically in the drawer.",
+        createdAt,
+        updatedAt: createdAt,
+      },
+      {
+        id: DEFAULT_BANK_ACCOUNT_ID,
+        name: "Moniepoint",
+        type: "BANK",
+        isActive: true,
+        deactivatedAt: null,
+        note: "Bank / transfer account.",
+        createdAt,
+        updatedAt: createdAt,
+      },
+    ],
+    accountLedgerEntries: [],
+    accountTransfers: [],
   };
 }
 
@@ -341,6 +413,9 @@ function encodeStore(store: MockStore): PersistedMockStore {
     loanRepayments: store.loanRepayments.map(toLoanRepaymentDto),
     cashSnapshots: store.cashSnapshots.map(toCashSnapshotDto),
     auditLogs: store.auditLogs.map(toAuditLogDto),
+    accounts: store.accounts.map(toAccountDto),
+    accountLedgerEntries: store.accountLedgerEntries.map(toAccountLedgerEntryDto),
+    accountTransfers: store.accountTransfers.map(toAccountTransferDto),
   };
 }
 
@@ -390,6 +465,9 @@ function decodeStore(value: unknown): MockStore {
     "loanRepayments",
     "cashSnapshots",
     "auditLogs",
+    "accounts",
+    "accountLedgerEntries",
+    "accountTransfers",
   ] as const;
   for (const key of keys) {
     const value = raw[key];
@@ -423,6 +501,9 @@ function decodeStore(value: unknown): MockStore {
     loanRepayments: saved.loanRepayments.map(fromLoanRepaymentDto),
     cashSnapshots: saved.cashSnapshots.map(fromCashSnapshotDto),
     auditLogs: saved.auditLogs.map(fromAuditLogDto),
+    accounts: saved.accounts.map(fromAccountDto),
+    accountLedgerEntries: saved.accountLedgerEntries.map(fromAccountLedgerEntryDto),
+    accountTransfers: saved.accountTransfers.map(fromAccountTransferDto),
   };
 }
 
@@ -590,6 +671,48 @@ function assertImmutability(previous: MockStore, candidate: MockStore): void {
   assertRowsImmutable("Loan ledger entry", previous.loanLedgerEntries, candidate.loanLedgerEntries, toLoanLedgerEntryDto);
   assertRowsImmutable("Loan repayment", previous.loanRepayments, candidate.loanRepayments, toLoanRepaymentDto);
   assertRowsImmutable("Cash snapshot", previous.cashSnapshots, candidate.cashSnapshots, toCashSnapshotDto);
+  for (const expense of previous.expenses) {
+    const updated = candidate.expenses.find((item) => item.id === expense.id);
+    if (!updated) {
+      throw new Error(`Expense '${expense.id}' was removed.`);
+    }
+    const before = toExpenseDto(expense);
+    const after = toExpenseDto(updated);
+    if (
+      JSON.stringify({
+        ...before,
+        voidedAt: null,
+        voidReason: null,
+        updatedAt: null,
+      }) !==
+      JSON.stringify({
+        ...after,
+        voidedAt: null,
+        voidReason: null,
+        updatedAt: null,
+      })
+    ) {
+      throw new Error(`Expense '${expense.id}' was edited instead of voided.`);
+    }
+    if (expense.voidedAt === null && updated.voidedAt !== null) {
+      if ((updated.voidReason ?? "").trim() === "") {
+        throw new Error(`Voiding expense '${expense.id}' requires a reason.`);
+      }
+      if (updated.updatedAt.getTime() !== updated.voidedAt.getTime()) {
+        throw new Error(`Voiding expense '${expense.id}' must update its void timestamp.`);
+      }
+    } else if (
+      updated.voidedAt?.getTime() !== expense.voidedAt?.getTime() ||
+      updated.voidReason !== expense.voidReason ||
+      updated.updatedAt.getTime() !== expense.updatedAt.getTime()
+    ) {
+      throw new Error(`Expense '${expense.id}' was modified outside a void transition.`);
+    }
+  }
+  // The account ledger and its transfers are append-only; corrections are
+  // reversal rows. The accounts themselves stay editable (rename/deactivate).
+  assertRowsImmutable("Account ledger entry", previous.accountLedgerEntries, candidate.accountLedgerEntries, toAccountLedgerEntryDto);
+  assertRowsImmutable("Account transfer", previous.accountTransfers, candidate.accountTransfers, toAccountTransferDto);
 }
 
 export function transactMockStore<T>(change: (draft: MockStore) => T): T {
@@ -623,6 +746,9 @@ export function transactMockStore<T>(change: (draft: MockStore) => T): T {
     loanLedgerEntries: draft.loanLedgerEntries,
     cashSnapshots: draft.cashSnapshots,
     expenses: draft.expenses,
+    accounts: draft.accounts,
+    accountLedgerEntries: draft.accountLedgerEntries,
+    accountTransfers: draft.accountTransfers,
   });
 
   persist(draft);

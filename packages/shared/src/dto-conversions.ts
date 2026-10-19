@@ -1,4 +1,7 @@
 import type {
+  Account,
+  AccountLedgerEntry,
+  AccountTransfer,
   AuditLog,
   CashSnapshot,
   Customer,
@@ -24,6 +27,9 @@ import type {
   SupplierPayment,
 } from "./domain/types.ts";
 import {
+  accountDtoSchema,
+  accountLedgerEntryDtoSchema,
+  accountTransferDtoSchema,
   auditLogDtoSchema,
   cashSnapshotDtoSchema,
   customerDtoSchema,
@@ -49,6 +55,9 @@ import {
   supplierPaymentDtoSchema,
 } from "./schemas/index.ts";
 import type {
+  AccountDto,
+  AccountLedgerEntryDto,
+  AccountTransferDto,
   AuditLogDto,
   CashSnapshotDto,
   CustomerDto,
@@ -254,6 +263,7 @@ export function toExpenseDto(expense: Expense): ExpenseDto {
     ...expense,
     amountKobo: expense.amountKobo.toString(),
     expenseDate: dateToIso(expense.expenseDate),
+    voidedAt: expense.voidedAt === null ? null : dateToIso(expense.voidedAt),
     createdAt: dateToIso(expense.createdAt),
     updatedAt: dateToIso(expense.updatedAt),
   });
@@ -265,6 +275,7 @@ export function fromExpenseDto(dto: ExpenseDto): Expense {
     ...value,
     amountKobo: BigInt(value.amountKobo),
     expenseDate: new Date(value.expenseDate),
+    voidedAt: value.voidedAt === null ? null : new Date(value.voidedAt),
     createdAt: new Date(value.createdAt),
     updatedAt: new Date(value.updatedAt),
   };
@@ -528,6 +539,73 @@ export function fromCashSnapshotDto(dto: CashSnapshotDto): CashSnapshot {
   return {
     ...value,
     amountKobo: BigInt(value.amountKobo),
+    createdAt: new Date(value.createdAt),
+  };
+}
+
+/* Accounts --------------------------------------------------------------- */
+
+export function toAccountDto(account: Account): AccountDto {
+  return accountDtoSchema.parse({
+    ...account,
+    deactivatedAt:
+      account.deactivatedAt === null ? null : dateToIso(account.deactivatedAt),
+    createdAt: dateToIso(account.createdAt),
+    updatedAt: dateToIso(account.updatedAt),
+  });
+}
+
+export function fromAccountDto(dto: AccountDto): Account {
+  const value = accountDtoSchema.parse(dto);
+  return {
+    ...value,
+    deactivatedAt:
+      value.deactivatedAt === null ? null : new Date(value.deactivatedAt),
+    createdAt: new Date(value.createdAt),
+    updatedAt: new Date(value.updatedAt),
+  };
+}
+
+export function toAccountLedgerEntryDto(
+  entry: AccountLedgerEntry,
+): AccountLedgerEntryDto {
+  return accountLedgerEntryDtoSchema.parse({
+    ...entry,
+    amountKobo: entry.amountKobo.toString(),
+    occurredAt: dateToIso(entry.occurredAt),
+  });
+}
+
+export function fromAccountLedgerEntryDto(
+  dto: AccountLedgerEntryDto,
+): AccountLedgerEntry {
+  const value = accountLedgerEntryDtoSchema.parse(dto);
+  return {
+    ...value,
+    amountKobo: BigInt(value.amountKobo),
+    occurredAt: new Date(value.occurredAt),
+  };
+}
+
+export function toAccountTransferDto(
+  transfer: AccountTransfer,
+): AccountTransferDto {
+  return accountTransferDtoSchema.parse({
+    ...transfer,
+    amountKobo: transfer.amountKobo.toString(),
+    occurredAt: dateToIso(transfer.occurredAt),
+    createdAt: dateToIso(transfer.createdAt),
+  });
+}
+
+export function fromAccountTransferDto(
+  dto: AccountTransferDto,
+): AccountTransfer {
+  const value = accountTransferDtoSchema.parse(dto);
+  return {
+    ...value,
+    amountKobo: BigInt(value.amountKobo),
+    occurredAt: new Date(value.occurredAt),
     createdAt: new Date(value.createdAt),
   };
 }

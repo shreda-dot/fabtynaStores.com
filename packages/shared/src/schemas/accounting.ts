@@ -16,6 +16,7 @@ export const supplierPaymentDtoSchema = z
     id: idSchema,
     supplierId: idSchema,
     purchaseId: idSchema,
+    accountId: idSchema,
     amountKobo: positiveKoboStringSchema,
     method: paymentMethodSchema,
     note: z.string().nullable(),
@@ -82,6 +83,8 @@ export const createLoanDtoSchema = z
     disbursedAt: isoDateTimeSchema,
     dueDate: lagosDateStringSchema.nullable(),
     note: z.string().trim().nullable(),
+    /** The account the loan money landed in. Required by the domain. */
+    accountId: idSchema.nullable().optional(),
   })
   .strict();
 
@@ -99,6 +102,8 @@ export const recordLoanRepaymentDtoSchema = z
     interestPortionKobo: nonnegativeKoboStringSchema,
     paidAt: isoDateTimeSchema,
     note: z.string().trim().nullable().optional(),
+    /** The account the money left. Required by the domain. */
+    accountId: idSchema.nullable().optional(),
   })
   .strict();
 

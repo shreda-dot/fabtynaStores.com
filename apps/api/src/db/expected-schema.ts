@@ -58,14 +58,24 @@ export const EXPECTED_MIGRATIONS = [
   "20261017110000_document_locks",
   "20261017120000_trigger_behaviour_fixes",
   "20261017130000_stock_balance_maintainer_fix",
+  "20261019000000_account_entry_type_values",
+  "20261019000100_account_ledger_sources",
+  "20261019000200_default_accounts",
+  "20261019000300_account_balance_guard_fix",
 ] as const;
 
 /**
  * Application tables that exist only because a hand-written migration created
- * them: `stock_balances` carries the never-below-zero rule, so if it ever goes
- * missing the triggers listed below silently stop protecting anything.
+ * them: `stock_balances` and `account_balances` carry the never-below-zero
+ * rule, so if either ever goes missing the triggers listed below silently stop
+ * protecting anything. `account_transfers` is the document behind a transfer's
+ * ledger pair.
  */
-export const EXPECTED_TABLES = ["stock_balances"] as const;
+export const EXPECTED_TABLES = [
+  "stock_balances",
+  "account_transfers",
+  "account_balances",
+] as const;
 
 /**
  * CHECK constraints (pg_constraint.contype = 'c'), grouped by the migration
@@ -138,6 +148,22 @@ export const EXPECTED_CHECK_CONSTRAINTS = [
 
   // 20261017100000_stock_balances
   "ck_stock_balances_nonnegative",
+
+  // 20261019000100_account_ledger_sources — accounts / transfers / balances
+  "ck_accounts_deactivation_pair",
+  "ck_account_transfers_amount_positive",
+  "ck_account_transfers_different_accounts",
+  "ck_account_balances_nonnegative",
+
+  // 20261019000100_account_ledger_sources — expenses
+  "ck_expenses_void_pair",
+
+  // 20261019000100_account_ledger_sources — account ledger rules
+  // (`ck_account_ledger_amount_sign` is DROPped and re-ADDed by this migration
+  // under the same name, so it stays in the 20261017000100 group above.)
+  "ck_account_ledger_single_source",
+  "ck_account_ledger_opening_balance_positive",
+  "ck_account_ledger_requires_note",
 ] as const;
 
 /**
@@ -221,6 +247,21 @@ export const EXPECTED_TRIGGERS = [
   "trg_stock_transfer_line_no_truncate",
   "trg_stock_transfer_leg_no_truncate",
   "trg_stock_adjustment_line_no_truncate",
+
+  // 20261019000100_account_ledger_sources — transfer immutability
+  "trg_account_transfer_immutable",
+  "trg_account_transfer_no_truncate",
+
+  // 20261019000100_account_ledger_sources — account ledger guards
+  "trg_account_ledger_source",
+  "trg_account_ledger_account_active",
+  "trg_account_deactivation_guard",
+  "trg_account_ledger_loan_interest_guard",
+
+  // 20261019000100_account_ledger_sources — the balance maintainer + guards
+  "trg_account_ledger_apply",
+  "trg_account_balances_guard",
+  "trg_account_balances_no_truncate",
 ] as const;
 
 /**
@@ -242,7 +283,6 @@ export const EXPECTED_PARTIAL_INDEXES = [
   "ux_account_ledger_supplier_payment_active",
   "ux_account_ledger_expense_active",
   "ux_account_ledger_other_income_active",
-  "ux_account_ledger_account_transfer_active",
   "ux_account_ledger_customer_refund_active",
   "ux_loan_ledger_repayment_active",
   "ux_stock_movement_purchase_line_active",
@@ -255,6 +295,16 @@ export const EXPECTED_PARTIAL_INDEXES = [
   "ux_account_ledger_reversed_once",
   "ux_loan_ledger_reversed_once",
   "ux_stock_movement_reversed_once",
+
+  // 20261019000100_account_ledger_sources
+  // (`ux_account_ledger_account_transfer_active` is DROPped and replaced by
+  // `ux_account_ledger_transfer_type_active`: the old key was
+  // `(accountTransferId)` alone, which forbade the second half of a transfer.)
+  "ux_account_ledger_purchase_active",
+  "ux_account_ledger_loan_active",
+  "ux_account_ledger_loan_repayment_active",
+  "ux_account_ledger_opening_balance_active",
+  "ux_account_ledger_transfer_type_active",
 ] as const;
 
 /**

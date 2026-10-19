@@ -66,6 +66,8 @@ export const createSaleDtoSchema = z
     notes: z.string().trim().nullable(),
     reference: z.string().trim().nullable(),
     paidKobo: nonnegativeKoboStringSchema,
+    /** The account taking the money. Required by the domain when `paidKobo > 0`. */
+    accountId: idSchema.nullable().optional(),
     lines: z.array(createSaleLineDtoSchema).min(1),
   })
   .strict();
@@ -74,6 +76,7 @@ export const salePaymentDtoSchema = z
   .object({
     id: idSchema,
     saleId: idSchema,
+    accountId: idSchema,
     amountKobo: nonnegativeKoboStringSchema,
     paidAt: isoDateTimeSchema,
     createdAt: isoDateTimeSchema,

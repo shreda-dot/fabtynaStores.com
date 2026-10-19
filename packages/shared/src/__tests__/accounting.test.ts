@@ -32,6 +32,10 @@ const baseDate = new Date("2026-10-01T10:00:00.000Z");
 let idCounter = 0;
 const newId = () => `id-${++idCounter}`;
 
+// Money always moves through a named account, so every paid flow below names
+// one. Its value is irrelevant to these tests.
+const TEST_ACCOUNT_ID = "acct-test";
+
 function makeProduct(overrides: Partial<Product> = {}): Product {
   return {
     id: `p-${idCounter + 1}`,
@@ -118,6 +122,7 @@ describe("receivePurchase with supplier credit", () => {
         reference: null,
         dueDate: null,
         amountPaidNowKobo: 4000n,
+        accountId: TEST_ACCOUNT_ID,
         lines: [{ productId: "p1", unit: "PACK", quantity: 1, lineTotalKobo: 10000n }],
       },
       [product],
@@ -154,6 +159,7 @@ describe("receivePurchase with supplier credit", () => {
         notes: null,
         reference: null,
         amountPaidNowKobo: 10000n,
+        accountId: TEST_ACCOUNT_ID,
         lines: [{ productId: "p1", unit: "PACK", quantity: 1, lineTotalKobo: 10000n }],
       },
       [product],
@@ -218,6 +224,7 @@ describe("receivePurchase with supplier credit", () => {
         purchasedAt: baseDate,
         notes: null,
         reference: null,
+        accountId: TEST_ACCOUNT_ID,
         lines: [{ productId: "p1", unit: "PACK", quantity: 0.5, lineTotalKobo: 6000n }],
       },
       [product],
@@ -284,6 +291,7 @@ describe("recordPurchasePayment", () => {
         paidAt: baseDate,
         method: "TRANSFER",
         note: "part payment",
+        accountId: TEST_ACCOUNT_ID,
       },
       [purchase],
       newId,
@@ -303,7 +311,7 @@ describe("recordPurchasePayment", () => {
     const purchase = makePurchase({ paidKobo: 0n });
     expect(() =>
       recordPurchasePayment(
-        { purchaseId: purchase.id, amountKobo: 0n, paidAt: baseDate, method: "CASH", note: null },
+        { purchaseId: purchase.id, amountKobo: 0n, paidAt: baseDate, method: "CASH", note: null, accountId: TEST_ACCOUNT_ID },
         [purchase],
         newId,
       ),
@@ -314,7 +322,7 @@ describe("recordPurchasePayment", () => {
     const purchase = makePurchase({ totalKobo: 10000n, paidKobo: 8000n });
     expect(() =>
       recordPurchasePayment(
-        { purchaseId: purchase.id, amountKobo: 2001n, paidAt: baseDate, method: "CASH", note: null },
+        { purchaseId: purchase.id, amountKobo: 2001n, paidAt: baseDate, method: "CASH", note: null, accountId: TEST_ACCOUNT_ID },
         [purchase],
         newId,
       ),
@@ -325,7 +333,7 @@ describe("recordPurchasePayment", () => {
     const purchase = makePurchase({ totalKobo: 10000n, paidKobo: 10000n });
     expect(() =>
       recordPurchasePayment(
-        { purchaseId: purchase.id, amountKobo: 100n, paidAt: baseDate, method: "CASH", note: null },
+        { purchaseId: purchase.id, amountKobo: 100n, paidAt: baseDate, method: "CASH", note: null, accountId: TEST_ACCOUNT_ID },
         [purchase],
         newId,
       ),
@@ -336,7 +344,7 @@ describe("recordPurchasePayment", () => {
     const purchase = makePurchase({ status: "VOIDED", paidKobo: 0n });
     expect(() =>
       recordPurchasePayment(
-        { purchaseId: purchase.id, amountKobo: 100n, paidAt: baseDate, method: "CASH", note: null },
+        { purchaseId: purchase.id, amountKobo: 100n, paidAt: baseDate, method: "CASH", note: null, accountId: TEST_ACCOUNT_ID },
         [purchase],
         newId,
       ),
@@ -347,7 +355,7 @@ describe("recordPurchasePayment", () => {
     const purchase = makePurchase({ supplierId: null, paidKobo: 0n });
     expect(() =>
       recordPurchasePayment(
-        { purchaseId: purchase.id, amountKobo: 100n, paidAt: baseDate, method: "CASH", note: null },
+        { purchaseId: purchase.id, amountKobo: 100n, paidAt: baseDate, method: "CASH", note: null, accountId: TEST_ACCOUNT_ID },
         [purchase],
         newId,
       ),
@@ -398,6 +406,7 @@ describe("createLoan", () => {
         disbursedAt: baseDate,
         dueDate: "2026-12-01",
         note: null,
+        accountId: TEST_ACCOUNT_ID,
       },
       newId,
     );
@@ -419,6 +428,7 @@ describe("createLoan", () => {
         disbursedAt: baseDate,
         dueDate: null,
         note: null,
+        accountId: TEST_ACCOUNT_ID,
       },
       newId,
     );
@@ -437,6 +447,7 @@ describe("loan charges, repayments and status", () => {
         disbursedAt: baseDate,
         dueDate: "2026-09-01",
         note: null,
+        accountId: TEST_ACCOUNT_ID,
       },
       newId,
     );
@@ -458,7 +469,7 @@ describe("loan charges, repayments and status", () => {
   it("reduces the outstanding balance on repayment", () => {
     const { loan, ledgerEntries } = loanWithLedger();
     const result = recordLoanRepayment(
-      { loanId: loan.id, amountKobo: 15000n, interestPortionKobo: 0n, paidAt: baseDate, note: null },
+      { loanId: loan.id, amountKobo: 15000n, interestPortionKobo: 0n, paidAt: baseDate, note: null, accountId: TEST_ACCOUNT_ID },
       [loan],
       ledgerEntries,
       newId,
@@ -473,7 +484,7 @@ describe("loan charges, repayments and status", () => {
     const { loan, ledgerEntries } = loanWithLedger();
     expect(() =>
       recordLoanRepayment(
-        { loanId: loan.id, amountKobo: 110001n, interestPortionKobo: 0n, paidAt: baseDate, note: null },
+        { loanId: loan.id, amountKobo: 110001n, interestPortionKobo: 0n, paidAt: baseDate, note: null, accountId: TEST_ACCOUNT_ID },
         [loan],
         ledgerEntries,
         newId,
@@ -485,7 +496,7 @@ describe("loan charges, repayments and status", () => {
     const { loan, ledgerEntries } = loanWithLedger();
     expect(() =>
       recordLoanRepayment(
-        { loanId: loan.id, amountKobo: 1000n, interestPortionKobo: 2000n, paidAt: baseDate, note: null },
+        { loanId: loan.id, amountKobo: 1000n, interestPortionKobo: 2000n, paidAt: baseDate, note: null, accountId: TEST_ACCOUNT_ID },
         [loan],
         ledgerEntries,
         newId,
@@ -496,13 +507,13 @@ describe("loan charges, repayments and status", () => {
   it("links a LOAN_INTEREST expense to the repayment for the interest portion only", () => {
     const { loan, ledgerEntries } = loanWithLedger();
     const withInterest = recordLoanRepayment(
-      { loanId: loan.id, amountKobo: 20000n, interestPortionKobo: 10000n, paidAt: baseDate, note: null },
+      { loanId: loan.id, amountKobo: 20000n, interestPortionKobo: 10000n, paidAt: baseDate, note: null, accountId: TEST_ACCOUNT_ID },
       [loan],
       ledgerEntries,
       newId,
     );
     const principalOnly = recordLoanRepayment(
-      { loanId: loan.id, amountKobo: 20000n, interestPortionKobo: 0n, paidAt: baseDate, note: null },
+      { loanId: loan.id, amountKobo: 20000n, interestPortionKobo: 0n, paidAt: baseDate, note: null, accountId: TEST_ACCOUNT_ID },
       [loan],
       ledgerEntries,
       newId,
@@ -825,7 +836,7 @@ describe("migrateMockStoreData", () => {
 
     const result = migrateMockStoreData(3, v3);
     expect(result).not.toBeNull();
-    expect(result!.version).toBe(6);
+    expect(result!.version).toBe(7);
 
     const purchases = result!.data.purchases as Array<Record<string, unknown>>;
     // Legacy purchase with no paidKobo defaults to fully paid.
@@ -848,6 +859,12 @@ describe("migrateMockStoreData", () => {
     expect(result!.data.supplierPayments).toEqual([]);
     expect(result!.data.loanLedgerEntries).toEqual([]);
     expect(result!.data.loanRepayments).toEqual([]);
+
+    // The accounts feature always ships the two default accounts, and the
+    // legacy purchase above (which had a supplier) contributes no ledger rows.
+    expect(result!.data.accounts as unknown[]).toHaveLength(2);
+    expect(result!.data.accountLedgerEntries).toEqual([]);
+    expect(result!.data.accountTransfers).toEqual([]);
   });
 
   it("is idempotent from the current version", () => {
@@ -877,7 +894,7 @@ describe("migrateMockStoreData", () => {
 
     const result = migrateMockStoreData(5, v5);
     expect(result).not.toBeNull();
-    expect(result!.version).toBe(6);
+    expect(result!.version).toBe(7);
 
     const repayments = result!.data.loanRepayments as Array<Record<string, unknown>>;
     expect(repayments).toHaveLength(2);

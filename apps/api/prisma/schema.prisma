@@ -135,6 +135,11 @@ enum AccountType {
   POS
 }
 
+/// Values mirror `packages/shared/src/domain/types.ts`. The four values added
+/// by migration `20261019…_account_entry_type_values` are appended at the end
+/// because Postgres `ALTER TYPE … ADD VALUE` can only append: declaring them
+/// in the middle would make Prisma emit an enum-rebuild instead of a plain
+/// `ADD VALUE`. Enum order carries no meaning.
 enum AccountEntryType {
   SALE_PAYMENT
   CUSTOMER_PAYMENT
@@ -148,6 +153,10 @@ enum AccountEntryType {
   OTHER_INCOME
   BANK_OR_POS_CHARGE
   ADJUSTMENT
+  PURCHASE_PAYMENT
+  OPENING_BALANCE
+  LOAN_DISBURSEMENT
+  LOAN_REPAYMENT
 }
 
 enum StockAdjustmentStatus {
@@ -334,6 +343,7 @@ model Purchase {
   lines                 PurchaseLine[]
   payments              SupplierPayment[]
   supplierLedgerEntries SupplierLedgerEntry[]
+  accountLedgerEntries  AccountLedgerEntry[]
 
   // Hand-written SQL, not Prisma constraints:
   //   * `paidKobo <= totalKobo` (migration `20261017000500_value_checks`);
@@ -372,7 +382,7 @@ model SupplierPayment {
   id                   String                @id @default(cuid())
   supplierId           String
   purchaseId           String
-  accountId            String?
+  accountId            String
   method               PaymentMethod
   amountKobo           BigInt
   note                 String?
@@ -380,7 +390,7 @@ model SupplierPayment {
   createdAt            DateTime              @default(now())
   supplier             Supplier              @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   purchase             Purchase              @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
-  account              Account?              @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  account              Account               @relation(fields: [accountId], references: [id], onDelete: Restrict)
   ledgerEntries        SupplierLedgerEntry[]
   accountLedgerEntries AccountLedgerEntry[]
 
@@ -545,10 +555,15 @@ model StockMovement {
 model StockBalance {
   productId     String
   location      StockLocation
-  quantityUnits Int      @default(0)
+  quantityUnits Int           @default(0)
   /// Set by the trigger on every applied movement, not by `@updatedAt`.
-  updatedAt     DateTime @default(now())
-  product       Product  @relation(fields: [productId], references: [id], onDelete: Restrict, map: "fk_stock_balances_product")
+  updatedAt     DateTime      @default(now())
+  /// `onUpdate: NoAction` is deliberate: the hand-written FK in migration
+  /// `20261017100000_stock_balances` declares only `ON DELETE RESTRICT`, which
+  /// is `NO ACTION` on update. Declaring Prisma's default (`Cascade`) here
+  /// would make `prisma migrate dev` emit a migration that rewrites the
+  /// constraint. `NO ACTION` is safe: primary keys are never updated.
+  product       Product       @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_stock_balances_product")
 
   // `ck_stock_balances_nonnegative` is hand-written SQL.
   @@id([productId, location])
@@ -621,17 +636,18 @@ model SaleLine {
   @@map("sale_lines")
 }
 
-/// Immutable sale payment. `accountId` is retained for the account subsystem;
-/// the app does not populate it yet.
+/// Immutable sale payment. `accountId` is mandatory: every payment lands in a
+/// named account. There is deliberately no `method` column — the destination
+/// account's type (CASH / BANK / POS) already records how the money arrived.
 model SalePayment {
   id                    String                @id @default(cuid())
   saleId                String
-  accountId             String?
+  accountId             String
   amountKobo            BigInt
   paidAt                DateTime              @default(now())
   createdAt             DateTime              @default(now())
   sale                  Sale                  @relation(fields: [saleId], references: [id], onDelete: Restrict)
-  account               Account?              @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  account               Account               @relation(fields: [accountId], references: [id], onDelete: Restrict)
   customerLedgerEntries CustomerLedgerEntry[]
   accountLedgerEntries  AccountLedgerEntry[]
 
@@ -676,28 +692,43 @@ model CustomerLedgerEntry {
 }
 
 // =====================================================================
-// Accounts (retained subsystem; not yet wired to the frontend)
+// Accounts (ledger-backed money subsystem)
 // =====================================================================
 
+/// An account is retired by deactivation, never by deletion: the ledger that
+/// references it has to keep its meaning. `isActive` and `deactivatedAt` move
+/// together (`ck_accounts_deactivation_pair`), and an account may only be
+/// deactivated while its `account_balances` row is exactly zero
+/// (`trg_account_deactivation_guard`).
 model Account {
   id               String               @id @default(cuid())
   name             String
   type             AccountType
-  deletedAt        DateTime?
+  isActive         Boolean              @default(true)
+  deactivatedAt    DateTime?
+  note             String?
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
   entries          AccountLedgerEntry[]
   salePayments     SalePayment[]
   supplierPayments SupplierPayment[]
+  transfersFrom    AccountTransfer[]    @relation("AccountTransfersFrom")
+  transfersTo      AccountTransfer[]    @relation("AccountTransfersTo")
+  balance          AccountBalance?
 
-  @@index([deletedAt, type])
+  @@index([isActive, type])
   @@map("accounts")
 }
 
 /// Reversal convention as for the other ledgers. Signed: money in +, money out
-/// minus. `customerPaymentId`, `otherIncomeId`, `accountTransferId` and
-/// `customerRefundId` are reserved for entities not modelled yet (plain
-/// nullable columns).
+/// minus. `customerPaymentId`, `otherIncomeId` and `customerRefundId` are
+/// reserved for entities not modelled yet (plain nullable columns).
+///
+/// The four "how did money move" types added by migration
+/// `20261019000100_account_ledger_sources` — `PURCHASE_PAYMENT`,
+/// `OPENING_BALANCE`, `LOAN_DISBURSEMENT`, `LOAN_REPAYMENT` — each carry their
+/// own source column, enforced by `ck_account_ledger_single_source` and
+/// `trg_account_ledger_source`.
 model AccountLedgerEntry {
   id                String               @id @default(cuid())
   accountId         String
@@ -706,17 +737,24 @@ model AccountLedgerEntry {
   salePaymentId     String?
   customerPaymentId String?
   supplierPaymentId String?
+  purchaseId        String?
   expenseId         String?
   otherIncomeId     String?
   accountTransferId String?
   customerRefundId  String?
+  loanId            String?
+  loanRepaymentId   String?
   reversesEntryId   String?
   note              String?
   occurredAt        DateTime             @default(now())
   account           Account              @relation(fields: [accountId], references: [id], onDelete: Restrict)
   salePayment       SalePayment?         @relation(fields: [salePaymentId], references: [id], onDelete: Restrict)
   supplierPayment   SupplierPayment?     @relation(fields: [supplierPaymentId], references: [id], onDelete: Restrict)
+  purchase          Purchase?            @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
   expense           Expense?             @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  accountTransfer   AccountTransfer?     @relation(fields: [accountTransferId], references: [id], onDelete: Restrict)
+  loan              Loan?                @relation(fields: [loanId], references: [id], onDelete: Restrict)
+  loanRepayment     LoanRepayment?       @relation(fields: [loanRepaymentId], references: [id], onDelete: Restrict)
   reversesEntry     AccountLedgerEntry?  @relation("AccountLedgerReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
   reversedBy        AccountLedgerEntry[] @relation("AccountLedgerReversals")
 
@@ -724,12 +762,68 @@ model AccountLedgerEntry {
   @@index([salePaymentId])
   @@index([customerPaymentId])
   @@index([supplierPaymentId])
+  @@index([purchaseId])
   @@index([expenseId])
   @@index([otherIncomeId])
   @@index([accountTransferId])
   @@index([customerRefundId])
+  @@index([loanId])
+  @@index([loanRepaymentId])
   @@index([reversesEntryId])
   @@map("account_ledger_entries")
+}
+
+/// The document behind one TRANSFER_IN / TRANSFER_OUT ledger pair. Append-only:
+/// `trg_account_transfer_immutable` rejects any UPDATE or DELETE. The pair is
+/// keyed by `ux_account_ledger_transfer_type_active`, which allows exactly one
+/// live entry of each direction per transfer.
+model AccountTransfer {
+  id            String               @id @default(cuid())
+  fromAccountId String
+  toAccountId   String
+  amountKobo    BigInt
+  note          String?
+  occurredAt    DateTime             @default(now())
+  createdAt     DateTime             @default(now())
+  fromAccount   Account              @relation("AccountTransfersFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
+  toAccount     Account              @relation("AccountTransfersTo", fields: [toAccountId], references: [id], onDelete: Restrict)
+  ledgerEntries AccountLedgerEntry[]
+
+  // `ck_account_transfers_amount_positive` and
+  // `ck_account_transfers_different_accounts` are hand-written SQL.
+  @@index([fromAccountId])
+  @@index([toAccountId])
+  @@index([occurredAt])
+  @@map("account_transfers")
+}
+
+/// Running total of `amountKobo` per account, derived from
+/// `account_ledger_entries` by an AFTER INSERT trigger (migration
+/// `20261019000100_account_ledger_sources`). It is what makes the database
+/// itself the arbiter of "money never goes below zero": an entry that would
+/// take a balance negative aborts on `ck_account_balances_nonnegative`.
+///
+/// Never write this table from the application. `trg_account_balances_guard`
+/// rejects any write that did not come from the trigger. The maintainer
+/// UPDATEs an existing row first, inserting only when none exists and retrying
+/// on a concurrent first insert. `INSERT ... ON CONFLICT DO UPDATE` is unsafe
+/// here because PostgreSQL checks the proposed row's non-negative CHECK before
+/// conflict arbitration, which can reject a valid merged balance.
+model AccountBalance {
+  accountId   String   @id
+  balanceKobo BigInt   @default(0)
+  /// Set by the trigger on every applied entry, not by `@updatedAt`.
+  updatedAt   DateTime @default(now())
+  /// `onUpdate: NoAction` is deliberate: the hand-written FK in migration
+  /// `20261019000100_account_ledger_sources` declares only
+  /// `ON DELETE RESTRICT`, which is `NO ACTION` on update. Declaring Prisma's
+  /// default (`Cascade`) would make `prisma migrate dev` emit a migration that
+  /// rewrites the constraint. `NO ACTION` is safe: primary keys are never
+  /// updated.
+  account     Account  @relation(fields: [accountId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  // `ck_account_balances_nonnegative` is hand-written SQL.
+  @@map("account_balances")
 }
 
 // =====================================================================
@@ -750,6 +844,12 @@ model Expense {
   amountKobo      BigInt
   expenseDate     DateTime
   loanRepaymentId String?              @unique
+  /// An expense that has moved money out of an account is never edited into a
+  /// different amount: it is voided, the account entry is reversed, and the
+  /// row leaves the reports. `voidReason` is required exactly when `voidedAt`
+  /// is set (`ck_expenses_void_pair`, mirroring `validateExpenseVoidFields`).
+  voidedAt        DateTime?
+  voidReason      String?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
   ledgerEntries   AccountLedgerEntry[]
@@ -767,18 +867,19 @@ model Expense {
 // =====================================================================
 
 model Loan {
-  id                 String            @id @default(cuid())
-  lenderName         String
-  principalKobo      BigInt
+  id                   String               @id @default(cuid())
+  lenderName           String
+  principalKobo        BigInt
   /// Total interest/fee agreed up front. May be zero.
-  agreedInterestKobo BigInt            @default(0)
-  disbursedAt        DateTime          @default(now())
+  agreedInterestKobo   BigInt               @default(0)
+  disbursedAt          DateTime             @default(now())
   /// Lagos business date (YYYY-MM-DD). Null = no due date.
-  dueDate            String?
-  note               String?
-  createdAt          DateTime          @default(now())
-  ledgerEntries      LoanLedgerEntry[]
-  repayments         LoanRepayment[]
+  dueDate              String?
+  note                 String?
+  createdAt            DateTime             @default(now())
+  ledgerEntries        LoanLedgerEntry[]
+  repayments           LoanRepayment[]
+  accountLedgerEntries AccountLedgerEntry[]
 
   @@index([disbursedAt])
   @@index([dueDate])
@@ -812,16 +913,17 @@ model LoanLedgerEntry {
 /// `Expense.loanRepaymentId`), which is the only remaining direction of the
 /// link.
 model LoanRepayment {
-  id                  String            @id @default(cuid())
-  loanId              String
-  amountKobo          BigInt
-  interestPortionKobo BigInt            @default(0)
-  note                String?
-  paidAt              DateTime          @default(now())
-  createdAt           DateTime          @default(now())
-  loan                Loan              @relation(fields: [loanId], references: [id], onDelete: Restrict)
-  ledgerEntries       LoanLedgerEntry[]
-  expense             Expense?
+  id                   String               @id @default(cuid())
+  loanId               String
+  amountKobo           BigInt
+  interestPortionKobo  BigInt               @default(0)
+  note                 String?
+  paidAt               DateTime             @default(now())
+  createdAt            DateTime             @default(now())
+  loan                 Loan                 @relation(fields: [loanId], references: [id], onDelete: Restrict)
+  ledgerEntries        LoanLedgerEntry[]
+  expense              Expense?
+  accountLedgerEntries AccountLedgerEntry[]
 
   @@index([loanId, paidAt])
   @@map("loan_repayments")

@@ -16,6 +16,7 @@ import {
   type Unit,
 } from "@fabtyna/shared";
 import { MoneyInput } from "@/components/money-input";
+import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { ErrorState } from "@/components/ui/error-state";
@@ -24,7 +25,7 @@ import { Input, Select, Textarea } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { productsApi, purchasesApi, suppliersApi } from "@/lib/api";
+import { accountingApi, productsApi, purchasesApi, suppliersApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { queryKeys } from "@/lib/query-keys";
@@ -75,6 +76,7 @@ export default function NewPurchasePage() {
   // amountPaidNow === "" means "pay the full total" (the fast, legacy flow).
   const [amountPaidNow, setAmountPaidNow] = useState<string>("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [accountId, setAccountId] = useState("");
   const [dueDate, setDueDate] = useState<string>("");
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -91,6 +93,10 @@ export default function NewPurchasePage() {
   const suppliersQuery = useQuery({
     queryKey: queryKeys.suppliers.list("", false),
     queryFn: () => suppliersApi.list({ search: "", includeDeleted: false }),
+  });
+  const accountsQuery = useQuery({
+    queryKey: queryKeys.accounting.accounts,
+    queryFn: () => accountingApi.listAccounts(),
   });
 
   const productById = useMemo(() => {
@@ -127,7 +133,10 @@ export default function NewPurchasePage() {
   const paidKobo = paidInputKobo === -1n ? totalKobo : paidInputKobo;
   const balanceKobo = totalKobo - paidKobo;
 
-  const supportQueryFailed = productsQuery.isError || suppliersQuery.isError;
+  const supportQueryFailed =
+    productsQuery.isError ||
+    suppliersQuery.isError ||
+    (paidKobo > 0n && accountsQuery.isError);
 
   const createMutation = useMutation({
     mutationFn: (input: CreatePurchaseDto) => purchasesApi.create(input),
@@ -242,6 +251,13 @@ export default function NewPurchasePage() {
       found["purchase-paid"] =
         "The amount paid now cannot be more than the total.";
     }
+    if (
+      paidKobo > 0n &&
+      defaultAccountId(accountsQuery.data ?? [], paymentMethod) === ""
+    ) {
+      found["purchase-account"] =
+        "Add an active account before recording this payment.";
+    }
 
     if (balanceKobo > 0n && supplierId === "") {
       found["purchase-supplier"] =
@@ -271,6 +287,7 @@ export default function NewPurchasePage() {
       "purchase-date",
       "purchase-supplier",
       "purchase-paid",
+      "purchase-account",
       "purchase-due",
       "lines",
       ...lines.flatMap((line) => [
@@ -307,6 +324,10 @@ export default function NewPurchasePage() {
       amountPaidNowKobo: (paidKobo < 0n ? 0n : paidKobo).toString(),
       dueDate: balanceKobo > 0n && dueDate !== "" ? dueDate : null,
       paymentMethod,
+      accountId:
+        paidKobo > 0n
+          ? accountId || defaultAccountId(accountsQuery.data ?? [], paymentMethod)
+          : null,
       lines: lines.map((line) => ({
         productId: line.productId,
         unit: line.unit,
@@ -399,6 +420,7 @@ export default function NewPurchasePage() {
           onRetry={() => {
             void productsQuery.refetch();
             void suppliersQuery.refetch();
+            void accountsQuery.refetch();
           }}
         />
       )}
@@ -537,6 +559,28 @@ export default function NewPurchasePage() {
                   ))}
                 </Select>
               </FormField>
+
+              {paidKobo > 0n && (
+                <AccountSelect
+                  id="purchase-account"
+                  label="Paid from"
+                  accounts={accountsQuery.data ?? []}
+                  accountId={accountId}
+                  onChange={setAccountId}
+                  method={paymentMethod}
+                  disabled={accountsQuery.isPending || accountsQuery.isError}
+                />
+              )}
+              {errors["purchase-account"] && (
+                <p role="alert" className="text-sm text-danger sm:col-span-2">
+                  {errors["purchase-account"]}
+                </p>
+              )}
+              {paidKobo > 0n && accountsQuery.isError && (
+                <p role="alert" className="text-sm text-danger sm:col-span-2">
+                  Accounts could not be loaded: {toUserMessage(accountsQuery.error)}
+                </p>
+              )}
 
               {balanceKobo > 0n && (
                 <FormField

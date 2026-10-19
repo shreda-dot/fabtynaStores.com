@@ -13,7 +13,7 @@ import {
   type Sale,
 } from "@fabtyna/shared";
 import type { SalesApi, SaleDetailDto, SaleListItemDto } from "./sales.api";
-import { newId, readMockStore, transactMockStore } from "./mock-store";
+import { newId, readMockStore, resolveAccountId, transactMockStore } from "./mock-store";
 import { mockDelay } from "./mock-transport";
 
 function delay(): Promise<void> {
@@ -130,6 +130,10 @@ export const salesMockApi: SalesApi = {
           notes: data.notes,
           reference: data.reference,
           paidKobo: BigInt(data.paidKobo),
+          accountId:
+            BigInt(data.paidKobo) > 0n
+              ? resolveAccountId(draft.accounts, data.accountId)
+              : null,
           lines: data.lines.map((line) => ({
             productId: line.productId,
             unit: line.unit,
@@ -150,6 +154,9 @@ export const salesMockApi: SalesApi = {
       }
       if (recorded.salePayment) {
         draft.salePayments.push(recorded.salePayment);
+      }
+      if (recorded.accountLedgerEntry) {
+        draft.accountLedgerEntries.push(recorded.accountLedgerEntry);
       }
       audit(
         draft,
@@ -186,6 +193,8 @@ export const salesMockApi: SalesApi = {
         draft.customerLedgerEntries,
         newId,
         draft.salePayments,
+        draft.accountLedgerEntries,
+        draft.accounts,
       );
       original.status = "VOIDED";
       original.updatedAt = amendedAt;
@@ -193,6 +202,7 @@ export const salesMockApi: SalesApi = {
       if (voided.reversalCustomerLedgerEntry) {
         draft.customerLedgerEntries.push(voided.reversalCustomerLedgerEntry);
       }
+      draft.accountLedgerEntries.push(...voided.reversalAccountLedgerEntries);
 
       const recorded = recordSale(
         {
@@ -205,6 +215,10 @@ export const salesMockApi: SalesApi = {
           notes: data.notes,
           reference: data.reference,
           paidKobo: BigInt(data.paidKobo),
+          accountId:
+            BigInt(data.paidKobo) > 0n
+              ? resolveAccountId(draft.accounts, data.accountId)
+              : null,
           lines: data.lines.map((line) => ({
             productId: line.productId,
             unit: line.unit,
@@ -225,6 +239,9 @@ export const salesMockApi: SalesApi = {
       }
       if (recorded.salePayment) {
         draft.salePayments.push(recorded.salePayment);
+      }
+      if (recorded.accountLedgerEntry) {
+        draft.accountLedgerEntries.push(recorded.accountLedgerEntry);
       }
       audit(
         draft,
@@ -254,6 +271,8 @@ export const salesMockApi: SalesApi = {
         draft.customerLedgerEntries,
         newId,
         draft.salePayments,
+        draft.accountLedgerEntries,
+        draft.accounts,
       );
 
       const sale = draft.sales.find((s) => s.id === id);
@@ -265,6 +284,7 @@ export const salesMockApi: SalesApi = {
       if (voided.reversalCustomerLedgerEntry) {
         draft.customerLedgerEntries.push(voided.reversalCustomerLedgerEntry);
       }
+      draft.accountLedgerEntries.push(...voided.reversalAccountLedgerEntries);
       audit(
         draft,
         "SALE_VOIDED",
@@ -280,7 +300,7 @@ export const salesMockApi: SalesApi = {
     return buildSaleDetail(store, sale);
   },
 
-  async recordPayment(id, amountKobo, paidAt) {
+  async recordPayment(id, amountKobo, paidAt, accountId) {
     await delay();
     const amount = BigInt(amountKobo);
     const paidAtDate = new Date(paidAt);
@@ -290,6 +310,7 @@ export const salesMockApi: SalesApi = {
           saleId: id,
           amountKobo: amount,
           paidAt: paidAtDate,
+          accountId: resolveAccountId(draft.accounts, accountId),
         },
         draft.sales,
         newId,
@@ -302,6 +323,7 @@ export const salesMockApi: SalesApi = {
       if (recorded.customerLedgerEntry) {
         draft.customerLedgerEntries.push(recorded.customerLedgerEntry);
       }
+      draft.accountLedgerEntries.push(recorded.accountLedgerEntry);
       audit(draft, "SALE_PAYMENT_RECORDED", id, before, toSaleDto(sale));
       return sale;
     });

@@ -9,11 +9,13 @@ import {
   createLagosDateTime,
   getLagosBusinessDate,
   type CreateSaleDto,
+  type PaymentMethod,
   type ProductDto,
   type StockLocation,
   type Unit,
 } from "@fabtyna/shared";
 import { QuickAddCustomerDialog } from "@/components/customers/quick-add-customer-dialog";
+import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
 import { MoneyInput } from "@/components/money-input";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -24,7 +26,7 @@ import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
-import { customersApi, productsApi, salesApi, stockApi } from "@/lib/api";
+import { accountingApi, customersApi, productsApi, salesApi, stockApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
@@ -51,6 +53,8 @@ export default function NewSalePage() {
   const [reference, setReference] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
   const [paidKobo, setPaidKobo] = useState<string>("0");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [accountId, setAccountId] = useState("");
   const [lines, setLines] = useState<SaleLineDraft[]>([
     { id: `${uid}-0`, productId: "", quantity: "", unitPriceKobo: "" },
   ]);
@@ -73,6 +77,10 @@ export default function NewSalePage() {
   const stockQuery = useQuery({
     queryKey: queryKeys.stock.list,
     queryFn: () => stockApi.list(),
+  });
+  const accountsQuery = useQuery({
+    queryKey: queryKeys.accounting.accounts,
+    queryFn: () => accountingApi.listAccounts(),
   });
 
   const productById = useMemo(() => {
@@ -136,7 +144,10 @@ export default function NewSalePage() {
   const balanceOwed = totalKobo - paid;
 
   const customersQueryFailed =
-    productsQuery.isError || customersQuery.isError || stockQuery.isError;
+    productsQuery.isError ||
+    customersQuery.isError ||
+    stockQuery.isError ||
+    (paid > 0n && accountsQuery.isError);
 
   const createMutation = useMutation({
     mutationFn: (input: CreateSaleDto) => salesApi.create(input),
@@ -145,6 +156,7 @@ export default function NewSalePage() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
       toast.success(
         `Sale recorded — ${sale.reference ?? sale.id.slice(0, 8)}.`,
       );
@@ -260,6 +272,9 @@ export default function NewSalePage() {
     if (paid > totalKobo) {
       found["paid"] = "Amount received cannot be more than the sale total.";
     }
+    if (paid > 0n && defaultAccountId(accountsQuery.data ?? [], paymentMethod) === "") {
+      found["sale-account"] = "Add an active account before recording received money.";
+    }
 
     let hasValidLine = false;
     for (const line of lines) {
@@ -279,6 +294,7 @@ export default function NewSalePage() {
       "sale-date",
       "sale-customer",
       "paid",
+      "sale-account",
       "lines",
       ...lines.flatMap((line) => [
         `line-${line.id}-product`,
@@ -321,6 +337,10 @@ export default function NewSalePage() {
       notes: notes.trim() === "" ? null : notes.trim(),
       reference: reference.trim() === "" ? null : reference.trim(),
       paidKobo: paid.toString(),
+      accountId:
+        paid > 0n
+          ? accountId || defaultAccountId(accountsQuery.data ?? [], paymentMethod)
+          : null,
       lines: validLines,
     };
 
@@ -379,11 +399,12 @@ export default function NewSalePage() {
       {customersQueryFailed && (
         <ErrorState
           title="Some data could not be loaded"
-          message="Products, customers or stock failed to load, so quantities cannot be validated."
+          message="Some sale data failed to load. Check products, customers, stock and (when taking payment) accounts."
           onRetry={() => {
             void productsQuery.refetch();
             void customersQuery.refetch();
             void stockQuery.refetch();
+            void accountsQuery.refetch();
           }}
         />
       )}
@@ -678,6 +699,42 @@ export default function NewSalePage() {
                   </p>
                 )}
               </div>
+              {paid > 0n && (
+                <>
+                  <FormField id="sale-payment-method" label="Payment method">
+                    <Select
+                      id="sale-payment-method"
+                      value={paymentMethod}
+                      onChange={(event) =>
+                        setPaymentMethod(event.target.value as PaymentMethod)
+                      }
+                    >
+                      <option value="CASH">Cash</option>
+                      <option value="TRANSFER">Transfer</option>
+                      <option value="OTHER">Other</option>
+                    </Select>
+                  </FormField>
+                  <AccountSelect
+                    id="sale-account"
+                    label="Received into"
+                    accounts={accountsQuery.data ?? []}
+                    accountId={accountId}
+                    onChange={setAccountId}
+                    method={paymentMethod}
+                    disabled={accountsQuery.isPending || accountsQuery.isError}
+                  />
+                  {errors["sale-account"] && (
+                    <p role="alert" className="text-sm text-danger sm:col-span-2">
+                      {errors["sale-account"]}
+                    </p>
+                  )}
+                  {accountsQuery.isError && (
+                    <p role="alert" className="text-sm text-danger sm:col-span-2">
+                      Accounts could not be loaded: {toUserMessage(accountsQuery.error)}
+                    </p>
+                  )}
+                </>
+              )}
               <div className="text-left sm:text-right">
                 <p className="text-xs text-muted-foreground">Total</p>
                 <p className="text-lg font-semibold text-foreground">

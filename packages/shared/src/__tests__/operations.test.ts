@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   Product,
+  Expense,
   StockAdjustmentLine,
   StockMovement,
   SupplierLedgerEntry,
@@ -23,6 +24,10 @@ const baseDate = new Date("2026-10-01T10:00:00.000Z");
 
 let idCounter = 0;
 const newId = () => `id-${++idCounter}`;
+
+// Money always moves through a named account, so every paid flow below names
+// one. Its value is irrelevant to these tests.
+const TEST_ACCOUNT_ID = "acct-test";
 
 function makeProduct(overrides: Partial<Product> = {}): Product {
   return {
@@ -55,6 +60,7 @@ describe("receivePurchase", () => {
         purchasedAt: baseDate,
         notes: null,
         reference: "PUR-001",
+        accountId: TEST_ACCOUNT_ID,
         lines: [{ productId: "p1", unit: "PACK", quantity: 2, lineTotalKobo: 48000n }],
       },
       [product],
@@ -79,6 +85,7 @@ describe("receivePurchase", () => {
         purchasedAt: baseDate,
         notes: null,
         reference: null,
+        accountId: TEST_ACCOUNT_ID,
         lines: [{ productId: "p1", unit: "UNIT", quantity: 10, lineTotalKobo: 1000n }],
       },
       [product],
@@ -99,6 +106,7 @@ describe("receivePurchase", () => {
         purchasedAt: baseDate,
         notes: null,
         reference: null,
+        accountId: TEST_ACCOUNT_ID,
         lines: [{ productId: "p1", unit: "UNIT", quantity: 5, lineTotalKobo: 750n }],
       },
       [afterFirst],
@@ -121,6 +129,7 @@ describe("receivePurchase", () => {
         purchasedAt: baseDate,
         notes: null,
         reference: null,
+        accountId: TEST_ACCOUNT_ID,
         lines: [{ productId: "p1", unit: "PACK", quantity: 1, lineTotalKobo: 100n }],
       },
       [product],
@@ -145,6 +154,7 @@ describe("receivePurchase", () => {
         purchasedAt: baseDate,
         notes: null,
         reference: null,
+        accountId: TEST_ACCOUNT_ID,
         lines: [{ productId: "p1", unit: "PACK", quantity: 1, lineTotalKobo: 200n }],
       },
       [afterFirst],
@@ -164,6 +174,7 @@ describe("receivePurchase", () => {
         purchasedAt: baseDate,
         notes: null,
         reference: null,
+        accountId: TEST_ACCOUNT_ID,
         lines: [{ productId: "p1", unit: "UNIT", quantity: 1, lineTotalKobo: 100n }],
       },
       [product],
@@ -182,6 +193,7 @@ describe("receivePurchase", () => {
         purchasedAt: baseDate,
         notes: null,
         reference: null,
+        accountId: TEST_ACCOUNT_ID,
         lines: [{ productId: "p1", unit: "UNIT", quantity: 1, lineTotalKobo: 100n }],
       },
       [product],
@@ -627,6 +639,34 @@ describe("voidPurchase", () => {
 });
 
 describe("salesSummary", () => {
+  it("excludes voided expenses from reported costs", () => {
+    const expense: Expense = {
+      id: "expense-voided",
+      channel: "RETAIL",
+      category: "RENT",
+      description: "Voided rent entry",
+      amountKobo: 5000n,
+      expenseDate: baseDate,
+      loanRepaymentId: null,
+      voidedAt: baseDate,
+      voidReason: "Duplicate",
+      createdAt: baseDate,
+      updatedAt: baseDate,
+    };
+
+    const result = salesSummary(
+      new Date("2026-10-01T00:00:00.000Z"),
+      new Date("2026-10-02T00:00:00.000Z"),
+      [],
+      [],
+      [],
+      [expense],
+      [],
+    );
+
+    expect(result.totals.totalExpensesKobo).toBe(0n);
+  });
+
   it("uses wholesale pack pricing for standard revenue instead of unit-multiplying the pack price", () => {
     const product = makeProduct({
       id: "p1",
@@ -644,6 +684,7 @@ describe("salesSummary", () => {
         purchasedAt: baseDate,
         notes: null,
         reference: null,
+        accountId: TEST_ACCOUNT_ID,
         lines: [
           {
             productId: "p1",
@@ -718,6 +759,7 @@ describe("recordSale", () => {
         purchasedAt: baseDate,
         notes: null,
         reference: null,
+        accountId: TEST_ACCOUNT_ID,
         lines: [
           { productId: "p1", unit: "PACK", quantity: 1, lineTotalKobo: 24000n },
         ],
@@ -775,6 +817,7 @@ describe("recordSale", () => {
         notes: null,
         reference: null,
         paidKobo: 200n,
+        accountId: TEST_ACCOUNT_ID,
         lines: [
           { productId: "p1", unit: "UNIT", quantity: 2, unitPriceKobo: 500n },
         ],
@@ -804,6 +847,7 @@ describe("recordSale", () => {
         notes: null,
         reference: null,
         paidKobo: 1000n,
+        accountId: TEST_ACCOUNT_ID,
         lines: [
           { productId: "p1", unit: "UNIT", quantity: 2, unitPriceKobo: 500n },
         ],

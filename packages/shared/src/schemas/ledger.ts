@@ -19,6 +19,7 @@ export const accountLedgerEntryTypeSchema = z.enum([
   "SALE_PAYMENT",
   "CUSTOMER_PAYMENT",
   "SUPPLIER_PAYMENT",
+  "PURCHASE_PAYMENT",
   "EXPENSE",
   "CUSTOMER_REFUND",
   "TRANSFER_IN",
@@ -28,6 +29,9 @@ export const accountLedgerEntryTypeSchema = z.enum([
   "OTHER_INCOME",
   "BANK_OR_POS_CHARGE",
   "ADJUSTMENT",
+  "OPENING_BALANCE",
+  "LOAN_DISBURSEMENT",
+  "LOAN_REPAYMENT",
 ]);
 
 export const customerLedgerEntryDtoSchema = z
@@ -70,10 +74,13 @@ export const accountLedgerEntryDtoSchema = z
     salePaymentId: idSchema.nullable(),
     customerPaymentId: idSchema.nullable(),
     supplierPaymentId: idSchema.nullable(),
+    purchaseId: idSchema.nullable(),
     expenseId: idSchema.nullable(),
     otherIncomeId: idSchema.nullable(),
     accountTransferId: idSchema.nullable(),
     customerRefundId: idSchema.nullable(),
+    loanId: idSchema.nullable(),
+    loanRepaymentId: idSchema.nullable(),
     reversesEntryId: idSchema.nullable(),
     note: z.string().nullable(),
     occurredAt: isoDateTimeSchema,

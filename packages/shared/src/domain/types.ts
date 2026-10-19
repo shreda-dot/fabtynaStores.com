@@ -48,6 +48,7 @@ export type AccountEntryType =
   | "SALE_PAYMENT"
   | "CUSTOMER_PAYMENT"
   | "SUPPLIER_PAYMENT"
+  | "PURCHASE_PAYMENT"
   | "EXPENSE"
   | "CUSTOMER_REFUND"
   | "TRANSFER_IN"
@@ -56,7 +57,17 @@ export type AccountEntryType =
   | "OWNER_DRAWING"
   | "OTHER_INCOME"
   | "BANK_OR_POS_CHARGE"
-  | "ADJUSTMENT";
+  | "ADJUSTMENT"
+  | "OPENING_BALANCE"
+  | "LOAN_DISBURSEMENT"
+  | "LOAN_REPAYMENT";
+
+/**
+ * What kind of place the money physically sits in. Used instead of a payment
+ * "method" on the account ledger: cash lives in a CASH account, a transfer in
+ * a BANK account and a POS settlement in a POS account.
+ */
+export type AccountType = "CASH" | "BANK" | "POS";
 
 export type StockAdjustmentStatus = "COMPLETED" | "VOIDED";
 
@@ -198,6 +209,8 @@ export interface StockTransferLine {
 export interface SalePayment {
   id: string;
   saleId: string;
+  /** The account the money landed in. Never null for a new payment. */
+  accountId: string;
   amountKobo: bigint;
   paidAt: Date;
   createdAt: Date;
@@ -286,8 +299,47 @@ export interface Expense {
    * repayment instead of being edited.
    */
   loanRepaymentId: string | null;
+  /**
+   * Set when the expense was voided instead of edited. Voiding reverses the
+   * money that left an account and keeps the expense out of reports; it is
+   * never hard-deleted.
+   */
+  voidedAt: Date | null;
+  /** Required (non-empty) whenever `voidedAt` is set. */
+  voidReason: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * A place money physically sits: a cash box, a bank account or a POS
+ * settlement account. Accounts (not typed figures) are the source of truth
+ * for how much money the business actually has.
+ */
+export interface Account {
+  id: string;
+  name: string;
+  type: AccountType;
+  isActive: boolean;
+  deactivatedAt: Date | null;
+  note: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * One movement of money between two accounts. Each transfer owns exactly two
+ * `AccountLedgerEntry` rows (a TRANSFER_OUT and a TRANSFER_IN) that both point
+ * back at it through `accountTransferId`.
+ */
+export interface AccountTransfer {
+  id: string;
+  fromAccountId: string;
+  toAccountId: string;
+  amountKobo: bigint;
+  note: string | null;
+  occurredAt: Date;
+  createdAt: Date;
 }
 
 export interface AccountLedgerEntry {
@@ -298,10 +350,16 @@ export interface AccountLedgerEntry {
   salePaymentId: string | null;
   customerPaymentId: string | null;
   supplierPaymentId: string | null;
+  /** Set on PURCHASE_PAYMENT entries for a supplier-less cash purchase. */
+  purchaseId: string | null;
   expenseId: string | null;
   otherIncomeId: string | null;
   accountTransferId: string | null;
   customerRefundId: string | null;
+  /** Set on LOAN_DISBURSEMENT entries (money received from the lender). */
+  loanId: string | null;
+  /** Set on LOAN_REPAYMENT entries (money paid back). */
+  loanRepaymentId: string | null;
   reversesEntryId: string | null;
   note: string | null;
   occurredAt: Date;
@@ -332,6 +390,8 @@ export interface SupplierPayment {
   id: string;
   supplierId: string;
   purchaseId: string;
+  /** The account the money left. Never null for a new payment. */
+  accountId: string;
   amountKobo: bigint;
   method: PaymentMethod;
   note: string | null;

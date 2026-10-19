@@ -20,7 +20,7 @@ import type {
   LoanListItemDto,
   LoansApi,
 } from "./loans.api";
-import { newId, readMockStore, transactMockStore } from "./mock-store";
+import { newId, readMockStore, resolveAccountId, transactMockStore } from "./mock-store";
 import { mockDelay } from "./mock-transport";
 
 function delay(): Promise<void> {
@@ -136,11 +136,13 @@ export const loansMockApi: LoansApi = {
           disbursedAt: new Date(data.disbursedAt),
           dueDate: data.dueDate,
           note: data.note,
+          accountId: resolveAccountId(draft.accounts, data.accountId),
         },
         newId,
       );
       draft.loans.push(created.loan);
       draft.loanLedgerEntries.push(...created.ledgerEntries);
+      draft.accountLedgerEntries.push(created.accountLedgerEntry);
       audit(draft, "LOAN_CREATED", created.loan.id, null, toLoanDto(created.loan));
       return created.loan;
     });
@@ -186,6 +188,7 @@ export const loansMockApi: LoansApi = {
           interestPortionKobo: BigInt(data.interestPortionKobo),
           paidAt: new Date(data.paidAt),
           note: data.note ?? null,
+          accountId: resolveAccountId(draft.accounts, data.accountId),
         },
         draft.loans,
         draft.loanLedgerEntries,
@@ -193,6 +196,7 @@ export const loansMockApi: LoansApi = {
       );
       draft.loanRepayments.push(recorded.repayment);
       draft.loanLedgerEntries.push(recorded.ledgerEntry);
+      draft.accountLedgerEntries.push(recorded.accountLedgerEntry);
       if (recorded.expense) {
         // The interest portion reduces net profit through a linked expense;
         // the repayment carries the expense id so the two can never diverge.

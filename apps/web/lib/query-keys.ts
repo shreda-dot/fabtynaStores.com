@@ -75,5 +75,12 @@ export const queryKeys = {
   accounting: {
     all: ["accounting"] as const,
     position: (options: unknown) => ["accounting", "position", options] as const,
+    accounts: ["accounting", "accounts"] as const,
+    migrationNotice: ["accounting", "migration-notice"] as const,
+    accountLedger: (id: string, from?: string, to?: string) =>
+      ["accounting", "account-ledger", id, from ?? "", to ?? ""] as const,
+    moneyFlow: (from: string, to: string, accountId: string) =>
+      ["accounting", "money-flow", from, to, accountId] as const,
+    accountBalances: ["accounting", "account-balances"] as const,
   },
 };

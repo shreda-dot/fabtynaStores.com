@@ -29,6 +29,7 @@ const accountLedgerSigns: Record<AccountLedgerType, SignRule> = {
   SALE_PAYMENT: "positive",
   CUSTOMER_PAYMENT: "positive",
   SUPPLIER_PAYMENT: "negative",
+  PURCHASE_PAYMENT: "negative",
   EXPENSE: "negative",
   CUSTOMER_REFUND: "negative",
   TRANSFER_IN: "positive",
@@ -38,6 +39,9 @@ const accountLedgerSigns: Record<AccountLedgerType, SignRule> = {
   OTHER_INCOME: "positive",
   BANK_OR_POS_CHARGE: "negative",
   ADJUSTMENT: "either",
+  OPENING_BALANCE: "positive",
+  LOAN_DISBURSEMENT: "positive",
+  LOAN_REPAYMENT: "negative",
 };
 
 function assertSignedAmount(

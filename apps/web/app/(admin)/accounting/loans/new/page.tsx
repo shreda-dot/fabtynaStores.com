@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -12,6 +12,7 @@ import {
   type CreateLoanDto,
 } from "@fabtyna/shared";
 import { MoneyInput } from "@/components/money-input";
+import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { FormField } from "@/components/ui/form-field";
@@ -20,7 +21,7 @@ import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { loansApi } from "@/lib/api";
+import { accountingApi, loansApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
@@ -38,11 +39,16 @@ export default function NewLoanPage() {
   );
   const [dueDate, setDueDate] = useState("");
   const [note, setNote] = useState("");
+  const [accountId, setAccountId] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const submitting = useRef(false);
   const network = useNetworkStatus();
   const businessDate = useLagosBusinessDate();
+  const accountsQuery = useQuery({
+    queryKey: queryKeys.accounting.accounts,
+    queryFn: () => accountingApi.listAccounts(),
+  });
 
   const principal = /^[0-9]+$/.test(principalKobo)
     ? BigInt(principalKobo)
@@ -74,6 +80,9 @@ export default function NewLoanPage() {
       found["loan-principal"] =
         "Enter the amount borrowed (greater than zero).";
     }
+    if (defaultAccountId(accountsQuery.data ?? []) === "") {
+      found["loan-account"] = "Add an active account before recording the funds received.";
+    }
     if (interestKobo.trim() === "" || interest < 0n) {
       found["loan-interest"] = "Enter the agreed interest (0 is allowed).";
     }
@@ -93,6 +102,7 @@ export default function NewLoanPage() {
     const order = [
       "loan-lender",
       "loan-principal",
+      "loan-account",
       "loan-interest",
       "loan-disbursed",
       "loan-due",
@@ -123,6 +133,7 @@ export default function NewLoanPage() {
       disbursedAt: createLagosDateTime(disbursedAt).toISOString(),
       dueDate: dueDate === "" ? null : dueDate,
       note: note.trim() === "" ? null : note.trim(),
+      accountId: accountId || defaultAccountId(accountsQuery.data ?? []),
     };
 
     submitting.current = true;
@@ -256,6 +267,15 @@ export default function NewLoanPage() {
                 />
               </FormField>
 
+              <AccountSelect
+                id="loan-account"
+                label="Received into"
+                accounts={accountsQuery.data ?? []}
+                accountId={accountId}
+                onChange={setAccountId}
+                disabled={accountsQuery.isPending || accountsQuery.isError}
+              />
+
               <FormField
                 id="loan-due"
                 label="Due date (optional)"
@@ -315,6 +335,11 @@ export default function NewLoanPage() {
               {createMutation.isError && (
                 <p role="alert" className="text-sm text-danger sm:mr-auto">
                   {toUserMessage(createMutation.error)}
+                </p>
+              )}
+              {accountsQuery.isError && (
+                <p role="alert" className="text-sm text-danger">
+                  Accounts could not be loaded: {toUserMessage(accountsQuery.error)}
                 </p>
               )}
               {network.offline && (

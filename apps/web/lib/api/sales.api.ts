@@ -31,5 +31,10 @@ export interface SalesApi {
     input: import("@fabtyna/shared").CreateSaleDto,
   ): Promise<SaleDetailDto>;
   void(id: string): Promise<SaleDetailDto>;
-  recordPayment(id: string, amountKobo: string, paidAt: string): Promise<SaleDetailDto>;
+  recordPayment(
+    id: string,
+    amountKobo: string,
+    paidAt: string,
+    accountId: string,
+  ): Promise<SaleDetailDto>;
 }

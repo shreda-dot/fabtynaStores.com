@@ -2,11 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Receipt, Trash2 } from "lucide-react";
+import { Plus, Receipt, Ban } from "lucide-react";
 import Link from "next/link";
 import {
   formatLagosDate,
-  formatNaira,
   getLagosBusinessDate,
   type ExpenseCategory,
   type ExpenseDto,
@@ -20,15 +19,17 @@ import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { FormField } from "@/components/ui/form-field";
+import { Modal } from "@/components/ui/modal";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
+import { Textarea } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { expensesApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
-import { confirm } from "@/stores/confirm-store";
 
 const CATEGORY_LABELS: Record<ExpenseCategory, string> = {
   RENT: "Rent",
@@ -52,6 +53,9 @@ export default function ExpensesPage() {
   const queryClient = useQueryClient();
 
   const [filterDate, setFilterDate] = useState("");
+  const [voidTarget, setVoidTarget] = useState<ExpenseDto | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidError, setVoidError] = useState("");
   const businessDate = useLagosBusinessDate();
 
   const expenses = useQuery({
@@ -59,11 +63,16 @@ export default function ExpensesPage() {
     queryFn: () => expensesApi.list(),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => expensesApi.remove(id),
+  const voidMutation = useMutation({
+    mutationFn: (input: { id: string; reason: string }) =>
+      expensesApi.void(input.id, input.reason),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.expenses.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+      setVoidTarget(null);
+      setVoidReason("");
+      setVoidError("");
     },
   });
 
@@ -80,27 +89,27 @@ export default function ExpensesPage() {
       );
   }, [expenses.data, filterDate]);
 
-  const totalKobo = rows.reduce((sum, e) => sum + BigInt(e.amountKobo), 0n);
+  const totalKobo = rows.reduce(
+    (sum, expense) =>
+      expense.voidedAt === null ? sum + BigInt(expense.amountKobo) : sum,
+    0n,
+  );
 
-  function askDelete(expense: ExpenseDto) {
-    void confirm({
-      tone: "danger",
-      title: "Delete this expense?",
-      description: expense.description,
-      details: (
-        <dl className="space-y-1.5 text-sm">
-          <div className="flex items-center justify-between gap-4">
-            <dt className="text-muted-foreground">Amount</dt>
-            <dd className="font-medium text-foreground">
-              <Money kobo={expense.amountKobo} tone="neutral" />
-            </dd>
-          </div>
-        </dl>
-      ),
-      confirmLabel: "Delete expense",
-      successMessage: `Expense of ${formatNaira(expense.amountKobo)} deleted.`,
-      onConfirm: () => deleteMutation.mutateAsync(expense.id),
-    });
+  function requestVoid(expense: ExpenseDto) {
+    setVoidTarget(expense);
+    setVoidReason("");
+    setVoidError("");
+    voidMutation.reset();
+  }
+
+  function submitVoid(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!voidTarget) return;
+    if (voidReason.trim() === "") {
+      setVoidError("Enter a reason for voiding this expense.");
+      return;
+    }
+    voidMutation.mutate({ id: voidTarget.id, reason: voidReason.trim() });
   }
 
   const columns: ResponsiveTableColumn<ExpenseDto>[] = [
@@ -126,17 +135,29 @@ export default function ExpensesPage() {
       render: (e) => <Money kobo={e.amountKobo} tone="neutral" />,
     },
     {
+      header: "Status",
+      render: (expense) =>
+        expense.voidedAt === null ? "Active" : `Voided: ${expense.voidReason}`,
+    },
+    {
       header: "Actions",
       align: "right",
-      render: (e) => (
+      render: (e) =>
+        e.voidedAt !== null ? (
+          <span className="text-xs text-muted-foreground">Voided</span>
+        ) : e.loanRepaymentId !== null ? (
+          <span className="text-xs text-muted-foreground">
+            Managed with loan repayment
+          </span>
+        ) : (
         <Button
           variant="ghost"
           size="sm"
           className="text-danger hover:bg-danger/10"
-          onClick={() => askDelete(e)}
+          onClick={() => requestVoid(e)}
         >
-          <Trash2 aria-hidden="true" className="h-4 w-4" />
-          Delete
+          <Ban aria-hidden="true" className="h-4 w-4" />
+          Void
         </Button>
       ),
     },
@@ -154,6 +175,54 @@ export default function ExpensesPage() {
           </Link>
         }
       />
+
+      <Modal
+        open={voidTarget !== null}
+        onClose={() => setVoidTarget(null)}
+        title="Void expense"
+        description="This keeps the expense in the audit trail and reverses its account movement."
+        busy={voidMutation.isPending}
+      >
+        {voidTarget && (
+          <form onSubmit={submitVoid} className="space-y-4" noValidate>
+            <div className="flex items-center justify-between gap-4 text-sm">
+              <span className="text-muted-foreground">{voidTarget.description}</span>
+              <Money kobo={voidTarget.amountKobo} tone="neutral" />
+            </div>
+            <FormField id="void-reason" label="Reason">
+              <Textarea
+                id="void-reason"
+                value={voidReason}
+                rows={3}
+                onChange={(event) => setVoidReason(event.target.value)}
+              />
+            </FormField>
+            {voidError && (
+              <p role="alert" className="text-sm text-danger">
+                {voidError}
+              </p>
+            )}
+            {voidMutation.isError && (
+              <p role="alert" className="text-sm text-danger">
+                {toUserMessage(voidMutation.error)}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={voidMutation.isPending}
+                onClick={() => setVoidTarget(null)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" variant="danger" loading={voidMutation.isPending}>
+                Void expense
+              </Button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
       <StatCard
         label={

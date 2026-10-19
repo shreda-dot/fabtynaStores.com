@@ -3,6 +3,7 @@ export type { KoboAmount } from "./money.ts";
 
 export * from "./domain/types.ts";
 export * from "./domain/stock.ts";
+export * from "./domain/accounts.ts";
 export * from "./domain/ledger.ts";
 export * from "./domain/invariants.ts";
 export * from "./domain/operations.ts";

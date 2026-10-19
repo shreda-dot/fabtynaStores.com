@@ -17,6 +17,7 @@ import {
 } from "@fabtyna/shared";
 import { DateFilter } from "@/components/date-filter";
 import { MoneyInput } from "@/components/money-input";
+import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
 import { StatusBadge } from "@/components/ui/badge";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
@@ -30,7 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { payablesApi, purchasesApi } from "@/lib/api";
+import { accountingApi, payablesApi, purchasesApi } from "@/lib/api";
 import type { PayableLineDto } from "@/lib/api/payables.api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
@@ -60,11 +61,16 @@ export default function PayablesPage() {
     queryKey: queryKeys.payables.outstanding,
     queryFn: () => payablesApi.listOutstanding(),
   });
+  const accountsQuery = useQuery({
+    queryKey: queryKeys.accounting.accounts,
+    queryFn: () => accountingApi.listAccounts(),
+  });
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [payingPurchaseId, setPayingPurchaseId] = useState<string | null>(null);
   const [paymentKobo, setPaymentKobo] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [accountId, setAccountId] = useState("");
   const [paymentDate, setPaymentDate] = useState(() => businessDate);
   const [paymentNote, setPaymentNote] = useState("");
   const [paymentError, setPaymentError] = useState("");
@@ -76,6 +82,7 @@ export default function PayablesPage() {
       amountKobo: string;
       paidAt: string;
       method: PaymentMethod;
+      accountId: string;
       note: string | null;
     }) =>
       purchasesApi.recordPayment(
@@ -83,6 +90,7 @@ export default function PayablesPage() {
         input.amountKobo,
         input.paidAt,
         input.method,
+        input.accountId,
         input.note ?? undefined,
       ),
     onSuccess: () => {
@@ -94,6 +102,7 @@ export default function PayablesPage() {
       });
       setPayingPurchaseId(null);
       setPaymentKobo("");
+      setAccountId("");
       setPaymentNote("");
       setPaymentError("");
     },
@@ -112,6 +121,7 @@ export default function PayablesPage() {
     setPayingPurchaseId(line.purchaseId);
     setPaymentKobo(line.balanceKobo);
     setPaymentMethod("CASH");
+    setAccountId("");
     setPaymentDate(businessDate);
     setPaymentNote("");
     setPaymentError("");
@@ -141,6 +151,16 @@ export default function PayablesPage() {
       setPaymentError(
         `Payment cannot be more than the outstanding balance of ${formatNaira(balance)}.`,
       );
+      return;
+    }
+    const selectedAccountId =
+      accountId || defaultAccountId(accountsQuery.data ?? [], paymentMethod);
+    if (selectedAccountId === "") {
+      setPaymentError("Add an active account before recording this payment.");
+      return;
+    }
+    if (accountsQuery.isError) {
+      setPaymentError(`Accounts could not be loaded: ${toUserMessage(accountsQuery.error)}`);
       return;
     }
     if (paymentDate === "") {
@@ -184,6 +204,7 @@ export default function PayablesPage() {
             amountKobo: paymentKobo,
             paidAt: createLagosDateTime(paymentDate).toISOString(),
             method: paymentMethod,
+            accountId: selectedAccountId,
             note: paymentNote.trim() === "" ? null : paymentNote.trim(),
           }),
       });
@@ -388,6 +409,15 @@ export default function PayablesPage() {
                                     ))}
                                   </Select>
                                 </FormField>
+                                <AccountSelect
+                                  id={`pay-account-${line.purchaseId}`}
+                                  label="Paid from"
+                                  accounts={accountsQuery.data ?? []}
+                                  accountId={accountId}
+                                  onChange={setAccountId}
+                                  method={paymentMethod}
+                                  disabled={accountsQuery.isPending || accountsQuery.isError}
+                                />
                                 <DateFilter
                                   id={`pay-date-${line.purchaseId}`}
                                   label="Date paid"

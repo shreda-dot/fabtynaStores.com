@@ -8,8 +8,10 @@ import { useParams } from "next/navigation";
 import {
   formatLagosDateTime,
   parseMoneyInputToKobo,
+  type PaymentMethod,
   type SalePaymentDto,
 } from "@fabtyna/shared";
+import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
 import { MoneyInput } from "@/components/money-input";
 import { ResponsiveTable } from "@/components/responsive-table";
 import type { ResponsiveTableColumn } from "@/components/responsive-table";
@@ -18,11 +20,13 @@ import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { FormField } from "@/components/ui/form-field";
+import { Select } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { salesApi } from "@/lib/api";
+import { accountingApi, salesApi } from "@/lib/api";
 import type { SaleLineWithProductDto } from "@/lib/api/sales.api";
 import { ApiError, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
@@ -42,12 +46,20 @@ export default function SaleDetailPage() {
   const [paying, setPaying] = useState(false);
   const [paymentKobo, setPaymentKobo] = useState("");
   const [paymentError, setPaymentError] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [accountId, setAccountId] = useState("");
 
+  const accounts = useQuery({
+    queryKey: queryKeys.accounting.accounts,
+    queryFn: () => accountingApi.listAccounts(),
+    enabled: paying,
+  });
   function invalidateAll() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
   }
 
   const voidMutation = useMutation({
@@ -59,8 +71,13 @@ export default function SaleDetailPage() {
   });
 
   const payMutation = useMutation({
-    mutationFn: (amountKobo: string) =>
-      salesApi.recordPayment(id, amountKobo, new Date().toISOString()),
+    mutationFn: (input: { amountKobo: string; accountId: string }) =>
+      salesApi.recordPayment(
+        id,
+        input.amountKobo,
+        new Date().toISOString(),
+        input.accountId,
+      ),
     onSuccess: () => {
       invalidateAll();
       void sale.refetch();
@@ -218,6 +235,12 @@ export default function SaleDetailPage() {
       );
       return;
     }
+    const selectedAccountId =
+      accountId || defaultAccountId(accounts.data ?? [], paymentMethod);
+    if (selectedAccountId === "") {
+      setPaymentError("Add an active account before recording this payment.");
+      return;
+    }
     const amount = BigInt(amountKobo);
     if (amount <= 0n) {
       setPaymentError("Enter an amount greater than zero.");
@@ -260,7 +283,8 @@ export default function SaleDetailPage() {
           )}
         </div>
       ),
-      onConfirm: () => payMutation.mutateAsync(amountKobo),
+      onConfirm: () =>
+        payMutation.mutateAsync({ amountKobo, accountId: selectedAccountId }),
       successMessage: `Payment of ${formatMoneyMessage(amount)} recorded for ${customerLabel}.`,
     });
     if (ok) setPaymentError("");
@@ -416,6 +440,8 @@ export default function SaleDetailPage() {
               disabled={network.offline}
               onClick={() => {
                 setPaying(true);
+                setPaymentMethod("CASH");
+                setAccountId("");
                 setPaymentKobo((Number(unpaidKobo) / 100).toFixed(2));
                 setPaymentError("");
                 if (network.offline) {
@@ -438,6 +464,35 @@ export default function SaleDetailPage() {
                 defaultValueKobo={unpaidKobo.toString()}
                 onKoboChange={setPaymentKobo}
               />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField id="payment-method" label="Payment method">
+                  <Select
+                    id="payment-method"
+                    value={paymentMethod}
+                    onChange={(event) =>
+                      setPaymentMethod(event.target.value as PaymentMethod)
+                    }
+                  >
+                    <option value="CASH">Cash</option>
+                    <option value="TRANSFER">Transfer</option>
+                    <option value="OTHER">Other</option>
+                  </Select>
+                </FormField>
+                <AccountSelect
+                  id="payment-account"
+                  label="Received into"
+                  accounts={accounts.data ?? []}
+                  accountId={accountId}
+                  onChange={setAccountId}
+                  method={paymentMethod}
+                  disabled={accounts.isPending || accounts.isError}
+                />
+              </div>
+              {accounts.isError && (
+                <p role="alert" className="text-sm text-danger">
+                  Accounts could not be loaded: {toUserMessage(accounts.error)}
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 Outstanding balance: <Money kobo={unpaidKobo} tone="neutral" />
               </p>

@@ -16,6 +16,7 @@ import {
   type Unit,
 } from "@fabtyna/shared";
 import { MoneyInput } from "@/components/money-input";
+import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -27,7 +28,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { productsApi, purchasesApi, suppliersApi } from "@/lib/api";
+import { accountingApi, productsApi, purchasesApi, suppliersApi } from "@/lib/api";
 import type { PurchaseDetailDto } from "@/lib/api/purchases.api";
 import { ApiError, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
@@ -213,6 +214,7 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
   // unchanged by the amendment. A purchase with payments never reaches here.
   const [amountPaidNow, setAmountPaidNow] = useState<string>(purchase.paidKobo);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [accountId, setAccountId] = useState("");
   const [dueDate, setDueDate] = useState<string>(purchase.dueDate ?? "");
 
   const lineSeq = useRef(1);
@@ -228,6 +230,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
   const suppliersQuery = useQuery({
     queryKey: queryKeys.suppliers.list("", false),
     queryFn: () => suppliersApi.list({ search: "", includeDeleted: false }),
+  });
+  const accountsQuery = useQuery({
+    queryKey: queryKeys.accounting.accounts,
+    queryFn: () => accountingApi.listAccounts(),
   });
 
   const productById = useMemo(() => {
@@ -264,7 +270,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
   const paidKobo = paidInputKobo === -1n ? totalKobo : paidInputKobo;
   const balanceKobo = totalKobo - paidKobo;
 
-  const supportQueryFailed = productsQuery.isError || suppliersQuery.isError;
+  const supportQueryFailed =
+    productsQuery.isError ||
+    suppliersQuery.isError ||
+    (paidKobo > 0n && accountsQuery.isError);
 
   const updateMutation = useMutation({
     mutationFn: (input: CreatePurchaseDto) =>
@@ -370,6 +379,20 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
     } else if (purchasedAt > businessDate) {
       found["purchase-date"] = "The date cannot be in the future.";
     }
+    if (paidKobo > totalKobo) {
+      found["purchase-paid"] = "The amount paid cannot be more than the total.";
+    }
+    if (totalKobo > paidKobo && supplierId === "") {
+      found["purchase-supplier"] =
+        "Choose a supplier so the unpaid balance is tracked.";
+    }
+    if (
+      paidKobo > 0n &&
+      defaultAccountId(accountsQuery.data ?? [], paymentMethod) === ""
+    ) {
+      found["purchase-account"] =
+        "Add an active account before recording this payment.";
+    }
 
     let hasValidLine = false;
     for (const line of lines) {
@@ -389,6 +412,8 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       "purchase-date",
       "purchase-supplier",
       "purchase-paid",
+      "purchase-account",
+      "purchase-due",
       "purchase-due",
       "lines",
       ...lines.flatMap((line) => [
@@ -425,6 +450,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       amountPaidNowKobo: (paidKobo < 0n ? 0n : paidKobo).toString(),
       dueDate: balanceKobo > 0n && dueDate !== "" ? dueDate : null,
       paymentMethod,
+      accountId:
+        paidKobo > 0n
+          ? accountId || defaultAccountId(accountsQuery.data ?? [], paymentMethod)
+          : null,
       lines: lines.map((line) => ({
         productId: line.productId,
         unit: line.unit,
@@ -520,10 +549,11 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       {supportQueryFailed && (
         <ErrorState
           title="Some data could not be loaded"
-          message="Products or suppliers failed to load, so this purchase cannot be validated."
+          message="Some purchase data failed to load. Check products, suppliers and (when paying now) accounts."
           onRetry={() => {
             void productsQuery.refetch();
             void suppliersQuery.refetch();
+            void accountsQuery.refetch();
           }}
         />
       )}
@@ -662,6 +692,28 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
                   ))}
                 </Select>
               </FormField>
+
+              {paidKobo > 0n && (
+                <AccountSelect
+                  id="purchase-account"
+                  label="Paid from"
+                  accounts={accountsQuery.data ?? []}
+                  accountId={accountId}
+                  onChange={setAccountId}
+                  method={paymentMethod}
+                  disabled={accountsQuery.isPending || accountsQuery.isError}
+                />
+              )}
+              {errors["purchase-account"] && (
+                <p role="alert" className="text-sm text-danger sm:col-span-2">
+                  {errors["purchase-account"]}
+                </p>
+              )}
+              {paidKobo > 0n && accountsQuery.isError && (
+                <p role="alert" className="text-sm text-danger sm:col-span-2">
+                  Accounts could not be loaded: {toUserMessage(accountsQuery.error)}
+                </p>
+              )}
 
               {balanceKobo > 0n && (
                 <FormField

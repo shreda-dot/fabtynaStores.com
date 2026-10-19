@@ -65,6 +65,10 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261017110000_document_locks` | `fn_check_document_lock` + `trg_sale_document_lock` / `trg_purchase_document_lock`: once a document has left `DRAFT`, only `paidKobo`, `status` and `updatedAt` may change, and only a `DRAFT` may be deleted. Line tables (`sale_lines`, `purchase_lines`, `stock_transfer_lines`, `stock_transfer_legs`, `stock_adjustment_lines`) become immutable, row and `TRUNCATE`. |
 | `20261017120000_trigger_behaviour_fixes` | Corrects three triggers that passed `db:verify` but could not work — see §8. `fn_check_document_lock` compared an enum column to a `TEXT` variable (`42883`), `fn_check_reversal_integrity` tested `FOUND` after `EXECUTE ... INTO` (never set → every reversal rejected), and `fn_stock_balance_direct_write_guard` used `pg_trigger_depth() = 0` (never true inside a trigger) and cancelled writes with a bare `RETURN NULL`. Also re-backfills `stock_balances`. |
 | `20261017130000_stock_balance_maintainer_fix` | Replaces the `INSERT ... ON CONFLICT DO UPDATE` maintainer with an UPDATE-first loop — see §8. |
+| `20261019000000_account_entry_type_values` | Adds `PURCHASE_PAYMENT`, `OPENING_BALANCE`, `LOAN_DISBURSEMENT` and `LOAN_REPAYMENT` enum labels only. It is separate from the migration that first uses those labels because PostgreSQL will not allow a newly added enum value to be used in the same migration transaction. |
+| `20261019000100_account_ledger_sources` | Makes payment account references required; adds account deactivation state, purchase/loan ledger sources, transfer documents, derived non-negative account balances, expense void fields, source/sign/note/opening-balance constraints, indexes and account-ledger triggers. |
+| `20261019000200_default_accounts` | Idempotently creates Cash on hand (`CASH`) and Moniepoint (`BANK`) using SQL-generated IDs (Prisma's `cuid()` default is client-side). Both `fabtyna_dev` and `fabtyna_test` contain these defaults after migration unless an operator has subsequently changed them. |
+| `20261019000300_account_balance_guard_fix` | Corrects the account-balance write guard copied with the same `pg_trigger_depth() = 0` / `RETURN NULL` defect previously found in stock balances. Reconciles existing cached rows from the immutable ledger and inserts missing balance rows; does not edit prior migrations or ledger entries. |
 
 ---
 
@@ -91,7 +95,7 @@ dev --create-only` diffs the schema against the database. The one surviving
 | ------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `purchases`               | A stock receipt. `paidKobo` is denormalised from `supplier_payments`.                   | `supplierId`, `status`, `reference` (unique), `totalKobo`, `paidKobo`, `dueDate`, `purchasedAt` |
 | `purchase_lines`          | One product on a purchase, with the pack snapshot used at the time.                     | `quantity`, `unitsPerPackSnapshot`, `quantityUnits`, `unitCostKobo`, `lineTotalKobo`            |
-| `supplier_payments`       | One payment to a supplier. **Immutable.** `accountId` retained, not populated yet.      | `supplierId`, `purchaseId`, `accountId`, `method`, `amountKobo`, `paidAt`                       |
+| `supplier_payments`       | One payment to a supplier. **Immutable.** `accountId` is required and identifies the account the money left. | `supplierId`, `purchaseId`, `accountId`, `method`, `amountKobo`, `paidAt` |
 | `supplier_ledger_entries` | Supplier account movements. **Immutable.** Signed: PURCHASE +, PAYMENT −, ADJUSTMENT ±. | `type`, `amountKobo`, `purchaseId`, `supplierPaymentId`, `reversesEntryId`                      |
 
 ### Stock
@@ -112,7 +116,7 @@ dev --create-only` diffs the schema against the database. The one surviving
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `sales`                   | A completed sale. `paidKobo` is denormalised from `sale_payments`.                                               | `customerId`, `customerName`, `channel`, `status`, `reference` (unique), `totalKobo`, `paidKobo`, `soldAt` |
 | `sale_lines`              | One product per sale, with the pack snapshot and the cost captured at sale time.                                 | `quantity`, `unitsPerPackSnapshot`, `quantityUnits`, `unitPriceKobo`, `costPerUnitKobo`, `lineTotalKobo`   |
-| `sale_payments`           | One payment received. **Immutable.** `accountId` retained, not populated yet.                                    | `saleId`, `accountId`, `amountKobo`, `paidAt`                                                              |
+| `sale_payments`           | One payment received. **Immutable.** `accountId` is required and identifies the account that received the money. | `saleId`, `accountId`, `amountKobo`, `paidAt` |
 | `customer_ledger_entries` | Customer account movements. **Immutable.** Signed: SALE +, PAYMENT −, RETURN −, CUSTOMER_REFUND −, ADJUSTMENT ±. | `type`, `amountKobo`, `saleId`, `salePaymentId`, `reversesEntryId`                                         |
 
 > `sales.customerName` is **nullable and never populated by the application
@@ -120,22 +124,40 @@ dev --create-only` diffs the schema against the database. The one surviving
 > `null` and identifies the buyer through `customerId`. The column is kept for
 > the shared DTO shape. It does **not** satisfy the unpaid-sale rule below.
 
-### Accounts (retained subsystem, not wired to the frontend)
+### Accounts (ledger-backed source of truth)
 
-| Table                    | Purpose                                                                    | Key columns                                                                                |
-| ------------------------ | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `accounts`               | A cash/bank/POS account. Soft-deleted.                                     | `name`, `type`, `deletedAt`                                                                |
-| `account_ledger_entries` | Account balance movements. **Immutable.** Signed: money in +, money out −. | `type`, `amountKobo`, `salePaymentId`, `supplierPaymentId`, `expenseId`, `reversesEntryId` |
+| Table                    | Purpose                                                                                                                                              | Key columns |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| `accounts`               | A CASH/BANK/POS place holding money. Rename or deactivate; never delete. Deactivation requires a zero balance.                                      | `name`, `type`, `isActive`, `deactivatedAt`, `note` |
+| `account_ledger_entries` | Immutable signed money movements; in is positive, out is negative. Corrections are exact reversal rows.                                             | `accountId`, `type`, `amountKobo`, payment/source IDs, `reversesEntryId`, `note`, `occurredAt` |
+| `account_transfers`      | Immutable document behind the paired `TRANSFER_OUT` / `TRANSFER_IN` ledger entries.                                                                   | `fromAccountId`, `toAccountId`, `amountKobo`, `occurredAt` |
+| `account_balances`        | Trigger-maintained derived balance, one row per account. Application writes are rejected; the non-negative check prevents overspending, including races. | `accountId`, `balanceKobo`, `updatedAt` |
+
+`account_ledger_entries` can reference `salePaymentId`, `customerPaymentId`,
+`supplierPaymentId`, `purchaseId`, `expenseId`, `otherIncomeId`,
+`accountTransferId`, `customerRefundId`, `loanId` or `loanRepaymentId`. A
+source-type trigger requires exactly the appropriate source column for each
+source-backed entry type; designated manual entries (`OPENING_BALANCE`,
+`ADJUSTMENT`, `OWNER_CAPITAL`, `OWNER_DRAWING`, `BANK_OR_POS_CHARGE`) have no
+source document. The single-source CHECK prevents multiple source columns.
+Some source IDs (`customerPaymentId`, `otherIncomeId`, `customerRefundId`) are
+reserved columns without a corresponding Prisma source model/FK yet.
+
+The four new enum values are `PURCHASE_PAYMENT`, `OPENING_BALANCE`,
+`LOAN_DISBURSEMENT` and `LOAN_REPAYMENT`. `sale_payments` intentionally has no
+`method` column: the selected account's type records how the money arrived.
+`supplier_payments.method` remains unchanged. Purchases with no supplier but
+money paid are represented by a `PURCHASE_PAYMENT` entry keyed by `purchaseId`.
 
 ### Expenses, loans, cash
 
 | Table                 | Purpose                                                                                                                                                                                 | Key columns                                                                    |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `expenses`            | Operating costs. `channel` is the shelf the cost belongs to; `BOTH` is later split between retail and wholesale.                                                                        | `channel`, `category`, `amountKobo`, `expenseDate`, `loanRepaymentId` (unique) |
+| `expenses`            | Operating costs. Void fields require a reason when set; voided expenses are excluded from money-flow reporting.                                                                            | `channel`, `category`, `amountKobo`, `expenseDate`, `loanRepaymentId` (unique), `voidedAt`, `voidReason` |
 | `loans`               | Money borrowed.                                                                                                                                                                         | `lenderName`, `principalKobo`, `agreedInterestKobo`, `disbursedAt`, `dueDate`  |
 | `loan_ledger_entries` | Loan balance movements. **Immutable.** Signed: DISBURSEMENT +, CHARGE +, REPAYMENT −. Outstanding = DISBURSEMENT + CHARGE − REPAYMENT.                                                  | `type`, `amountKobo`, `loanRepaymentId`, `reversesEntryId`                     |
 | `loan_repayments`     | One repayment; its interest portion generates a linked `LOAN_INTEREST` expense. **Immutable.** The expense is reached through `expenses.loanRepaymentId` (the link is one-directional). | `amountKobo`, `interestPortionKobo`, `paidAt`                                  |
-| `cash_snapshots`      | Manual cash/bank balance. The latest row by `asOfDate`, then `createdAt`, is the balance in use. **Immutable.**                                                                         | `asOfDate`, `amountKobo`                                                       |
+| `cash_snapshots`      | Retained historical count/snapshot records. They do not determine current cash or financial position; account reconciliation posts an `ADJUSTMENT`. **Immutable.**                       | `asOfDate`, `amountKobo` |
 
 ---
 
@@ -147,7 +169,7 @@ No ledger amount may be zero, and each entry type carries a fixed sign:
 
 - **Customer ledger** — `SALE` positive; `PAYMENT`, `RETURN`, `CUSTOMER_REFUND` negative; `ADJUSTMENT` either sign.
 - **Supplier ledger** — `PURCHASE` positive; `PAYMENT` negative; `ADJUSTMENT` either sign.
-- **Account ledger** — `SALE_PAYMENT`, `CUSTOMER_PAYMENT`, `TRANSFER_IN`, `OWNER_CAPITAL`, `OTHER_INCOME` positive; `SUPPLIER_PAYMENT`, `EXPENSE`, `CUSTOMER_REFUND`, `TRANSFER_OUT`, `OWNER_DRAWING`, `BANK_OR_POS_CHARGE` negative; `ADJUSTMENT` either sign.
+- **Account ledger** — `SALE_PAYMENT`, `CUSTOMER_PAYMENT`, `TRANSFER_IN`, `OWNER_CAPITAL`, `OTHER_INCOME`, `OPENING_BALANCE`, `LOAN_DISBURSEMENT` positive; `SUPPLIER_PAYMENT`, `PURCHASE_PAYMENT`, `EXPENSE`, `CUSTOMER_REFUND`, `TRANSFER_OUT`, `OWNER_DRAWING`, `BANK_OR_POS_CHARGE`, `LOAN_REPAYMENT` negative; `ADJUSTMENT` either sign.
 - **Loan ledger** — `DISBURSEMENT`, `CHARGE` positive; `REPAYMENT` negative.
 
 #### Which amount is written (`recordSale` / `receivePurchase` / the payment services)
@@ -198,6 +220,7 @@ except for the magnitude column (`amountKobo`, or `quantityUnits` for
 - `products.sku` is unique **among non-deleted rows** only, so a deleted SKU can be reused.
 - For each ledger, at most **one live entry** (`reversesEntryId IS NULL`) exists per source document — one entry per sale, sale payment, purchase, supplier payment, expense, transfer, etc.
 - A given row can be the target of **at most one reversal** (`ux_*_reversed_once`): you cannot reverse the same entry twice.
+- Account-ledger additions: one active purchase/loan/loan-repayment entry per source, one active opening balance per account, and one active entry per transfer direction (`ux_account_ledger_purchase_active`, `ux_account_ledger_loan_active`, `ux_account_ledger_loan_repayment_active`, `ux_account_ledger_opening_balance_active`, `ux_account_ledger_transfer_type_active`).
 
 ### 4.4 Value sanity (`20261017000500`)
 
@@ -214,6 +237,11 @@ except for the magnitude column (`amountKobo`, or `quantityUnits` for
 - **loans** — `principalKobo > 0`, `agreedInterestKobo >= 0`, `dueDate` matches `YYYY-MM-DD`.
 - **loan_repayments** — `amountKobo > 0`, `interestPortionKobo >= 0`, `interestPortionKobo <= amountKobo`.
 - **cash_snapshots** — `amountKobo >= 0`, `asOfDate` matches `YYYY-MM-DD`.
+- **account/payment** (`20261019000100`) — `sale_payments.accountId` and `supplier_payments.accountId` are `NOT NULL`; deactivation-state columns must agree.
+- **account_transfers** (`20261019000100`) — amount is positive and source/destination accounts differ.
+- **account_balances** (`20261019000100`) — cached balance is non-negative; the ledger trigger is the only writer.
+- **account_ledger_entries** (`20261019000100`) — at most one source column; a source-type trigger requires the appropriate source for sourced types and prohibits sources for manual types. `OPENING_BALANCE` must be positive; `ADJUSTMENT`, `OWNER_DRAWING` and `BANK_OR_POS_CHARGE` require a nonblank note.
+- **expenses** (`20261019000100`) — `voidedAt` and nonblank `voidReason` must either both be set or both be absent.
 
 ### 4.5 Accounting links (`20261017000600`, `20261017060000`)
 
@@ -290,6 +318,16 @@ except for the magnitude column (`amountKobo`, or `quantityUnits` for
 | `fn_expense_immutability()` | `trg_expense_immutability` (`BEFORE UPDATE OR DELETE ON expenses`)      | An expense with `loanRepaymentId` set cannot be updated or deleted (`LOAN_INTEREST` is derived from the immutable repayment); on every expense, `category` and `loanRepaymentId` cannot change. |
 | `fn_raise_immutable()`      | `trg_expense_no_truncate` (`BEFORE TRUNCATE ON expenses`)               | Raises on `TRUNCATE`.                                                                                                                                          |
 
+Ordinary expense fields (`channel`, `description`, `amountKobo`,
+`expenseDate`, `updatedAt`) remain editable at the database level. The account
+workflow in the mock API uses void-with-reason and reverses the linked account
+entry; the database currently enforces only the `voidedAt`/`voidReason` pair,
+the loan-interest immutability rules above, and the account-ledger foreign key.
+An ordinary expense that has an account entry cannot be deleted while that
+entry references it, but direct database updates to its ordinary fields are
+not blocked. Add a new migration and database tests before introducing a
+database-backed write API if these direct-write guarantees are required.
+
 `20261017092000_sale_void_guard`
 
 | Function                      | Trigger                                            | Effect                                                                                                                       |
@@ -318,6 +356,18 @@ Corrections to `fn_check_document_lock`, `fn_check_reversal_integrity`,
 These migrations only `CREATE OR REPLACE` existing functions, so they add no new
 object names.
 
+`20261019000100_account_ledger_sources` / `20261019000300_account_balance_guard_fix`
+
+| Function | Trigger(s) | Effect |
+| --- | --- | --- |
+| `fn_check_account_ledger_source()` | `trg_account_ledger_source` (`BEFORE INSERT`) | Requires a type-appropriate source for sourced entries; source-less manual types must not carry a source. |
+| `fn_check_account_ledger_account_active()` | `trg_account_ledger_account_active` (`BEFORE INSERT`) | Rejects original entries to deactivated accounts; reversals are permitted so historical entries can be unwound. |
+| `fn_check_account_deactivation()` | `trg_account_deactivation_guard` (`BEFORE UPDATE OF isActive`) | Requires a zero balance to deactivate; a missing balance row is treated as zero. |
+| `fn_check_account_ledger_loan_interest()` | `trg_account_ledger_loan_interest_guard` (`BEFORE INSERT`) | Prevents an account entry for a `LOAN_INTEREST` expense; the repayment entry already moved principal plus interest. |
+| `fn_apply_account_ledger_entry()` | `trg_account_ledger_apply` (`AFTER INSERT`) | Sole maintainer of `account_balances`; applies each immutable ledger amount and lets the non-negative CHECK reject overspending. |
+| `fn_account_balance_direct_write_guard()` | `trg_account_balances_guard` / `trg_account_balances_no_truncate` | `20261019000300` rejects direct writes at trigger depth 1 and returns `NEW`/`OLD` for the nested balance-maintainer call; the separate truncate trigger remains immutable. |
+| `fn_raise_immutable()` | `trg_account_transfer_immutable` / `trg_account_transfer_no_truncate` | Makes account transfer documents append-only. |
+
 ---
 
 ## 6. Database-enforced vs service-owned
@@ -326,16 +376,19 @@ object names.
 
 - Immutability of the 10 ledger/payment/audit tables (including `TRUNCATE`).
 - Reverse-once and no-reversal-of-a-reversal.
+- Account balances equal the sum of account-ledger entries and cannot go below zero; transfer pairs, source uniqueness, account deactivation, and the loan-interest no-double-outflow guard are enforced by constraints/triggers.
 - Signed amounts for every ledger.
 - Single-source stock movements, quantity signs, transfer-leg sign agreement.
 - Every value-sanity rule in §4.4.
 - Every foreign key, and `ON DELETE RESTRICT` on all of them (a referenced product, customer, supplier or sale cannot be hard-deleted).
+- Every foreign key's **update** action is `ON UPDATE CASCADE` with **two deliberate exceptions that use `ON UPDATE NO ACTION`**: `fk_stock_balances_product` (`20261017100000_stock_balances`) and `account_balances_accountId_fkey` (`20261019000100_account_ledger_sources`). Both are hand-written constraints that declare only `ON DELETE RESTRICT`, which _is_ `NO ACTION` on update; `schema.prisma` mirrors that with `onUpdate: NoAction` so `prisma migrate diff` reports **no difference**. `NO ACTION` is safe here because a primary key is never updated — the referenced column is an immutable `cuid`/id. Declaring Prisma's default (`Cascade`) on either relation would make `prisma migrate dev` emit a migration that rewrites the constraint, so do not "tidy" them.
 - Unique references and the active-SKU rule.
 - Unpaid purchase requires a supplier; unpaid sale requires a customer.
 - `VOIDED` is terminal for a sale; `COMPLETED` never returns to `DRAFT`.
 - Expense ↔ loan-repayment links and loan-ledger source exclusivity.
 - `admin_users.email` is stored lower-cased and trimmed (`20261017051123`).
 - **Stock never goes below zero**, per `(product, location)`, and there is at most one balance row per pair (`stock_balances`, `ck_stock_balances_nonnegative`, `20261017100000`). The balance is a row-locked cache, so two concurrent sales of the last unit cannot both succeed — one fails the `CHECK`.
+- **Account money never goes below zero** (`account_balances`, `ck_account_balances_nonnegative`, `20261019000100`). A row-locked balance cache is updated from immutable account-ledger inserts; direct writes are rejected.
 - **A reversal must be the exact negation of its target** and match it on `type` and every source column (`trg_*_reversal_integrity`, `20261017070000`).
 - **Expense immutability** — a `LOAN_INTEREST` expense is fully immutable, and `category` + `loanRepaymentId` are immutable on every expense (`20261017090000`).
 - **A sale with on-account payments cannot be voided** (`trg_sale_void_guard`, `20261017092000`) — voiding would strand the customer ledger `PAYMENT` entry.
@@ -380,6 +433,14 @@ any of them return a row**. All of them must return zero rows on clean data.
 | Customer ledger balance = Σ unpaid portions | per customer, `Σ(customer_ledger_entries.amountKobo)` vs `Σ(totalKobo − paidKobo)` over non-`VOIDED` sales |
 | Supplier ledger balance = Σ unpaid portions | per supplier, `Σ(supplier_ledger_entries.amountKobo)` vs `Σ(totalKobo − paidKobo)` over non-`VOIDED` purchases |
 | `stock_balances` = the movement sum | left join every `(productId, location)` in either table and compare `quantityUnits` |
+| `account_balances.balanceKobo` = Σ `account_ledger_entries.amountKobo` | compare each cached balance with the ledger sum |
+| Exactly one original entry per sale payment, supplier payment, non-`LOAN_INTEREST` expense, loan disbursement and loan repayment | source document left-joined to non-reversal account entries |
+| Exactly one `PURCHASE_PAYMENT` per paid supplier-less purchase | paid supplier-less purchase left-joined to its non-reversal account entry |
+| Reversals net to zero | sale/supplier payment and expense checks plus purchase, loan and transfer reversal totals |
+| One original IN and OUT entry per transfer | account transfer joined to its live ledger entries |
+| Account source cardinality | source-backed types carry one source column; opening balance, adjustment, owner capital/drawing and bank/POS charge carry none |
+| No account entry for a `LOAN_INTEREST` expense | expense category joined to account-ledger entries |
+| Deactivated accounts have no original entries | account entries joined to inactive accounts; reversals are permitted |
 
 The first four queries were previously only a comment at the bottom of
 `20261017000500_value_checks`; the script now runs them for real.
@@ -396,6 +457,13 @@ The first four queries were previously only a comment at the bottom of
 >   (a voided sale/purchase is excluded from the "what is owed" comparison,
 >   because voiding writes a reversing ledger entry rather than deleting the
 >   original).
+> - Source-less `OPENING_BALANCE`, `ADJUSTMENT`, `OWNER_CAPITAL`,
+>   `OWNER_DRAWING` and `BANK_OR_POS_CHARGE` account entries are intentional;
+>   the source-cardinality audit permits those exact types and requires one
+>   source column for all source-backed types.
+> - `LOAN_INTEREST` expenses intentionally have no account entry. The full
+>   repayment amount, including interest, is the single `LOAN_REPAYMENT`
+>   outflow.
 
 ---
 
@@ -418,6 +486,8 @@ trap worth remembering:
 | Defect | Symptom | Cause | Fix |
 | --- | --- | --- | --- |
 | `fn_apply_stock_movement` used `INSERT ... ON CONFLICT DO UPDATE` | `23514 ck_stock_balances_nonnegative` on legal negative movements | Postgres evaluates `CHECK` constraints on the **proposed** row *before* `ON CONFLICT` arbitration, so the intermediate `(0 − n)` value was rejected even when the final merged value was positive | an UPDATE-first loop (update the existing row, insert only if no row was found, retry on `unique_violation`) so the `CHECK` always sees the merged value |
+| The account-balance maintainer could have the same `INSERT ... ON CONFLICT` defect | a legal first outflow against an already-positive account balance could be rejected | The proposed insert delta is negative and violates the CHECK before conflict resolution can merge it with the positive balance | `fn_apply_account_ledger_entry` uses UPDATE-first, inserts only when the account has no balance row, and retries the UPDATE after a concurrent first insert; the UPDATE holds the row lock so concurrent spends serialize |
+| The account-balance direct-write guard copied the stock guard's pre-fix logic | every account-ledger entry was accepted without updating `account_balances`; the non-negative CHECK never protected the money | Inside a row trigger, `pg_trigger_depth()` is 1 for direct writes and 2 for the maintainer's nested write, so `= 0` is unreachable; `RETURN NULL` silently cancels both direct writes and the maintainer's writes | `20261019000300` raises when depth is `<= 1` and returns `NEW`/`OLD` on the allowed nested path. The migration reconciles cached rows from immutable ledger entries. |
 
 Both migrations also re-backfill `stock_balances` from `stock_movements` and are
 proven by the API test suite (`stock-balances.test.ts`,

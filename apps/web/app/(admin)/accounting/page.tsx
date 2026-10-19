@@ -1,12 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
-  AlertTriangle,
   BadgeCheck,
   CalendarClock,
-  Coins,
   Landmark,
   TriangleAlert,
   Wallet,
@@ -15,28 +13,22 @@ import Link from "next/link";
 import {
   FINANCIAL_POSITION_SCENARIOS,
   formatLagosDate,
-  formatNaira,
   type FinancialPositionScenario,
 } from "@fabtyna/shared";
-import { DateFilter } from "@/components/date-filter";
 import { InfoHint } from "@/components/info-hint";
-import { MoneyInput } from "@/components/money-input";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonClasses } from "@/components/ui/button";
+import { buttonClasses } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { ErrorState } from "@/components/ui/error-state";
 import { FormField } from "@/components/ui/form-field";
-import { Textarea } from "@/components/ui/input";
+import { Input, Select } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FormModal } from "@/components/form-modal";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
-import { useNetworkStatus } from "@/hooks/use-network-status";
-import { accountingApi, cashApi } from "@/lib/api";
+import { accountingApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
-import { toast } from "@/stores/toast-store";
 
 const SCENARIO_LABELS: Record<FinancialPositionScenario, string> = {
   EXPECTED: "Expected",
@@ -56,19 +48,39 @@ const URGENCY_LABEL = {
   LATER: "Later",
 } as const;
 
+const FLOW_CATEGORY_LABELS: Record<string, string> = {
+  SALE_PAYMENT: "Sale payments",
+  CUSTOMER_PAYMENT: "Customer debt payments",
+  SUPPLIER_PAYMENT: "Supplier payments",
+  PURCHASE_PAYMENT: "Supplier-less purchases",
+  EXPENSE: "Expenses",
+  CUSTOMER_REFUND: "Customer refunds",
+  TRANSFER_IN: "Transfers in",
+  TRANSFER_OUT: "Transfers out",
+  OWNER_CAPITAL: "Owner contributions",
+  OWNER_DRAWING: "Owner withdrawals",
+  OTHER_INCOME: "Other income",
+  BANK_OR_POS_CHARGE: "Bank / POS charges",
+  ADJUSTMENT: "Reconciliation adjustments",
+  OPENING_BALANCE: "Opening balance",
+  LOAN_DISBURSEMENT: "Loans received",
+  LOAN_REPAYMENT: "Loan repayments",
+};
+
+function flowCategoryLabel(key: string): string {
+  if (key.startsWith("EXPENSE:")) {
+    const category = key.slice("EXPENSE:".length).toLocaleLowerCase();
+    return `${category.charAt(0).toLocaleUpperCase()}${category.slice(1)} expenses`;
+  }
+  return FLOW_CATEGORY_LABELS[key] ?? key;
+}
+
 function clampPercentText(raw: string): number {
   const digits = raw.replace(/\D/g, "");
   if (digits === "") return 0;
   const value = Number.parseInt(digits, 10);
   if (!Number.isFinite(value)) return 0;
   return Math.min(100, Math.max(0, value));
-}
-
-function daysBetween(fromDate: string, toDate: string): number {
-  const from = Date.parse(`${fromDate}T00:00:00Z`);
-  const to = Date.parse(`${toDate}T00:00:00Z`);
-  if (Number.isNaN(from) || Number.isNaN(to)) return 0;
-  return Math.round((to - from) / (24 * 60 * 60 * 1000));
 }
 
 function formatBps(bps: number | null): string {
@@ -85,6 +97,9 @@ export default function AccountingOverviewPage() {
   const [includeCash, setIncludeCash] = useState(true);
   const [scenario, setScenario] =
     useState<FinancialPositionScenario>("EXPECTED");
+  const [flowFrom, setFlowFrom] = useState(() => `${businessDate.slice(0, 7)}-01`);
+  const [flowTo, setFlowTo] = useState(businessDate);
+  const [flowAccountId, setFlowAccountId] = useState("");
 
   const options = {
     stockDiscountBps: clampPercentText(discountText) * 100,
@@ -98,9 +113,30 @@ export default function AccountingOverviewPage() {
     queryFn: () => accountingApi.position(options),
   });
 
-  const cashQuery = useQuery({
-    queryKey: queryKeys.cash.latest,
-    queryFn: () => cashApi.latest(),
+  const accountBalancesQuery = useQuery({
+    queryKey: queryKeys.accounting.accountBalances,
+    queryFn: async () => {
+      const accounts = await accountingApi.listAccounts();
+      const ledgers = await Promise.all(
+        accounts.map((account) => accountingApi.listLedgerEntries(account.id)),
+      );
+      return accounts.map((account, index) => ({
+        account,
+        balanceKobo: ledgers[index].reduce(
+          (balance, entry) => balance + BigInt(entry.amountKobo),
+          0n,
+        ),
+      }));
+    },
+  });
+  const moneyFlowQuery = useQuery({
+    queryKey: queryKeys.accounting.moneyFlow(
+      flowFrom,
+      flowTo,
+      flowAccountId,
+    ),
+    queryFn: () => accountingApi.moneyFlow(flowFrom, flowTo, flowAccountId || undefined),
+    enabled: flowFrom !== "" && flowTo !== "" && flowFrom <= flowTo,
   });
 
   if (positionQuery.isPending) {
@@ -489,14 +525,229 @@ export default function AccountingOverviewPage() {
         </CardBody>
       </Card>
 
-      {/* 6. Cash balance card */}
-      <CashCard
-        businessDate={businessDate}
-        latest={cashQuery.data ?? null}
-        isLoading={cashQuery.isPending}
-        isError={cashQuery.isError}
-        onRetry={() => void cashQuery.refetch()}
-      />
+      <Card>
+        <CardHeader
+          title="Cash and bank balances"
+          description="Current balances are the sum of each account’s immutable ledger entries. Count and reconcile accounts to update them."
+          action={
+            <Link
+              href="/accounting/accounts"
+              className={buttonClasses({ variant: "secondary", size: "sm" })}
+            >
+              Manage accounts
+            </Link>
+          }
+        />
+        <CardBody>
+          {accountBalancesQuery.isPending ? (
+            <Skeleton variant="row" count={2} />
+          ) : accountBalancesQuery.isError ? (
+            <ErrorState
+              title="Account balances could not be loaded"
+              message={toUserMessage(accountBalancesQuery.error)}
+              onRetry={() => void accountBalancesQuery.refetch()}
+            />
+          ) : accountBalancesQuery.data.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No accounts yet. Create an account to track money held by the business.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {accountBalancesQuery.data.map(({ account, balanceKobo }) => (
+                <div
+                  key={account.id}
+                  className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-2 last:border-0 last:pb-0"
+                >
+                  <span className="text-sm text-foreground">
+                    {account.name}
+                    {!account.isActive && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        (deactivated)
+                      </span>
+                    )}
+                  </span>
+                  <Money kobo={balanceKobo} className="font-semibold" />
+                </div>
+              ))}
+              <p className="flex justify-between border-t border-border pt-3 font-semibold">
+                <span>Total across accounts</span>
+                <Money
+                  kobo={accountBalancesQuery.data.reduce(
+                    (sum, row) => sum + row.balanceKobo,
+                    0n,
+                  )}
+                />
+              </p>
+            </div>
+          )}
+          <p className="mt-3 text-xs text-muted-foreground">
+            Manual cash snapshots remain available as historical records only; they do not change account balances or financial position.
+          </p>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Money flow"
+          description="See how account balances changed and compare sales billed with customer money received and debt still owed."
+        />
+        <CardBody className="space-y-5">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <FormField id="money-flow-from" label="From">
+              <Input
+                id="money-flow-from"
+                type="date"
+                value={flowFrom}
+                max={businessDate}
+                onChange={(event) => setFlowFrom(event.target.value)}
+              />
+            </FormField>
+            <FormField id="money-flow-to" label="To">
+              <Input
+                id="money-flow-to"
+                type="date"
+                value={flowTo}
+                min={flowFrom}
+                max={businessDate}
+                onChange={(event) => setFlowTo(event.target.value)}
+              />
+            </FormField>
+            <FormField id="money-flow-account" label="Account">
+              <Select
+                id="money-flow-account"
+                value={flowAccountId}
+                onChange={(event) => setFlowAccountId(event.target.value)}
+              >
+                <option value="">All accounts</option>
+                {(accountBalancesQuery.data ?? []).map(({ account }) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+          </div>
+
+          {flowFrom === "" || flowTo === "" || flowFrom > flowTo ? (
+            <p role="alert" className="text-sm text-danger">
+              Choose a valid date range.
+            </p>
+          ) : moneyFlowQuery.isPending ? (
+            <Skeleton variant="row" count={4} />
+          ) : moneyFlowQuery.isError ? (
+            <ErrorState
+              title="Money flow could not be loaded"
+              message={toUserMessage(moneyFlowQuery.error)}
+              onRetry={() => void moneyFlowQuery.refetch()}
+            />
+          ) : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <FlowSummary
+                  label="Opening balance"
+                  amount={moneyFlowQuery.data.totals.openingBalanceKobo}
+                />
+                <FlowSummary
+                  label="Money in"
+                  amount={moneyFlowQuery.data.totals.moneyInKobo}
+                />
+                <FlowSummary
+                  label="Money out"
+                  amount={moneyFlowQuery.data.totals.moneyOutKobo}
+                />
+                <FlowSummary
+                  label="Closing balance"
+                  amount={moneyFlowQuery.data.totals.closingBalanceKobo}
+                />
+              </div>
+
+              <div className="rounded-md border border-border p-4">
+                <h3 className="font-semibold">Sales and customer collections</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Sales billed and outstanding are for non-voided sales made in this date range. Customer money received is the net of sale and debt payments (including reversals) posted to the selected account(s) in this range.
+                </p>
+                <dl className="mt-3 grid gap-3 sm:grid-cols-3">
+                  <FlowSummary
+                    label="Sales billed"
+                    amount={moneyFlowQuery.data.sales.billedKobo}
+                  />
+                  <FlowSummary
+                    label="Customer money received"
+                    amount={moneyFlowQuery.data.sales.customerMoneyReceivedKobo}
+                  />
+                  <FlowSummary
+                    label="Debt still owed on these sales"
+                    amount={moneyFlowQuery.data.sales.debtOutstandingKobo}
+                  />
+                </dl>
+              </div>
+
+              <div className="space-y-4">
+                {moneyFlowQuery.data.rows.map((row) => (
+                  <section
+                    key={row.accountId}
+                    className="rounded-md border border-border p-4"
+                  >
+                    <h3 className="mb-3 font-semibold">
+                      {row.accountName} <span className="text-xs text-muted-foreground">({row.accountType})</span>
+                    </h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[36rem] text-sm">
+                        <thead>
+                          <tr className="border-b border-border text-left text-muted-foreground">
+                            <th className="py-2 pr-3">Balance</th>
+                            <th className="py-2 pr-3 text-right">Opening</th>
+                            <th className="py-2 pr-3 text-right">Money in</th>
+                            <th className="py-2 pr-3 text-right">Money out</th>
+                            <th className="py-2 text-right">Closing</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td className="py-2 pr-3 font-medium">Account</td>
+                            <td className="py-2 pr-3 text-right"><Money kobo={row.openingBalanceKobo} /></td>
+                            <td className="py-2 pr-3 text-right"><Money kobo={row.moneyInKobo} /></td>
+                            <td className="py-2 pr-3 text-right"><Money kobo={row.moneyOutKobo} /></td>
+                            <td className="py-2 text-right font-semibold"><Money kobo={row.closingBalanceKobo} /></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="mt-4 overflow-x-auto">
+                      <table className="w-full min-w-[28rem] text-sm">
+                        <thead>
+                          <tr className="border-b border-border text-left text-muted-foreground">
+                            <th className="py-2 pr-3">Category</th>
+                            <th className="py-2 pr-3 text-right">Money in</th>
+                            <th className="py-2 text-right">Money out</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {row.categories.length === 0 ? (
+                            <tr>
+                              <td colSpan={3} className="py-3 text-muted-foreground">
+                                No money movement in this date range.
+                              </td>
+                            </tr>
+                          ) : (
+                            row.categories.map((category) => (
+                              <tr key={category.key} className="border-b border-border/60 last:border-0">
+                                <td className="py-2 pr-3">{flowCategoryLabel(category.key)}</td>
+                                <td className="py-2 pr-3 text-right"><Money kobo={category.moneyInKobo} /></td>
+                                <td className="py-2 text-right"><Money kobo={category.moneyOutKobo} /></td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                ))}
+              </div>
+            </>
+          )}
+        </CardBody>
+      </Card>
 
       {/* 7. Due soon and overdue */}
       <Card>
@@ -572,208 +823,14 @@ export default function AccountingOverviewPage() {
   );
 }
 
-function CashCard({
-  businessDate,
-  latest,
-  isLoading,
-  isError,
-  onRetry,
-}: {
-  businessDate: string;
-  latest: {
-    id: string;
-    asOfDate: string;
-    amountKobo: string;
-    note: string | null;
-  } | null;
-  isLoading: boolean;
-  isError: boolean;
-  onRetry: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const network = useNetworkStatus();
-
-  const [open, setOpen] = useState(false);
-  const [amountKobo, setAmountKobo] = useState("");
-  const [cashDate, setCashDate] = useState(() => businessDate);
-  const [note, setNote] = useState("");
-  const [error, setError] = useState("");
-  const submitting = useRef(false);
-
-  const mutation = useMutation({
-    mutationFn: () =>
-      cashApi.recordSnapshot({
-        asOfDate: cashDate,
-        amountKobo,
-        note: note.trim() === "" ? null : note.trim(),
-      }),
-    onSuccess: (snapshot) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.cash.all });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.accounting.all,
-      });
-      toast.success(
-        `Cash balance updated — ${formatNaira(BigInt(snapshot.amountKobo))}.`,
-      );
-      setOpen(false);
-      setAmountKobo("");
-      setNote("");
-      setError("");
-    },
-  });
-
-  function openDialog() {
-    setAmountKobo(latest ? latest.amountKobo : "");
-    setCashDate(latest ? latest.asOfDate : businessDate);
-    setNote("");
-    setError("");
-    mutation.reset();
-    setOpen(true);
-  }
-
-  async function submit() {
-    if (submitting.current || mutation.isPending) return;
-    mutation.reset();
-    setError("");
-
-    if (amountKobo.trim() === "" || !/^[0-9]+$/.test(amountKobo)) {
-      setError("Enter a valid amount.");
-      return;
-    }
-    if (cashDate === "") {
-      setError("Choose the date the balance is for.");
-      return;
-    }
-    if (cashDate > businessDate) {
-      setError("The date cannot be in the future.");
-      return;
-    }
-
-    submitting.current = true;
-    try {
-      await mutation.mutateAsync();
-    } finally {
-      submitting.current = false;
-    }
-  }
-
-  const ageDays =
-    latest === null ? 0 : daysBetween(latest.asOfDate, businessDate);
-  const stale = latest !== null && ageDays > 7;
-
+function FlowSummary({ label, amount }: { label: string; amount: string }) {
   return (
-    <Card>
-      <CardHeader
-        title="Cash and bank balance"
-        description="Entered manually — the system does not track cash itself."
-        action={
-          <Button variant="secondary" size="sm" onClick={openDialog}>
-            <Coins aria-hidden="true" className="h-4 w-4" />
-            Update balance
-          </Button>
-        }
-      />
-      <CardBody className="space-y-3">
-        {isLoading ? (
-          <Skeleton variant="text" count={2} className="max-w-xs" />
-        ) : isError ? (
-          <ErrorState
-            title="Cash balance could not be loaded"
-            message="Please try again."
-            onRetry={onRetry}
-          />
-        ) : latest === null ? (
-          <p className="flex items-start gap-2 text-sm text-muted-foreground">
-            <AlertTriangle
-              aria-hidden="true"
-              className="mt-0.5 h-4 w-4 shrink-0"
-            />
-            No cash balance recorded yet. The position above excludes cash.
-          </p>
-        ) : (
-          <>
-            <div>
-              <p className="text-2xl font-bold text-foreground">
-                <Money kobo={latest.amountKobo} tone="neutral" />
-              </p>
-              <p className="text-xs text-muted-foreground">
-                As of {formatLagosDate(latest.asOfDate)}
-                {latest.note ? ` · ${latest.note}` : ""}
-              </p>
-            </div>
-            {stale && (
-              <p className="flex items-start gap-2 rounded-sm border border-warning/40 bg-warning-surface px-3 py-2 text-sm text-warning">
-                <AlertTriangle
-                  aria-hidden="true"
-                  className="mt-0.5 h-4 w-4 shrink-0"
-                />
-                Cash balance is {ageDays} days old — update it for an accurate
-                position.
-              </p>
-            )}
-          </>
-        )}
-      </CardBody>
-
-      {open && (
-        <FormModal title="Update cash balance" onClose={() => setOpen(false)}>
-          <div className="space-y-4">
-            <MoneyInput
-              key={`cash-${latest?.id ?? "new"}`}
-              id="cash-amount"
-              label="Cash in hand + bank"
-              defaultValueKobo={latest ? latest.amountKobo : "0"}
-              onKoboChange={setAmountKobo}
-            />
-            <DateFilter
-              id="cash-date"
-              label="As of date"
-              value={cashDate}
-              onChange={setCashDate}
-              max={businessDate}
-            />
-            <FormField id="cash-note" label="Note (optional)">
-              <Textarea
-                id="cash-note"
-                rows={2}
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-              />
-            </FormField>
-
-            {error && (
-              <p role="alert" className="text-sm text-danger">
-                {error}
-              </p>
-            )}
-            {mutation.isError && (
-              <p role="alert" className="text-sm text-danger">
-                {toUserMessage(mutation.error)}
-              </p>
-            )}
-            {network.offline && (
-              <p className="text-sm text-warning">
-                You&rsquo;re offline. Changes can&rsquo;t be saved until you
-                reconnect.
-              </p>
-            )}
-
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button variant="secondary" onClick={() => setOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => void submit()}
-                loading={mutation.isPending}
-                disabled={network.offline}
-              >
-                Save balance
-              </Button>
-            </div>
-          </div>
-        </FormModal>
-      )}
-    </Card>
+    <div className="rounded-md border border-border p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 font-semibold text-foreground">
+        <Money kobo={amount} />
+      </p>
+    </div>
   );
 }
 

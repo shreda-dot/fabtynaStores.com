@@ -1,10 +1,12 @@
 import type {
+  AccountLedgerEntry,
   Expense,
   Loan,
   LoanLedgerEntry,
   LoanRepayment,
 } from "./types.ts";
-import type { IdGenerator } from "./operations.ts";
+import { requireAccountId, type IdGenerator } from "./operations.ts";
+import { buildAccountLedgerEntry } from "./accounts.ts";
 
 export interface CreateLoanInput {
   lenderName: string;
@@ -13,11 +15,15 @@ export interface CreateLoanInput {
   disbursedAt: Date;
   dueDate: string | null;
   note: string | null;
+  /** The account the loan money landed in. Required: the proceeds are money in. */
+  accountId?: string | null;
 }
 
 export interface CreateLoanResult {
   loan: Loan;
   ledgerEntries: LoanLedgerEntry[];
+  /** The positive LOAN_DISBURSEMENT account entry for the proceeds. */
+  accountLedgerEntry: AccountLedgerEntry;
 }
 
 export function createLoan(
@@ -36,6 +42,8 @@ export function createLoan(
   if (input.agreedInterestKobo < 0n) {
     throw new RangeError("Agreed interest must not be negative.");
   }
+
+  const accountId = requireAccountId(input.accountId, "a loan is disbursed");
 
   const loanId = newId();
   const loan: Loan = {
@@ -75,7 +83,20 @@ export function createLoan(
     });
   }
 
-  return { loan, ledgerEntries };
+  // The proceeds are money the business now holds, so they must land in a
+  // named account as a positive LOAN_DISBURSEMENT entry.
+  const accountLedgerEntry = buildAccountLedgerEntry(
+    {
+      accountId,
+      type: "LOAN_DISBURSEMENT",
+      amountKobo: input.principalKobo,
+      loanId,
+      occurredAt: input.disbursedAt,
+    },
+    newId,
+  );
+
+  return { loan, ledgerEntries, accountLedgerEntry };
 }
 
 export interface AddLoanChargeInput {
@@ -121,6 +142,8 @@ export interface RecordLoanRepaymentInput {
   interestPortionKobo: bigint;
   paidAt: Date;
   note: string | null;
+  /** The account the money left. Required: a repayment is money out. */
+  accountId?: string | null;
 }
 
 export interface RecordLoanRepaymentResult {
@@ -132,6 +155,12 @@ export interface RecordLoanRepaymentResult {
    * instead of edited — principal-only repayments never create one.
    */
   expense: Expense | null;
+  /**
+   * The single negative LOAN_REPAYMENT entry covering the full amount
+   * (principal + interest). The linked interest expense deliberately owns no
+   * entry of its own, so the outflow is never counted twice.
+   */
+  accountLedgerEntry: AccountLedgerEntry;
 }
 
 export function recordLoanRepayment(
@@ -152,6 +181,11 @@ export function recordLoanRepayment(
   if (input.interestPortionKobo > input.amountKobo) {
     throw new RangeError("Interest portion may not exceed the repayment amount.");
   }
+
+  const accountId = requireAccountId(
+    input.accountId,
+    "a loan repayment is recorded",
+  );
 
   const loan = existingLoans.find((candidate) => candidate.id === input.loanId);
   if (!loan) {
@@ -208,10 +242,25 @@ export function recordLoanRepayment(
       amountKobo: input.interestPortionKobo,
       expenseDate: input.paidAt,
       loanRepaymentId: repaymentId,
+      voidedAt: null,
+      voidReason: null,
       createdAt: input.paidAt,
       updatedAt: input.paidAt,
     };
   }
 
-  return { repayment, ledgerEntry, expense };
+  // One outflow for the whole repayment: the interest expense above only
+  // records the cost, it does not move money on its own.
+  const accountLedgerEntry = buildAccountLedgerEntry(
+    {
+      accountId,
+      type: "LOAN_REPAYMENT",
+      amountKobo: -input.amountKobo,
+      loanRepaymentId: repaymentId,
+      occurredAt: input.paidAt,
+    },
+    newId,
+  );
+
+  return { repayment, ledgerEntry, expense, accountLedgerEntry };
 }

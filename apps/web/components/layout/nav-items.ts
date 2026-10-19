@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import {
   ArrowLeftRight,
   BarChart3,
+  Banknote,
   Boxes,
   Calculator,
   ClipboardList,
@@ -45,6 +46,7 @@ export const navItems: NavItem[] = [
   { label: "Expenses", href: "/expenses", icon: Receipt, enabled: true },
   { label: "Reports", href: "/reports/sales", icon: BarChart3, enabled: true },
   { label: "Overview", href: "/accounting", icon: Calculator, enabled: true, group: "Accounting", exact: true },
+  { label: "Accounts", href: "/accounting/accounts", icon: Banknote, enabled: true, group: "Accounting" },
   { label: "Payables", href: "/accounting/payables", icon: FileText, enabled: true, group: "Accounting" },
   { label: "Loans", href: "/accounting/loans", icon: Landmark, enabled: true, group: "Accounting" },
 ];

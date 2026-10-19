@@ -71,6 +71,22 @@ async function seedProduct(c: Client): Promise<string> {
     return id;
 }
 
+/**
+ * `sale_payments.accountId` is NOT NULL since
+ * `20261019000100_account_ledger_sources`, so a payment fixture has to name the
+ * account the money landed in. A fixture account is created rather than looked
+ * up: the migration installs two default accounts, but no test may assume what
+ * is (or is not) already in `accounts`.
+ */
+async function seedAccount(c: Client): Promise<string> {
+    const id = nextId("vd_account");
+    await c.query(`INSERT INTO accounts (id, name, type, "updatedAt") VALUES ($1, $2, 'CASH', now())`, [
+        id,
+        `Void Test Account ${id}`,
+    ]);
+    return id;
+}
+
 async function insertSale(
     c: Client,
     sale: { adminId: string; customerId: string | null; totalKobo: bigint; paidKobo: bigint },
@@ -102,13 +118,13 @@ async function insertSaleLine(
 
 async function insertSalePayment(
     c: Client,
-    payment: { saleId: string; amountKobo: bigint },
+    payment: { saleId: string; accountId: string; amountKobo: bigint },
 ): Promise<string> {
     const id = nextId("vd_spayment");
     await c.query(
-        `INSERT INTO sale_payments (id, "saleId", "amountKobo", "paidAt")
-     VALUES ($1, $2, $3::bigint, now())`,
-        [id, payment.saleId, payment.amountKobo.toString()],
+        `INSERT INTO sale_payments (id, "saleId", "accountId", "amountKobo", "paidAt")
+     VALUES ($1, $2, $3, $4::bigint, now())`,
+        [id, payment.saleId, payment.accountId, payment.amountKobo.toString()],
     );
     return id;
 }
@@ -219,7 +235,8 @@ describe("trg_sale_void_guard", () => {
                 });
                 // ...and 4000 was later paid ON ACCOUNT, which writes a PAYMENT entry
                 // pointing at the payment row (and deliberately NOT at the sale).
-                const salePaymentId = await insertSalePayment(c, { saleId, amountKobo: 4000n });
+                const accountId = await seedAccount(c);
+                const salePaymentId = await insertSalePayment(c, { saleId, accountId, amountKobo: 4000n });
                 await insertCustomerLedger(c, {
                     customerId,
                     type: "PAYMENT",
@@ -240,7 +257,8 @@ describe("trg_sale_void_guard", () => {
             const adminId = await seedAdminUser(c);
             const customerId = await seedCustomer(c);
             const saleId = await insertSale(c, { adminId, customerId, totalKobo: 10000n, paidKobo: 4000n });
-            await insertSalePayment(c, { saleId, amountKobo: 4000n });
+            const accountId = await seedAccount(c);
+            await insertSalePayment(c, { saleId, accountId, amountKobo: 4000n });
 
             const result = await c.query(
                 `UPDATE sales SET status = 'VOIDED', "updatedAt" = now() WHERE id = $1`,

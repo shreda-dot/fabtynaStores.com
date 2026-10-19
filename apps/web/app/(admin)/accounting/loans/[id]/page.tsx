@@ -12,6 +12,7 @@ import {
   formatNaira,
   getLagosBusinessDate,
 } from "@fabtyna/shared";
+import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
 import { MoneyInput } from "@/components/money-input";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonClasses } from "@/components/ui/button";
@@ -24,7 +25,7 @@ import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { loansApi } from "@/lib/api";
+import { accountingApi, loansApi } from "@/lib/api";
 import type { LoanDetailDto } from "@/lib/api/loans.api";
 import { ApiError, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
@@ -101,6 +102,10 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
   const queryClient = useQueryClient();
   const network = useNetworkStatus();
   const businessDate = getLagosBusinessDate();
+  const accountsQuery = useQuery({
+    queryKey: queryKeys.accounting.accounts,
+    queryFn: () => accountingApi.listAccounts(),
+  });
 
   const outstanding = BigInt(loan.outstandingKobo);
   const isSettled = outstanding <= 0n;
@@ -121,6 +126,7 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
   const [repayDate, setRepayDate] = useState(() => getLagosBusinessDate());
   const [repayNote, setRepayNote] = useState("");
   const [repayError, setRepayError] = useState("");
+  const [accountId, setAccountId] = useState("");
 
   const [chargeAmount, setChargeAmount] = useState("");
   const [chargeReason, setChargeReason] = useState("");
@@ -141,6 +147,7 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
       amountKobo: string;
       interestPortionKobo: string;
       paidAt: string;
+      accountId: string;
       note: string | null;
     }) => loansApi.recordRepayment(loan.id, input),
     onSuccess: () => {
@@ -148,6 +155,7 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
       setRepayAmount("");
       setRepayInterest("0");
       setRepayNote("");
+      setAccountId("");
       setRepayError("");
     },
   });
@@ -185,6 +193,15 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
       setRepayError(
         `The repayment cannot be more than the outstanding balance of ${formatNaira(outstanding)}.`,
       );
+      return;
+    }
+    const selectedAccountId = accountId || defaultAccountId(accountsQuery.data ?? []);
+    if (selectedAccountId === "") {
+      setRepayError("Add an active account before recording this repayment.");
+      return;
+    }
+    if (accountsQuery.isError) {
+      setRepayError(`Accounts could not be loaded: ${toUserMessage(accountsQuery.error)}`);
       return;
     }
     const interestPortion =
@@ -252,6 +269,7 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
             amountKobo: repayAmount,
             interestPortionKobo: interestPortion.toString(),
             paidAt: createLagosDateTime(repayDate).toISOString(),
+            accountId: selectedAccountId,
             note: repayNote.trim() === "" ? null : repayNote.trim(),
           }),
       });
@@ -441,6 +459,14 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
                 label="Interest portion (0 if none)"
                 defaultValueKobo="0"
                 onKoboChange={setRepayInterest}
+              />
+              <AccountSelect
+                id="repay-account"
+                label="Paid from"
+                accounts={accountsQuery.data ?? []}
+                accountId={accountId}
+                onChange={setAccountId}
+                disabled={accountsQuery.isPending || accountsQuery.isError}
               />
               <FormField id="repay-date" label="Date paid">
                 <Input

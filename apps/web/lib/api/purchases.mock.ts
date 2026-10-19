@@ -17,7 +17,7 @@ import type {
   PurchaseDetailDto,
   PurchaseListItemDto,
 } from "./purchases.api";
-import { newId, readMockStore, transactMockStore } from "./mock-store";
+import { newId, readMockStore, resolveAccountId, transactMockStore } from "./mock-store";
 import { mockDelay } from "./mock-transport";
 
 function delay(): Promise<void> {
@@ -136,6 +136,14 @@ export const purchasesMockApi: PurchasesApi = {
           amountPaidNowKobo: BigInt(data.amountPaidNowKobo),
           dueDate: data.dueDate,
           paymentMethod: data.paymentMethod,
+          accountId:
+            BigInt(data.amountPaidNowKobo) > 0n
+              ? resolveAccountId(
+                  draft.accounts,
+                  data.accountId,
+                  data.paymentMethod === "TRANSFER" ? "BANK" : "CASH",
+                )
+              : null,
           lines: data.lines.map((line) => ({
             productId: line.productId,
             unit: line.unit,
@@ -159,6 +167,9 @@ export const purchasesMockApi: PurchasesApi = {
       }
       if (received.supplierPaymentLedgerEntry) {
         draft.supplierLedgerEntries.push(received.supplierPaymentLedgerEntry);
+      }
+      if (received.accountLedgerEntry) {
+        draft.accountLedgerEntries.push(received.accountLedgerEntry);
       }
       for (const update of received.productUpdates) {
         const product = draft.products.find((p) => p.id === update.id);
@@ -201,6 +212,8 @@ export const purchasesMockApi: PurchasesApi = {
         draft.supplierLedgerEntries,
         newId,
         draft.supplierPayments,
+        draft.accountLedgerEntries,
+        draft.accounts,
       );
       original.status = "VOIDED";
       original.updatedAt = amendedAt;
@@ -208,6 +221,7 @@ export const purchasesMockApi: PurchasesApi = {
       if (voided.reversalSupplierLedgerEntry) {
         draft.supplierLedgerEntries.push(voided.reversalSupplierLedgerEntry);
       }
+      draft.accountLedgerEntries.push(...voided.reversalAccountLedgerEntries);
       for (const pu of voided.productUpdates) {
         const product = draft.products.find((p) => p.id === pu.id);
         if (product) product.averageCostKobo = pu.averageCostKobo;
@@ -224,6 +238,14 @@ export const purchasesMockApi: PurchasesApi = {
           amountPaidNowKobo: BigInt(data.amountPaidNowKobo),
           dueDate: data.dueDate,
           paymentMethod: data.paymentMethod,
+          accountId:
+            BigInt(data.amountPaidNowKobo) > 0n
+              ? resolveAccountId(
+                  draft.accounts,
+                  data.accountId,
+                  data.paymentMethod === "TRANSFER" ? "BANK" : "CASH",
+                )
+              : null,
           lines: data.lines.map((line) => ({
             productId: line.productId,
             unit: line.unit,
@@ -247,6 +269,9 @@ export const purchasesMockApi: PurchasesApi = {
       }
       if (received.supplierPaymentLedgerEntry) {
         draft.supplierLedgerEntries.push(received.supplierPaymentLedgerEntry);
+      }
+      if (received.accountLedgerEntry) {
+        draft.accountLedgerEntries.push(received.accountLedgerEntry);
       }
       for (const pu of received.productUpdates) {
         const product = draft.products.find((p) => p.id === pu.id);
@@ -286,6 +311,8 @@ export const purchasesMockApi: PurchasesApi = {
         existingLedger,
         newId,
         draft.supplierPayments,
+        draft.accountLedgerEntries,
+        draft.accounts,
       );
 
       const purchase = draft.purchases.find((p) => p.id === id);
@@ -297,6 +324,7 @@ export const purchasesMockApi: PurchasesApi = {
       if (voided.reversalSupplierLedgerEntry) {
         draft.supplierLedgerEntries.push(voided.reversalSupplierLedgerEntry);
       }
+      draft.accountLedgerEntries.push(...voided.reversalAccountLedgerEntries);
       for (const update of voided.productUpdates) {
         const product = draft.products.find((p) => p.id === update.id);
         if (product) product.averageCostKobo = update.averageCostKobo;
@@ -316,7 +344,7 @@ export const purchasesMockApi: PurchasesApi = {
     return buildPurchaseDetail(store, purchase);
   },
 
-  async recordPayment(id, amountKobo, paidAt, method, note) {
+  async recordPayment(id, amountKobo, paidAt, method, accountId, note) {
     await delay();
     const amount = BigInt(amountKobo);
     const paidAtDate = new Date(paidAt);
@@ -328,6 +356,11 @@ export const purchasesMockApi: PurchasesApi = {
           paidAt: paidAtDate,
           method,
           note: note ?? null,
+          accountId: resolveAccountId(
+            draft.accounts,
+            accountId,
+            method === "TRANSFER" ? "BANK" : "CASH",
+          ),
         },
         draft.purchases,
         newId,
@@ -338,6 +371,7 @@ export const purchasesMockApi: PurchasesApi = {
       Object.assign(purchase, recorded.purchase);
       draft.supplierPayments.push(recorded.supplierPayment);
       draft.supplierLedgerEntries.push(recorded.supplierLedgerEntry);
+      draft.accountLedgerEntries.push(recorded.accountLedgerEntry);
       audit(draft, "PURCHASE_PAYMENT_RECORDED", id, before, toPurchaseDto(purchase));
       return purchase;
     });

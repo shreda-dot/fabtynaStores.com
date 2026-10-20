@@ -74,9 +74,12 @@ floor(amount / 2), wholesale gets the remainder.
   account-ledger entries can be reversed through `/account-entries/:id/reverse`.
 
 Writes use the API's transaction runner, idempotency keys, actor audit rows,
-and standard error envelope. Date filters use Lagos business dates and default
-to today. The inclusive range cap is configurable with
-`API_MAX_DATE_RANGE_DAYS` (default 366).
+and standard error envelope. Date filters use Lagos business dates. Expenses
+and account statements default to today when no range is supplied. Sales and
+purchases also default to today for an unfiltered list, but suppress that
+default when search/debt filters are used (`unpaid`, `overdue`, `q`,
+`customerId`, `supplierId`) so those views cover all periods. The inclusive
+range cap is configurable with `API_MAX_DATE_RANGE_DAYS` (default 366).
 
 ## Locks and database guarantees
 

@@ -426,31 +426,35 @@ describe("GET /sales and GET /sales/:id", () => {
   });
 
   it("filters and cursor pagination: no duplicates, no gaps", async () => {
-    const product = await seedProduct(h.pg, { stock: 50 });
     const customer = await seedCustomer(h.pg);
     const account = await seedAccount(h.pg);
-    const ids: string[] = [];
-    for (let i = 0; i < 5; i += 1) {
-      const res = await postSale(
-        h.app,
-        saleBody({
-          productId: product.id,
-          customerId: customer.id,
-          paidKobo: i === 0 ? "10000" : "0",
-          accountId: i === 0 ? account.id : null,
-          soldAt: new Date(Date.now() - (i + 1) * 60_000 * 10).toISOString(),
-        }),
-      );
+    // One product per sale so the creates do not queue on a product-row lock.
+    const products = await Promise.all([0, 1, 2].map(() => seedProduct(h.pg, { stock: 50 })));
+    const created = await Promise.all(
+      products.map((product, i) =>
+        postSale(
+          h.app,
+          saleBody({
+            productId: product.id,
+            customerId: customer.id,
+            paidKobo: i === 0 ? "10000" : "0",
+            accountId: i === 0 ? account.id : null,
+            soldAt: new Date(Date.now() - (i + 1) * 60_000 * 10).toISOString(),
+          }),
+        ),
+      ),
+    );
+    const ids: string[] = created.map((res) => {
       expect(res.status).toBe(201);
-      ids.push(res.body.id);
-    }
-    expect((await call("POST", `/sales/${ids[4]}/void`)).status).toBe(200);
+      return res.body.id as string;
+    });
+    expect((await call("POST", `/sales/${ids[2]}/void`)).status).toBe(200);
 
     const seen: string[] = [];
     let cursor: string | null = null;
     let pages = 0;
     do {
-      const url: string = `/sales?customerId=${customer.id}&limit=2${cursor ? `&cursor=${cursor}` : ""}`;
+      const url: string = `/sales?customerId=${customer.id}&limit=1${cursor ? `&cursor=${cursor}` : ""}`;
       const page = await call("GET", url);
       expect(page.status).toBe(200);
       seen.push(...page.body.items.map((item: any) => item.id));
@@ -458,19 +462,20 @@ describe("GET /sales and GET /sales/:id", () => {
       pages += 1;
     } while (cursor !== null && pages < 10);
     expect(pages).toBe(3);
-    expect(new Set(seen).size).toBe(5);
+    expect(new Set(seen).size).toBe(3);
     expect([...seen].sort()).toEqual([...ids].sort());
 
     const unpaid = await call("GET", `/sales?customerId=${customer.id}&unpaid=true`);
-    expect(unpaid.body.items).toHaveLength(3);
+    expect(unpaid.body.items).toHaveLength(1);
+    expect(unpaid.body.from).toBeNull();
     expect(unpaid.body.items.every((item: any) => item.balanceDueKobo === "10000")).toBe(true);
 
     const voided = await call("GET", `/sales?customerId=${customer.id}&status=VOIDED`);
-    expect(voided.body.items.map((item: any) => item.id)).toEqual([ids[4]]);
+    expect(voided.body.items.map((item: any) => item.id)).toEqual([ids[2]]);
     expect(voided.body.items[0].balanceDueKobo).toBe("0");
 
     const byName = await call("GET", `/sales?q=${encodeURIComponent(customer.name.toLowerCase())}`);
-    expect(byName.body.items).toHaveLength(5);
+    expect(byName.body.items).toHaveLength(3);
     expect(byName.body.items[0].lineCount).toBe(1);
 
     const wholesale = await call("GET", `/sales?customerId=${customer.id}&channel=WHOLESALE`);
@@ -481,5 +486,5 @@ describe("GET /sales and GET /sales/:id", () => {
     expect(ranged.status).toBe(200);
 
     expect((await call("GET", `/sales?limit=500`)).status).toBe(400);
-  }, 120_000);
+  });
 });

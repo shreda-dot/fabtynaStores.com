@@ -70,6 +70,7 @@ export const EXPECTED_MIGRATIONS = [
   "20261020000600_other_income_source_less",
   "20261020000700_expense_category_index_names",
   "20261020000800_expense_record_immutability",
+  "20261020000900_transfer_reference_sequence",
 ] as const;
 
 /**
@@ -93,7 +94,11 @@ export const EXPECTED_TABLES = [
  * Standalone sequences (pg_class.relkind = 'S'). Checked one-directionally.
  * `sale_reference_seq` (20261020000100) feeds server-generated sale references.
  */
-export const EXPECTED_SEQUENCES = ["sale_reference_seq", "purchase_reference_seq"] as const;
+export const EXPECTED_SEQUENCES = [
+  "sale_reference_seq",
+  "purchase_reference_seq",
+  "transfer_reference_seq",
+] as const;
 
 /**
  * Plain (non-partial) indexes that carry a rule. Checked one-directionally.

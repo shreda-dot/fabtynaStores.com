@@ -77,6 +77,7 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261020000600_other_income_source_less` | Replaces the account-ledger source trigger so `OTHER_INCOME` is a manual source-less entry; other source/type rules are unchanged. `otherIncomeId` remains a reserved nullable column. |
 | `20261020000700_expense_category_index_names` | Renames two indexes created with PostgreSQL-folded lowercase identifiers to the exact Prisma-style camelCase names checked by `db:verify`. |
 | `20261020000800_expense_record_immutability` | Tightens `fn_expense_immutability`: expense details cannot be edited in place, an ordinary expense can transition to voided once with a reason, and a void cannot be undone or edited. |
+| `20261020000900_transfer_reference_sequence` | Creates `transfer_reference_seq` (BIGINT). The Transfers API formats generated references as `T-YYYYMMDD-000123` from `nextval` (same non-reuse/gap semantics as sale and purchase reference sequences). |
 
 ## 3. Tables
 

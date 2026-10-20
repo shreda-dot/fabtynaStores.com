@@ -171,7 +171,7 @@ must print "-- This is an empty migration." and exit 0.
 
 ## 6. Current status (verified)
 
-- Migrations: **30** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
+- Migrations: **31** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
   The newest four add dynamic expense categories, make `OTHER_INCOME`
   source-less, correct the category-index names, and make ordinary expense
   details immutable with a single void transition.
@@ -197,7 +197,8 @@ must print "-- This is an empty migration." and exit 0.
   Up-front sale payments are reversed as part of sale void/amend.
 - Tests: see the Sales API second-batch bullet below for the current counts
   (earlier: 122 API tests in 11 files, 224 shared).
-  `db:verify` also checks `sale_reference_seq` and the `idempotency_keys`
+  `db:verify` also checks `sale_reference_seq`, `purchase_reference_seq`,
+  `transfer_reference_seq`, and the `idempotency_keys`
   indexes (`EXPECTED_SEQUENCES`, `EXPECTED_INDEXES`).
 - **Sales API (first real operation).** `POST /sales` records a sale as ONE
   interactive transaction (timeout 20 s, maxWait 10 s, `SET LOCAL lock_timeout
@@ -366,10 +367,39 @@ must print "-- This is an empty migration." and exit 0.
   a trigger-maintained non-negative cache. Defaults remain Cash on hand and
   Moniepoint. List/statement date bounds are Lagos dates and accept at most
   `API_MAX_DATE_RANGE_DAYS` inclusive days (default 366).
-- **Shared list date policy.** Sales, purchases, expenses, expense summaries
-  and account statements default to today when no explicit range is supplied;
-  this also applies when a search or debt filter is present. The max inclusive
-  range is configurable by `API_MAX_DATE_RANGE_DAYS`.
+- **Loans API.** `POST /loans`, `POST /loans/:id/charges`,
+  `POST /loans/:id/repayments`, `GET /loans`, and `GET /loans/:id` are
+  implemented with the shared loans domain (`createLoan`, `addLoanCharge`,
+  `recordLoanRepayment`). Loan disbursement writes a positive
+  `LOAN_DISBURSEMENT` account entry keyed on `loanId`. Repayment writes one
+  negative `LOAN_REPAYMENT` account entry keyed on `loanRepaymentId`; if an
+  interest portion exists, one linked `LOAN_INTEREST` expense is created by
+  resolving `expense_categories.code = 'LOAN_INTEREST'` (no second account
+  entry). `GET /loans` has no "today default"; its default filter is non-paid
+  statuses (ACTIVE + OVERDUE), with `status`, `q` and `dueBefore` filters.
+- **Stock Transfers API.** `POST /transfers`, `GET /transfers` and
+  `GET /transfers/:id` are implemented. Transfer references are generated as
+  `T-YYYYMMDD-000123` from `transfer_reference_seq`
+  (`20261020000900_transfer_reference_sequence`). There is no void endpoint:
+  correction is a new opposite transfer.
+- **Stock Adjustments API.** `POST /adjustments`, `POST /adjustments/:id/void`,
+  `GET /adjustments`, and `GET /adjustments/:id` are implemented using
+  `buildAdjustment`/`voidAdjustment`. Positive adjustments update
+  `products.averageCostKobo` from the shared domain result; voiding replays
+  reversal movements and recomputes average cost through the same domain.
+- **Stock/loan lock order extensions.** Loans lock **loan row → account balances
+  (sorted accountId)**. Transfers and adjustments lock **product rows (sorted
+  id) → stock balances (sorted productId/location)** before checking balances.
+- **Shared list date policy.** `GET /sales` and `GET /purchases` still default
+  to today when no filters are supplied, but suppress that default for search
+  and debt filters (`unpaid`, `overdue`, `q`, `customerId`, `supplierId`).
+  `GET /expenses`, `GET /expenses/summary`, account statements, transfer list,
+  and adjustment list stay on today by default unless an explicit range is
+  supplied. The max inclusive range remains configurable by
+  `API_MAX_DATE_RANGE_DAYS`.
+- **Measured statement counts (new endpoints):** loan create **6**, loan charge
+  **4**, loan repayment **10**, transfer create **9**, adjustment create **8**,
+  adjustment void **10** (test DB, no Idempotency-Key replay path).
 - Tests: `apps/api/tests` = 20 files (**186** tests, need the test DB);
   `packages/shared/src/__tests__` = 9 files (**226** tests, no DB). New purchase
   files: `purchases-receive`, `purchases-lifecycle`, `purchases-list`,
@@ -379,7 +409,9 @@ must print "-- This is an empty migration." and exit 0.
   checks (paid supplier-less purchases are an intended exception).
   Test files run in parallel against Neon; a network drop can still surface as
   a spurious "Can't reach database server" failure, rerun the single test.
-- `apps/api` has no loan-management routes or sign-in endpoint.
+- `apps/api` has no sign-in endpoint.
+  Loan repayment reversal is intentionally not implemented yet (design ready,
+  awaiting owner approval because it loosens expense immutability rules).
   `@fastify/cookie`, `@fastify/cors`, `@fastify/jwt` and
   `@fastify/rate-limit` are installed but not used.
 - Auth: **no sign-in endpoint exists.** `AdminUser` + Argon2id hashing + the seed
@@ -390,14 +422,10 @@ must print "-- This is an empty migration." and exit 0.
   `lib/api/index.ts` selects `*MockApi` unless `NEXT_PUBLIC_API_MODE=real`;
   every `*RealApi` stub throws `"not implemented"`. The mock store persists to
   localStorage key `fabtyna-mock-v1`; `resetDemoData` resets it.
-- Latest final check: typecheck and lint passed; the one `pnpm verify` run
-  stopped in API tests when `sales-lifecycle.test.ts` cursor pagination exceeded
-  Vitest's 30-second test timeout under the full database suite. The isolated
-  pagination test passed in 27.8 seconds after assigning that test a 120-second
-  timeout. The build phase did not run because `pnpm verify` short-circuits on
-  test failure. `db:verify` passed on `fabtyna_dev` and `fabtyna_test` (30
-  migrations and identical schema objects); `db:audit` returned zero rows on
-  both after the final test run.
+- Latest focused checks in this session: `accounts-gate.test.ts`,
+  `loans-api.test.ts`, `stock-operations.test.ts`, and the sales pagination
+  case all pass on the test DB; pagination now passes under the default 30 s
+  timeout without a timeout override by reducing lock contention in seeding.
 
 ## 6b. Known limitations
 

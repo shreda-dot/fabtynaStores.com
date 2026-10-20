@@ -66,7 +66,9 @@ export async function listSales(
 ): Promise<SaleListPage> {
   const range = resolveListDateRange(query, now, maxDateRangeDays, {
     defaultToToday: true,
-    suppressDefault: false,
+    // A debt, customer or text search must see every period.
+    suppressDefault:
+      query.unpaid === true || query.q !== undefined || query.customerId !== undefined,
   });
   query = { ...query, from: range.from, to: range.to };
   const conditions: Prisma.Sql[] = [];

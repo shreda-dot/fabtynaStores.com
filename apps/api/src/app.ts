@@ -12,8 +12,14 @@ import { registerExpensesRoutes } from "./modules/expenses/expenses.routes.js";
 import { createExpensesService } from "./modules/expenses/expenses.service.js";
 import { registerAccountsRoutes } from "./modules/accounts/accounts.routes.js";
 import { createAccountsService } from "./modules/accounts/accounts.service.js";
+import { registerLoansRoutes } from "./modules/loans/loans.routes.js";
+import { createLoansService } from "./modules/loans/loans.service.js";
 import { registerSalesRoutes } from "./modules/sales/sales.routes.js";
 import { createSalesService } from "./modules/sales/sales.service.js";
+import { registerTransfersRoutes } from "./modules/stock/transfers.routes.js";
+import { createTransfersService } from "./modules/stock/transfers.service.js";
+import { registerAdjustmentsRoutes } from "./modules/stock/adjustments.routes.js";
+import { createAdjustmentsService } from "./modules/stock/adjustments.service.js";
 
 export interface BuildAppOptions {
   prisma: PrismaClient;
@@ -83,6 +89,31 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     log,
   });
   registerAccountsRoutes(app, { service: accountsService, resolveActor: options.resolveActor });
+  const loansService = createLoansService({
+    prisma: options.prisma,
+    now: options.now,
+    txTimeouts: options.txTimeouts,
+    log,
+  });
+  registerLoansRoutes(app, { service: loansService, resolveActor: options.resolveActor });
+
+  const transfersService = createTransfersService({
+    prisma: options.prisma,
+    now: options.now,
+    txTimeouts: options.txTimeouts,
+    maxDateRangeDays: options.maxDateRangeDays,
+    log,
+  });
+  registerTransfersRoutes(app, { service: transfersService, resolveActor: options.resolveActor });
+
+  const adjustmentsService = createAdjustmentsService({
+    prisma: options.prisma,
+    now: options.now,
+    txTimeouts: options.txTimeouts,
+    maxDateRangeDays: options.maxDateRangeDays,
+    log,
+  });
+  registerAdjustmentsRoutes(app, { service: adjustmentsService, resolveActor: options.resolveActor });
 
   app.setNotFoundHandler((request, reply) => {
     const error = new AppError(404, "NOT_FOUND", "Route not found.", {

@@ -64,7 +64,12 @@ export async function listPurchases(
 ): Promise<PurchaseListPage> {
   const range = resolveListDateRange(query, now, maxDateRangeDays, {
     defaultToToday: true,
-    suppressDefault: false,
+    // A debt, overdue, supplier or text search must see every period.
+    suppressDefault:
+      query.unpaid === true ||
+      query.overdue === true ||
+      query.q !== undefined ||
+      query.supplierId !== undefined,
   });
   query = { ...query, from: range.from, to: range.to };
   const conditions: Prisma.Sql[] = [];

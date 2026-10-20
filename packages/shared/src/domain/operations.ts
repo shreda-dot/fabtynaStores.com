@@ -532,6 +532,7 @@ export interface BuildAdjustmentLineInput {
   location: StockLocation;
   quantityDeltaUnits: number;
   unitCostKobo: bigint | null;
+  reason?: string | null;
 }
 
 export interface BuildAdjustmentInput {
@@ -570,7 +571,8 @@ export function buildAdjustment(
   const adjustmentLines: StockAdjustmentLine[] = [];
   const movements: StockMovement[] = [];
   const productUpdates: Array<{ id: string; averageCostKobo: bigint }> = [];
-  const updatedProducts = new Set<string>();
+  const runningUnitsByProduct = new Map<string, bigint>();
+  const runningAverageByProduct = new Map<string, bigint>();
 
   for (const line of input.lines) {
     const product = productById.get(line.productId);
@@ -618,7 +620,7 @@ export function buildAdjustment(
       location: line.location,
       quantityDeltaUnits: line.quantityDeltaUnits,
       unitCostKobo,
-      reason: null,
+      reason: line.reason?.trim() || null,
     });
 
     movements.push({
@@ -638,18 +640,32 @@ export function buildAdjustment(
       createdAt: input.adjustedAt,
     });
 
-    if (isPositive && !updatedProducts.has(line.productId)) {
-      const existingUnits = BigInt(
-        totalUnitsForProduct(existingMovements, line.productId),
-      );
+    const existingUnits =
+      runningUnitsByProduct.get(line.productId) ??
+      BigInt(totalUnitsForProduct(existingMovements, line.productId));
+    if (isPositive) {
       const newAverage = calculateWeightedAverageCostKobo(
         existingUnits,
-        product.averageCostKobo,
+        runningAverageByProduct.get(line.productId) ?? product.averageCostKobo,
         BigInt(line.quantityDeltaUnits),
         BigInt(line.quantityDeltaUnits) * unitCostKobo,
       );
-      productUpdates.push({ id: line.productId, averageCostKobo: newAverage });
-      updatedProducts.add(line.productId);
+      runningAverageByProduct.set(line.productId, newAverage);
+      runningUnitsByProduct.set(
+        line.productId,
+        existingUnits + BigInt(line.quantityDeltaUnits),
+      );
+      const priorUpdate = productUpdates.findIndex((update) => update.id === line.productId);
+      if (priorUpdate === -1) {
+        productUpdates.push({ id: line.productId, averageCostKobo: newAverage });
+      } else {
+        productUpdates[priorUpdate] = { id: line.productId, averageCostKobo: newAverage };
+      }
+    } else {
+      runningUnitsByProduct.set(
+        line.productId,
+        existingUnits + BigInt(line.quantityDeltaUnits),
+      );
     }
   }
 

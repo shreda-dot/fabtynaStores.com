@@ -59,8 +59,8 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261017060000_drop_loan_repayment_expense` | STEP 1: makes the loan-repayment → expense link one-directional. Drops FK `fk_loan_repayments_expense`, index `loan_repayments_expenseId_idx` and column `loan_repayments.expenseId`. `loan_repayments` was confirmed empty on dev and test, so no rows were lost. |
 | `20261017070000_reversal_sign_exemption` | Rebuilds the 4 ledger sign `CHECK`s and `ck_stock_movement_quantity_sign` with a `"reversesEntryId" IS NOT NULL OR (...)` exemption, so a legal reversal row is no longer rejected by the sign rule it is supposed to break. Adds `fn_check_reversal_integrity` + 5 triggers (`trg_*_reversal_integrity`), which prove the reversal is the exact negation of its target and matches it on `type` and every source column. |
 | `20261017080000_fractional_line_quantities` | `sale_lines.quantity` and `purchase_lines.quantity` become `NUMERIC(12, 4)` (they were `INTEGER`), so a wholesale part-pack (½, ¼, ⅛ crate) can be stored. `quantityUnits` stays `INTEGER` and remains the authoritative count of base units. |
-| `20261017090000_expense_immutability` | `fn_raise_expense_immutable` + `trg_expense_immutability` / `trg_expense_no_truncate`: an expense tied to a loan repayment is not editable and not deletable, and `category` + `loanRepaymentId` are immutable on every expense. The other columns stay editable so ordinary book-keeping corrections still work. |
-| `20261017092000_sale_void_guard` | `fn_check_sale_void_guard` + `trg_sale_void_guard`: a sale whose payment wrote a customer ledger `PAYMENT` entry cannot be voided, because `voidSale` reverses only the SALE entry and would leave the customer balance wrong. A payment taken up front writes no PAYMENT entry, so a same-day cash void stays legal. |
+| `20261017090000_expense_immutability` | Initial expense immutability rules: loan-repayment interest cannot be edited/deleted, and `category` + `loanRepaymentId` cannot change. The current function is tightened by `20261020000800_expense_record_immutability`. |
+| `20261017092000_sale_void_guard` | Initially blocked voiding a sale with a customer ledger `PAYMENT` entry. Its rule is superseded by `20261020000400_reverse_payment_guards`, which allows void after every on-account payment has been reversed. |
 | `20261017100000_stock_balances` | Creates `stock_balances` (one row per `(productId, location)`, PK + `ck_stock_balances_nonnegative` + `fk_stock_balances_product`), back-fills it from `stock_movements`, and installs the maintainer `trg_stock_movement_apply`, the direct-write guard `trg_stock_balances_guard` and `trg_stock_balances_no_truncate`. |
 | `20261017110000_document_locks` | `fn_check_document_lock` + `trg_sale_document_lock` / `trg_purchase_document_lock`: once a document has left `DRAFT`, only `paidKobo`, `status` and `updatedAt` may change, and only a `DRAFT` may be deleted. Line tables (`sale_lines`, `purchase_lines`, `stock_transfer_lines`, `stock_transfer_legs`, `stock_adjustment_lines`) become immutable, row and `TRUNCATE`. |
 | `20261017120000_trigger_behaviour_fixes` | Corrects three triggers that passed `db:verify` but could not work — see §8. `fn_check_document_lock` compared an enum column to a `TEXT` variable (`42883`), `fn_check_reversal_integrity` tested `FOUND` after `EXECUTE ... INTO` (never set → every reversal rejected), and `fn_stock_balance_direct_write_guard` used `pg_trigger_depth() = 0` (never true inside a trigger) and cancelled writes with a bare `RETURN NULL`. Also re-backfills `stock_balances`. |
@@ -73,6 +73,10 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261020000200_idempotency_keys` | Creates `idempotency_keys` (`key`, `route`, `requestHash`, `responseStatus`, `responseBody`, `createdAt`, `expiresAt`), unique index `idempotency_keys_key_route_key` on `(key, route)` and `idempotency_keys_expiresAt_idx`. Rows are claimed inside the sale transaction and expire after 24 h; an hourly job deletes expired rows. When login exists the uniqueness gains `actorId`. |
 | `20261020000300_purchase_reference_sequence` | Creates `purchase_reference_seq` (BIGINT). The Purchases API formats generated references as `P-YYYYMMDD-000123` from `nextval` (same rules as sales: never reused, gaps after a rollback are expected). |
 | `20261020000400_reverse_payment_guards` | `fn_check_sale_void_guard` now ignores reversed on-account payments (customer `PAYMENT` entry that has a reversal row). New `fn_check_purchase_void_guard` + `trg_purchase_void_guard` (`BEFORE UPDATE OF status` on `purchases`): blocks a void while a supplier payment has no `SUPPLIER_PAYMENT` account reversal. `fn_check_reversal_integrity` exempts `note` for `account_ledger_entries` only, so the reversal reason can be stored there. db:audit: `paidKobo` = Σ live payments (sales, purchases); supplier-less purchases: `paidKobo` = Σ original `PURCHASE_PAYMENT` entries (fatal). |
+| `20261020000500_expense_categories` | Creates and seeds `expense_categories`, migrates `expenses.category` into `categoryId`, replaces the expense/loan-interest category triggers with ID-backed lookups, and removes the `ExpenseCategory` enum. `LOAN_INTEREST` is reserved for repayment-generated expenses. |
+| `20261020000600_other_income_source_less` | Replaces the account-ledger source trigger so `OTHER_INCOME` is a manual source-less entry; other source/type rules are unchanged. `otherIncomeId` remains a reserved nullable column. |
+| `20261020000700_expense_category_index_names` | Renames two indexes created with PostgreSQL-folded lowercase identifiers to the exact Prisma-style camelCase names checked by `db:verify`. |
+| `20261020000800_expense_record_immutability` | Tightens `fn_expense_immutability`: expense details cannot be edited in place, an ordinary expense can transition to voided once with a reason, and a void cannot be undone or edited. |
 
 ## 3. Tables
 
@@ -140,10 +144,16 @@ dev --create-only` diffs the schema against the database. The one surviving
 `accountTransferId`, `customerRefundId`, `loanId` or `loanRepaymentId`. A
 source-type trigger requires exactly the appropriate source column for each
 source-backed entry type; designated manual entries (`OPENING_BALANCE`,
-`ADJUSTMENT`, `OWNER_CAPITAL`, `OWNER_DRAWING`, `BANK_OR_POS_CHARGE`) have no
-source document. The single-source CHECK prevents multiple source columns.
+`ADJUSTMENT`, `OWNER_CAPITAL`, `OWNER_DRAWING`, `OTHER_INCOME`,
+`BANK_OR_POS_CHARGE`) have no source document. The single-source CHECK prevents multiple source columns.
 Some source IDs (`customerPaymentId`, `otherIncomeId`, `customerRefundId`) are
 reserved columns without a corresponding Prisma source model/FK yet.
+
+`CUSTOMER_REFUND` remains source-backed in the current domain and database
+(`customerRefundId` is required), although the approved accounts design calls
+for a source-less manual refund entry. That mismatch is intentionally unchanged
+in this migration set and must be resolved before exposing manual customer
+refunds through the API.
 
 The four new enum values are `PURCHASE_PAYMENT`, `OPENING_BALANCE`,
 `LOAN_DISBURSEMENT` and `LOAN_REPAYMENT`. `sale_payments` intentionally has no
@@ -155,7 +165,8 @@ money paid are represented by a `PURCHASE_PAYMENT` entry keyed by `purchaseId`.
 
 | Table                 | Purpose                                                                                                                                                                                 | Key columns                                                                    |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `expenses`            | Operating costs. Void fields require a reason when set; voided expenses are excluded from money-flow reporting.                                                                            | `channel`, `category`, `amountKobo`, `expenseDate`, `loanRepaymentId` (unique), `voidedAt`, `voidReason` |
+| `expense_categories`  | Seeded, protected system categories plus user-managed categories that can be renamed/deactivated but not deleted.                                                                         | `name`, `normalizedKey`, `code`, `isActive`                                    |
+| `expenses`            | Operating costs. Category is a relation; details are immutable after create. Void fields require a reason, and voided expenses are excluded from reports. `LOAN_INTEREST` is repayment-only. | `channel`, `categoryId`, `amountKobo`, `expenseDate`, `loanRepaymentId` (unique), `voidedAt`, `voidReason` |
 | `loans`               | Money borrowed.                                                                                                                                                                         | `lenderName`, `principalKobo`, `agreedInterestKobo`, `disbursedAt`, `dueDate`  |
 | `loan_ledger_entries` | Loan balance movements. **Immutable.** Signed: DISBURSEMENT +, CHARGE +, REPAYMENT −. Outstanding = DISBURSEMENT + CHARGE − REPAYMENT.                                                  | `type`, `amountKobo`, `loanRepaymentId`, `reversesEntryId`                     |
 | `loan_repayments`     | One repayment; its interest portion generates a linked `LOAN_INTEREST` expense. **Immutable.** The expense is reached through `expenses.loanRepaymentId` (the link is one-directional). | `amountKobo`, `interestPortionKobo`, `paidAt`                                  |
@@ -298,7 +309,9 @@ except for the magnitude column (`amountKobo`, or `quantityUnits` for
 
 | Function                        | Trigger                                              | Effect                                                         |
 | ------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------- |
-| `fn_check_expense_loan_link()`  | `trg_expenses_loan_link` (`BEFORE INSERT OR UPDATE`) | An expense linked to a loan repayment must be `LOAN_INTEREST`. |
+| `fn_check_expense_loan_link()`  | `trg_expenses_loan_link` (`BEFORE INSERT OR UPDATE`) | Validates the active category on selection; a linked loan-repayment expense must be `LOAN_INTEREST`, and manual `LOAN_INTEREST` is rejected. |
+| `fn_expense_category_guard()` | `trg_expense_category_guard` / `trg_expense_category_no_truncate` | System categories cannot be renamed/deactivated; user categories cannot be deleted. |
+| `fn_expense_immutability()` | `trg_expense_immutability` (`BEFORE UPDATE OR DELETE`) | A non-interest expense can only make one void transition; detail fields and an existing void cannot be edited. |
 | `fn_check_loan_ledger_source()` | `trg_loan_ledger_source` (`BEFORE INSERT`)           | `REPAYMENT` requires `loanRepaymentId`; other types forbid it. |
 
 `20261017000700_sale_purchase_rules`
@@ -313,28 +326,33 @@ except for the magnitude column (`amountKobo`, or `quantityUnits` for
 | ------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `fn_check_reversal_integrity()` | `trg_<ledger>_reversal_integrity` on the customer, supplier, account and loan ledgers and `stock_movements` | A row with `reversesEntryId` set must be identical to its target on `type` and every source column, and its magnitude column (`amountKobo`, or `quantityUnits` for `stock_movements`) must be the exact negation. This is what makes the `"reversesEntryId" IS NOT NULL OR (<sign rule>)` exemption (§4.1) safe. |
 
-`20261017090000_expense_immutability`
+`20261017090000_expense_immutability` (baseline), tightened by
+`20261020000800_expense_record_immutability`
 
 | Function                   | Trigger(s)                                                              | Effect                                                                                                                                                        |
 | -------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fn_expense_immutability()` | `trg_expense_immutability` (`BEFORE UPDATE OR DELETE ON expenses`)      | An expense with `loanRepaymentId` set cannot be updated or deleted (`LOAN_INTEREST` is derived from the immutable repayment); on every expense, `category` and `loanRepaymentId` cannot change. |
+| `fn_expense_immutability()` | `trg_expense_immutability` (`BEFORE UPDATE OR DELETE ON expenses`)      | An expense with `loanRepaymentId` set cannot be updated or deleted; ordinary expense detail fields and category cannot change; an ordinary expense may be voided once, with the void fields protected thereafter. |
 | `fn_raise_immutable()`      | `trg_expense_no_truncate` (`BEFORE TRUNCATE ON expenses`)               | Raises on `TRUNCATE`.                                                                                                                                          |
 
-Ordinary expense fields (`channel`, `description`, `amountKobo`,
-`expenseDate`, `updatedAt`) remain editable at the database level. The account
-workflow in the mock API uses void-with-reason and reverses the linked account
-entry; the database currently enforces only the `voidedAt`/`voidReason` pair,
-the loan-interest immutability rules above, and the account-ledger foreign key.
-An ordinary expense that has an account entry cannot be deleted while that
-entry references it, but direct database updates to its ordinary fields are
-not blocked. Add a new migration and database tests before introducing a
-database-backed write API if these direct-write guarantees are required.
+The API void workflow appends an exact account-ledger reversal and records a
+reason before marking the expense voided. The database rejects direct deletes,
+in-place detail edits, repeated voids, and void edits; `db:audit` verifies that
+each account-affecting expense has one original account entry and that voided
+entries net to zero.
 
-`20261017092000_sale_void_guard`
+`20261017092000_sale_void_guard` (current behavior replaced by
+`20261020000400_reverse_payment_guards`)
 
 | Function                      | Trigger                                            | Effect                                                                                                                       |
 | ----------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `fn_check_sale_void_guard()`  | `trg_sale_void_guard` (`BEFORE UPDATE OF status`)  | A sale that has a customer ledger `PAYMENT` entry (money taken later, on account) cannot be set to `VOIDED`.                  |
+| `fn_check_sale_void_guard()`  | `trg_sale_void_guard` (`BEFORE UPDATE OF status`)  | A sale cannot be set to `VOIDED` while it has a LIVE customer ledger `PAYMENT` entry; a payment with an account-ledger reversal no longer blocks void. |
+
+`20261020000400_reverse_payment_guards` also installs
+`fn_check_purchase_void_guard()` / `trg_purchase_void_guard` on `purchases`.
+It blocks void while any supplier payment lacks a reversal of its
+`SUPPLIER_PAYMENT` account entry. These database guards mirror the service
+rules: reverse live payments before voiding or amending; a reversed payment
+does not block either operation.
 
 `20261017100000_stock_balances`
 
@@ -392,7 +410,7 @@ object names.
 - **Stock never goes below zero**, per `(product, location)`, and there is at most one balance row per pair (`stock_balances`, `ck_stock_balances_nonnegative`, `20261017100000`). The balance is a row-locked cache, so two concurrent sales of the last unit cannot both succeed — one fails the `CHECK`.
 - **Account money never goes below zero** (`account_balances`, `ck_account_balances_nonnegative`, `20261019000100`). A row-locked balance cache is updated from immutable account-ledger inserts; direct writes are rejected.
 - **A reversal must be the exact negation of its target** and match it on `type` and every source column (`trg_*_reversal_integrity`, `20261017070000`).
-- **Expense immutability** — a `LOAN_INTEREST` expense is fully immutable, and `category` + `loanRepaymentId` are immutable on every expense (`20261017090000`).
+- **Expense immutability** — detail fields cannot be edited; an ordinary expense can be voided once with a reason and cannot be unvoided/edited afterwards. `LOAN_INTEREST` rows remain repayment-owned and fully immutable (`20261020000800`).
 - **A sale with on-account payments cannot be voided** (`trg_sale_void_guard`, `20261017092000`) — voiding would strand the customer ledger `PAYMENT` entry.
 - **Document locks** — past `DRAFT`, only `paidKobo`, `status` and `updatedAt` may change, a non-draft document cannot be deleted, and the sale/purchase/transfer/adjustment line tables are immutable (`20261017110000`).
 
@@ -407,13 +425,16 @@ object names.
 | VOIDED sales/purchases/transfers must not be edited          | Immutability plus the status triggers cover most of it; the remaining "don't offer the action in the UI" checks live in the app.                                                           |
 | Debtor aging / payment allocation to the oldest unpaid sale  | Computed at query time; there is no allocation table.                                                                                                                                      |
 | Sale payment amount ≤ amount due; `paidAt`/`soldAt` not in the future | The domain checks the amount; the future-date limit (5 min tolerance) and "sale is COMPLETED" are checked in `sales.service.ts` under the sale row lock. |
-| Void refused for already-voided sales and for later (on-account) payments; friendly overdraw message | `trg_sale_void_guard` and `ck_account_balances_nonnegative` are the backstops; the service checks first, under the lock order sale → products → stock_balances → account_balances → customer, to return a friendly 409. |
+| Void refused for already-voided sales and for LIVE later (on-account) payments; friendly overdraw message | `trg_sale_void_guard` and `ck_account_balances_nonnegative` are the backstops; the service checks first, under the lock order sale → products → stock_balances → account_balances → customer, to return a friendly 409. A reversed payment no longer blocks. |
 | Amend = void + new sale in one transaction                   | Pure service orchestration; the link is audit metadata (`amendedBySaleId` / `amendedFromSaleId`), no schema change.                                                                        |
-| Purchase void refused when a LIVE supplier payment exists    | `trg_purchase_void_guard` (`20261020000400`) is the backstop; the service checks first under the purchase row lock and returns a friendly 409 ("Reverse the payments first").            |
+| Purchase void refused when a LIVE supplier payment exists    | `trg_purchase_void_guard` (`20261020000400`) is the backstop; the service checks first under the purchase row lock and returns a friendly 409. Reversed supplier payments do not block. |
 | Payment reversal (sale later payments, any supplier payment) | Service-owned rules (walk-in sale refused, up-front payment refused, reason required, overdraw message); once-only is `ux_*_reversed_once`; reversal integrity is `fn_check_reversal_integrity`. |
 | Purchase void refused when its stock was already sold; friendly overspend/overdraw messages | `ck_stock_balances_nonnegative` and `ck_account_balances_nonnegative` are the backstops; the service checks first, under the lock order purchase → products → stock_balances (all locations) → account_balances → supplier (`FOR SHARE`). |
 | Purchase `averageCostKobo` is recomputed on receive and void | Done by the shared domain, never by SQL; two purchases of one product serialise through the product row so the average is never computed from stale stock. |
 | Amend purchase = void + new purchase in one transaction      | Service orchestration; link in audit metadata (`amendedFromPurchaseId` / `amendedByPurchaseId`), no schema change. |
+| Account/category names, activation state, opening balance, reconcile reason, transfer descriptions and list filtering | Validated and audited by the accounts/category services; balance math, source rules, non-negative balance, one live opening balance, transfer pairing, and immutability are backed by shared domain/database guards. |
+| Expense create, void, amend, list and summary | One transaction posts expense + account outflow; void appends an account reversal; amendment is void + recreate. Category names and channel splitting are resolved by the service; the database protects expense details and the void lifecycle. |
+| Friendly insufficient-funds errors | Checked against locked `account_balances` before posting. The database `ck_account_balances_nonnegative` remains the concurrency-safe backstop. |
 
 ---
 
@@ -438,17 +459,17 @@ any of them return a row**. All of them must return zero rows on clean data.
 | --- | --- |
 | `purchases.totalKobo` = Σ `purchase_lines.lineTotalKobo` | group each purchase's lines and compare to the header |
 | `sales.totalKobo` = Σ `sale_lines.lineTotalKobo` | as above, on the sale side |
-| `purchases.paidKobo` = Σ `supplier_payments.amountKobo` | left join, `COALESCE(..., 0)` |
-| `sales.paidKobo` = Σ `sale_payments.amountKobo` | as above, on the sale side |
+| `purchases.paidKobo` = Σ live `supplier_payments.amountKobo` | a payment whose original `SUPPLIER_PAYMENT` account entry has a reversal row is excluded |
+| `sales.paidKobo` = Σ live `sale_payments.amountKobo` | a later payment whose customer `PAYMENT` entry has a reversal row is excluded; a void leaves `paidKobo` unchanged |
 | Customer ledger balance = Σ unpaid portions | per customer, `Σ(customer_ledger_entries.amountKobo)` vs `Σ(totalKobo − paidKobo)` over non-`VOIDED` sales |
 | Supplier ledger balance = Σ unpaid portions | per supplier, `Σ(supplier_ledger_entries.amountKobo)` vs `Σ(totalKobo − paidKobo)` over non-`VOIDED` purchases |
 | `stock_balances` = the movement sum | left join every `(productId, location)` in either table and compare `quantityUnits` |
 | `account_balances.balanceKobo` = Σ `account_ledger_entries.amountKobo` | compare each cached balance with the ledger sum |
 | Exactly one original entry per sale payment, supplier payment, non-`LOAN_INTEREST` expense, loan disbursement and loan repayment | source document left-joined to non-reversal account entries |
-| Exactly one `PURCHASE_PAYMENT` per paid supplier-less purchase | paid supplier-less purchase left-joined to its non-reversal account entry |
+| Supplier-less purchase `paidKobo` = Σ original `PURCHASE_PAYMENT` entries | fatal reconciliation by purchase; reversal entries do not change `paidKobo` for a voided document |
 | Reversals net to zero | sale/supplier payment and expense checks plus purchase, loan and transfer reversal totals |
 | One original IN and OUT entry per transfer | account transfer joined to its live ledger entries |
-| Account source cardinality | source-backed types carry one source column; opening balance, adjustment, owner capital/drawing and bank/POS charge carry none |
+| Account source cardinality | source-backed types carry one source column; opening balance, adjustment, owner capital/drawing, other income and bank/POS charge carry none |
 | No account entry for a `LOAN_INTEREST` expense | expense category joined to account-ledger entries |
 | Deactivated accounts have no original entries | account entries joined to inactive accounts; reversals are permitted |
 
@@ -457,18 +478,13 @@ The first four queries were previously only a comment at the bottom of
 
 > Known exceptions — deliberate, not drift:
 >
-> - A purchase with **no supplier** records no `supplier_payments` row at all
->   (`SupplierPayment.supplierId` is NOT NULL), so a paid supplier-less purchase
->   appears in the `purchases.paidKobo` check. The domain layer still sets
->   `Purchase.paidKobo`. The script reports these as a separate, non-fatal
->   `known` bucket rather than a failure.
 > - A voided document legitimately keeps its lines and its `totalKobo`, so the
 >   two total-vs-lines checks include `VOIDED` rows; the ledger checks do not
 >   (a voided sale/purchase is excluded from the "what is owed" comparison,
 >   because voiding writes a reversing ledger entry rather than deleting the
 >   original).
 > - Source-less `OPENING_BALANCE`, `ADJUSTMENT`, `OWNER_CAPITAL`,
->   `OWNER_DRAWING` and `BANK_OR_POS_CHARGE` account entries are intentional;
+>   `OWNER_DRAWING`, `OTHER_INCOME` and `BANK_OR_POS_CHARGE` account entries are intentional;
 >   the source-cardinality audit permits those exact types and requires one
 >   source column for all source-backed types.
 > - `LOAN_INTEREST` expenses intentionally have no account entry. The full

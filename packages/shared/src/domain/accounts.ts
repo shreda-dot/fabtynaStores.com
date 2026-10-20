@@ -52,7 +52,6 @@ const REQUIRED_SOURCE_FIELD: Partial<Record<AccountEntryType, AccountLedgerSourc
     SUPPLIER_PAYMENT: "supplierPaymentId",
     PURCHASE_PAYMENT: "purchaseId",
     EXPENSE: "expenseId",
-    OTHER_INCOME: "otherIncomeId",
     CUSTOMER_REFUND: "customerRefundId",
     TRANSFER_IN: "accountTransferId",
     TRANSFER_OUT: "accountTransferId",

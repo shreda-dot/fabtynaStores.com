@@ -66,6 +66,10 @@ export const EXPECTED_MIGRATIONS = [
   "20261020000200_idempotency_keys",
   "20261020000300_purchase_reference_sequence",
   "20261020000400_reverse_payment_guards",
+  "20261020000500_expense_categories",
+  "20261020000600_other_income_source_less",
+  "20261020000700_expense_category_index_names",
+  "20261020000800_expense_record_immutability",
 ] as const;
 
 /**
@@ -81,6 +85,8 @@ export const EXPECTED_TABLES = [
   "account_balances",
   // 20261020000200_idempotency_keys
   "idempotency_keys",
+  // 20261020000500_expense_categories
+  "expense_categories",
 ] as const;
 
 /**
@@ -98,6 +104,11 @@ export const EXPECTED_SEQUENCES = ["sale_reference_seq", "purchase_reference_seq
 export const EXPECTED_INDEXES = [
   "idempotency_keys_key_route_key",
   "idempotency_keys_expiresAt_idx",
+  // 20261020000500_expense_categories
+  "expense_categories_pkey",
+  "expense_categories_normalizedKey_key",
+  "expense_categories_code_key",
+  "expenses_categoryId_expenseDate_idx",
 ] as const;
 
 /**
@@ -181,6 +192,10 @@ export const EXPECTED_CHECK_CONSTRAINTS = [
   // 20261019000100_account_ledger_sources — expenses
   "ck_expenses_void_pair",
 
+  // 20261020000500_expense_categories
+  "ck_expense_categories_name",
+  "ck_expense_categories_normalized_key",
+
   // 20261019000100_account_ledger_sources — account ledger rules
   // (`ck_account_ledger_amount_sign` is DROPped and re-ADDed by this migration
   // under the same name, so it stays in the 20261017000100 group above.)
@@ -246,6 +261,10 @@ export const EXPECTED_TRIGGERS = [
   // 20261017090000_expense_immutability
   "trg_expense_immutability",
   "trg_expense_no_truncate",
+
+  // 20261020000500_expense_categories
+  "trg_expense_category_guard",
+  "trg_expense_category_no_truncate",
 
   // 20261017092000_sale_void_guard
   "trg_sale_void_guard",
@@ -350,6 +369,9 @@ export const EXPECTED_PARTIAL_INDEXES = [
 export const EXPECTED_FOREIGN_KEYS = [
   // 20261017000600_accounting_constraints
   "fk_expenses_loan_repayment",
+
+  // 20261020000500_expense_categories
+  "fk_expenses_category",
 
   // 20261017100000_stock_balances
   "fk_stock_balances_product",

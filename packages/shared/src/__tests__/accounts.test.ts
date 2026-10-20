@@ -561,6 +561,31 @@ describe("buildAccountLedgerEntry", () => {
         expect(entry.customerRefundId).toBeNull();
         expect(entry.loanRepaymentId).toBeNull();
     });
+
+    it("keeps OTHER_INCOME source-less", () => {
+        const entry = buildAccountLedgerEntry(
+            {
+                accountId: "a1",
+                type: "OTHER_INCOME",
+                amountKobo: 2000n,
+                occurredAt: baseDate,
+            },
+            newId,
+        );
+        expect(entry.otherIncomeId).toBeNull();
+        expect(() =>
+            buildAccountLedgerEntry(
+                {
+                    accountId: "a1",
+                    type: "OTHER_INCOME",
+                    amountKobo: 2000n,
+                    otherIncomeId: "income-1",
+                    occurredAt: baseDate,
+                },
+                newId,
+            ),
+        ).toThrow(/must not reference otherIncomeId/);
+    });
 });
 
 describe("buildOpeningBalanceEntry", () => {

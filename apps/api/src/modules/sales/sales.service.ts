@@ -76,6 +76,7 @@ export interface SalesServiceOptions {
   now?: () => Date;
   log?: (entry: Record<string, unknown>) => void;
   txTimeouts?: TxTimeouts;
+  maxDateRangeDays?: number;
 }
 
 /** A stock level so large that the domain's per-line stock check cannot fire (pass 1). */
@@ -206,6 +207,7 @@ function assertCanGiveBack(account: LockedAccount, amountKobo: bigint): void {
 export function createSalesService(options: SalesServiceOptions) {
   const { prisma } = options;
   const now = options.now ?? (() => new Date());
+  const maxDateRangeDays = options.maxDateRangeDays ?? 366;
   const log = options.log ?? (() => undefined);
   const { runWrite, withIdempotency } = createWriteRunner({
     prisma,
@@ -838,7 +840,7 @@ export function createSalesService(options: SalesServiceOptions) {
   }
 
   async function list(query: ListSalesQuery) {
-    return listSales(prisma, query);
+    return listSales(prisma, query, now(), maxDateRangeDays);
   }
 
   return {

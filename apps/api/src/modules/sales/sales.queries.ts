@@ -7,6 +7,7 @@ import {
   encodeCursor,
   lagosDayStartIso,
   likePattern,
+  resolveListDateRange,
   utcTimestamp,
 } from "../../lib/list-helpers.js";
 import type { ListSalesQuery } from "./sales.schemas.js";
@@ -48,6 +49,8 @@ export interface SaleListItem {
 export interface SaleListPage {
   items: SaleListItem[];
   nextCursor: string | null;
+  from: string | null;
+  to: string | null;
 }
 
 /**
@@ -55,7 +58,17 @@ export interface SaleListPage {
  * same pair, so a page boundary can neither repeat nor skip a row even when
  * several sales share a timestamp.
  */
-export async function listSales(prisma: PrismaClient, query: ListSalesQuery): Promise<SaleListPage> {
+export async function listSales(
+  prisma: PrismaClient,
+  query: ListSalesQuery,
+  now: Date,
+  maxDateRangeDays: number,
+): Promise<SaleListPage> {
+  const range = resolveListDateRange(query, now, maxDateRangeDays, {
+    defaultToToday: true,
+    suppressDefault: false,
+  });
+  query = { ...query, from: range.from, to: range.to };
   const conditions: Prisma.Sql[] = [];
 
   if (query.from !== undefined) {
@@ -115,6 +128,8 @@ export async function listSales(prisma: PrismaClient, query: ListSalesQuery): Pr
   return {
     items: page.map((row) => ({ ...row, soldAt: row.soldAt.toISOString() })),
     nextCursor,
+    from: range.from ?? null,
+    to: range.to ?? null,
   };
 }
 

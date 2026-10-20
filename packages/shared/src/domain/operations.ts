@@ -684,7 +684,7 @@ export interface VoidResult {
  * an account below zero, so the caller gets a message naming the account
  * instead of a raw CHECK violation.
  */
-function buildAccountReversals(
+export function buildAccountReversals(
   targets: readonly AccountLedgerEntry[],
   existingAccountLedger: readonly AccountLedgerEntry[],
   accounts: readonly Account[],
@@ -1802,6 +1802,16 @@ export interface SalesSummaryResult {
   };
 }
 
+export function splitExpenseByChannel(
+  amountKobo: bigint,
+  channel: SaleChannel,
+): { retailKobo: bigint; wholesaleKobo: bigint } {
+  if (channel === "RETAIL") return { retailKobo: amountKobo, wholesaleKobo: 0n };
+  if (channel === "WHOLESALE") return { retailKobo: 0n, wholesaleKobo: amountKobo };
+  const retailKobo = amountKobo / 2n;
+  return { retailKobo, wholesaleKobo: amountKobo - retailKobo };
+}
+
 export function salesSummary(
   from: Date,
   to: Date,
@@ -1966,16 +1976,9 @@ export function salesSummary(
     const date = getLagosBusinessDate(expense.expenseDate);
     const day = days.get(date) ?? emptyDay(date);
     day.totalExpensesKobo += expense.amountKobo;
-    if (expense.channel === "RETAIL") {
-      day.retailExpensesKobo += expense.amountKobo;
-    } else if (expense.channel === "WHOLESALE") {
-      day.wholesaleExpensesKobo += expense.amountKobo;
-    } else {
-      const half = expense.amountKobo / 2n;
-      const otherHalf = expense.amountKobo - half;
-      day.retailExpensesKobo += half;
-      day.wholesaleExpensesKobo += otherHalf;
-    }
+    const split = splitExpenseByChannel(expense.amountKobo, expense.channel);
+    day.retailExpensesKobo += split.retailKobo;
+    day.wholesaleExpensesKobo += split.wholesaleKobo;
     days.set(date, day);
   }
 

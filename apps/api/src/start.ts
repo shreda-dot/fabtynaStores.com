@@ -33,6 +33,7 @@ export async function startServer(
       resolveActor: createDevActorResolver(actor),
       logger: overrides.logger ?? true,
       txTimeouts: env.txTimeouts,
+      maxDateRangeDays: env.maxDateRangeDays,
     });
 
     const stopCleanup = startIdempotencyCleanup(prisma, {

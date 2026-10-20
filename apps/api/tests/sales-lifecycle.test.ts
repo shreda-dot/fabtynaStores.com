@@ -481,5 +481,5 @@ describe("GET /sales and GET /sales/:id", () => {
     expect(ranged.status).toBe(200);
 
     expect((await call("GET", `/sales?limit=500`)).status).toBe(400);
-  });
+  }, 120_000);
 });

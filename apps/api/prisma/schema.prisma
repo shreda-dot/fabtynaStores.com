@@ -164,18 +164,6 @@ enum StockAdjustmentStatus {
   VOIDED
 }
 
-enum ExpenseCategory {
-  RENT
-  UTILITY
-  SALARY
-  TRANSPORT
-  MAINTENANCE
-  SUPPLIES
-  MARKETING
-  LOAN_INTEREST
-  OTHER
-}
-
 enum LoanLedgerEntryType {
   DISBURSEMENT
   CHARGE
@@ -859,7 +847,7 @@ model AccountBalance {
 model Expense {
   id              String               @id @default(cuid())
   channel         SaleChannel
-  category        ExpenseCategory
+  categoryId      String
   description     String
   amountKobo      BigInt
   expenseDate     DateTime
@@ -872,14 +860,27 @@ model Expense {
   voidReason      String?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
+  category        ExpenseCategory      @relation(fields: [categoryId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_expenses_category")
   ledgerEntries   AccountLedgerEntry[]
   loanRepayment   LoanRepayment?       @relation(fields: [loanRepaymentId], references: [id], onDelete: Restrict, map: "fk_expenses_loan_repayment")
 
   // `amountKobo > 0` is a hand-written CHECK constraint.
   @@index([expenseDate])
   @@index([channel, expenseDate])
-  @@index([category, expenseDate])
+  @@index([categoryId, expenseDate], map: "expenses_categoryId_expenseDate_idx")
   @@map("expenses")
+}
+
+model ExpenseCategory {
+  id            String    @id @default(cuid())
+  name          String
+  normalizedKey String    @unique(map: "expense_categories_normalizedKey_key")
+  code          String?   @unique(map: "expense_categories_code_key")
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  expenses      Expense[]
+
+  @@map("expense_categories")
 }
 
 // =====================================================================

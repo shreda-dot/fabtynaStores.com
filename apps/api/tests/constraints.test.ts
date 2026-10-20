@@ -129,13 +129,16 @@ async function seedLoanRepayment(c: Client, loanId: string): Promise<string> {
 async function insertExpense(
   c: Client,
   expense: { category: string; loanRepaymentId: string | null },
-): Promise<void> {
+): Promise<string> {
+  const id = nextId("ct_expense");
   await c.query(
     `INSERT INTO expenses
-       (id, channel, category, description, "amountKobo", "expenseDate", "loanRepaymentId", "updatedAt")
-     VALUES ($1, 'BOTH', $2::"ExpenseCategory", 'Constraint Test Expense', $3::bigint, now(), $4, now())`,
-    [nextId("ct_expense"), expense.category, "1000", expense.loanRepaymentId],
+       (id, channel, "categoryId", description, "amountKobo", "expenseDate", "loanRepaymentId", "updatedAt")
+     VALUES ($1, 'BOTH', (SELECT id FROM expense_categories WHERE code = $2),
+             'Constraint Test Expense', $3::bigint, now(), $4, now())`,
+    [id, expense.category, "1000", expense.loanRepaymentId],
   );
+  return id;
 }
 
 beforeAll(async () => {
@@ -408,14 +411,41 @@ describe("loan-repayment to expense link (one-directional)", () => {
     ).rejects.toMatchObject({ code: "P0001" });
   });
 
-  it("ACCEPTS a manual LOAN_INTEREST expense with no repayment", async () => {
-    await inRollback(async (c) => {
-      await insertExpense(c, { category: "LOAN_INTEREST", loanRepaymentId: null });
+  it("REJECTS a manual LOAN_INTEREST expense because the category is reserved", async () => {
+    await expect(
+      inRollback(async (c) => {
+        await insertExpense(c, { category: "LOAN_INTEREST", loanRepaymentId: null });
+      }),
+    ).rejects.toMatchObject({ code: "P0001" });
+  });
 
-      const { rows } = await c.query(
-        `select count(*)::int as n from expenses where "loanRepaymentId" is null`,
+  it("REJECTS in-place edits, ACCEPTS a reasoned void, and keeps the void immutable", async () => {
+    await inRollback(async (c) => {
+      const expenseId = await insertExpense(c, { category: "RENT", loanRepaymentId: null });
+
+      await c.query("SAVEPOINT expense_edit");
+      await expect(
+        c.query(`UPDATE expenses SET "amountKobo" = 2000 WHERE id = $1`, [expenseId]),
+      ).rejects.toMatchObject({ code: "P0001" });
+      await c.query("ROLLBACK TO SAVEPOINT expense_edit");
+
+      const voided = await c.query(
+        `UPDATE expenses
+            SET "voidedAt" = now(), "voidReason" = 'Test correction', "updatedAt" = now()
+          WHERE id = $1
+        RETURNING "voidedAt", "voidReason"`,
+        [expenseId],
       );
-      expect(rows[0].n).toBeGreaterThanOrEqual(1);
+      expect(voided.rows[0].voidReason).toBe("Test correction");
+
+      await c.query("SAVEPOINT expense_revoid");
+      await expect(
+        c.query(
+          `UPDATE expenses SET "voidReason" = 'Changed reason' WHERE id = $1`,
+          [expenseId],
+        ),
+      ).rejects.toMatchObject({ code: "P0001" });
+      await c.query("ROLLBACK TO SAVEPOINT expense_revoid");
     });
   });
 });

@@ -7,6 +7,7 @@ import {
   encodeCursor,
   lagosDayStartIso,
   likePattern,
+  resolveListDateRange,
   utcTimestamp,
 } from "../../lib/list-helpers.js";
 import type { ListPurchasesQuery } from "./purchases.schemas.js";
@@ -47,6 +48,8 @@ export interface PurchaseListItem {
 export interface PurchaseListPage {
   items: PurchaseListItem[];
   nextCursor: string | null;
+  from: string | null;
+  to: string | null;
 }
 
 /**
@@ -57,7 +60,13 @@ export async function listPurchases(
   prisma: PrismaClient,
   query: ListPurchasesQuery,
   now: Date,
+  maxDateRangeDays: number,
 ): Promise<PurchaseListPage> {
+  const range = resolveListDateRange(query, now, maxDateRangeDays, {
+    defaultToToday: true,
+    suppressDefault: false,
+  });
+  query = { ...query, from: range.from, to: range.to };
   const conditions: Prisma.Sql[] = [];
 
   if (query.from !== undefined) {
@@ -121,6 +130,8 @@ export async function listPurchases(
   return {
     items: page.map((row) => ({ ...row, purchasedAt: row.purchasedAt.toISOString() })),
     nextCursor,
+    from: range.from ?? null,
+    to: range.to ?? null,
   };
 }
 

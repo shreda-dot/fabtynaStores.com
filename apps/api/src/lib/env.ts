@@ -25,6 +25,8 @@ export interface RuntimeEnv {
   devActorEmail: string | null;
   /** Transaction timing for write endpoints (see lib/tx-options.ts). */
   txTimeouts: TxTimeouts;
+  /** Maximum inclusive date range accepted by list and statement endpoints. */
+  maxDateRangeDays: number;
 }
 
 function readPositiveInt(
@@ -101,6 +103,17 @@ export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): Runtime
     problems.push("API_LOCK_TIMEOUT_MS must be smaller than API_TX_TIMEOUT_MS.");
   }
 
+  const rawMaxDateRange = source.API_MAX_DATE_RANGE_DAYS?.trim() ?? "";
+  let maxDateRangeDays = 366;
+  if (rawMaxDateRange !== "") {
+    const parsed = Number(rawMaxDateRange);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 3650) {
+      problems.push("API_MAX_DATE_RANGE_DAYS must be an integer between 1 and 3650.");
+    } else {
+      maxDateRangeDays = parsed;
+    }
+  }
+
   if (problems.length > 0) {
     throw new Error(
       `Invalid environment configuration:\n  - ${problems.join("\n  - ")}\n` +
@@ -119,5 +132,6 @@ export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): Runtime
     allowUnauthenticatedDev: source.ALLOW_UNAUTHENTICATED_DEV?.trim() === "true",
     devActorEmail: devActorEmail === "" ? null : devActorEmail,
     txTimeouts,
+    maxDateRangeDays,
   };
 }

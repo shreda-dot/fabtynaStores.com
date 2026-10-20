@@ -1,4 +1,5 @@
 import { Prisma } from "../../generated/prisma/client.js";
+import { getLagosBusinessDate } from "@fabtyna/shared";
 import { validationError } from "./errors.js";
 
 /** Helpers shared by the list endpoints (sales, purchases). */
@@ -49,4 +50,46 @@ export function decodeCursor(raw: string): Cursor {
 /** Escapes `%`, `_` and `\` so a search term is matched literally. */
 export function likePattern(term: string): string {
   return `%${term.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+}
+
+export interface EffectiveDateRange {
+  from: string | undefined;
+  to: string | undefined;
+}
+
+export function resolveListDateRange(
+  input: { from?: string; to?: string },
+  now: Date,
+  maxDays: number,
+  options: { defaultToToday: boolean; suppressDefault: boolean },
+): EffectiveDateRange {
+  let from = input.from;
+  let to = input.to;
+
+  if (from === undefined && to === undefined) {
+    if (!options.defaultToToday || options.suppressDefault) return { from, to };
+    from = getLagosBusinessDate(now);
+    to = from;
+  } else if (from === undefined) {
+    from = to;
+  } else if (to === undefined) {
+    to = from;
+  }
+
+  if (from === undefined || to === undefined) return { from, to };
+  if (from > to) {
+    throw validationError("'from' must not be after 'to'.", { from, to });
+  }
+
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  const inclusiveDays = Math.floor((end - start) / 86_400_000) + 1;
+  if (inclusiveDays > maxDays) {
+    throw validationError(`Date range cannot exceed ${maxDays} days. Narrow the range and try again.`, {
+      maxDays,
+      inclusiveDays,
+    });
+  }
+
+  return { from, to };
 }

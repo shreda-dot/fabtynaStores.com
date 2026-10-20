@@ -6,6 +6,12 @@ import { AppError, mapKnownError } from "./lib/errors.js";
 import type { TxTimeouts } from "./lib/tx-options.js";
 import { registerPurchasesRoutes } from "./modules/purchases/purchases.routes.js";
 import { createPurchasesService } from "./modules/purchases/purchases.service.js";
+import { registerExpenseCategoryRoutes } from "./modules/expenses/expense-categories.routes.js";
+import { createExpenseCategoryService } from "./modules/expenses/expense-categories.service.js";
+import { registerExpensesRoutes } from "./modules/expenses/expenses.routes.js";
+import { createExpensesService } from "./modules/expenses/expenses.service.js";
+import { registerAccountsRoutes } from "./modules/accounts/accounts.routes.js";
+import { createAccountsService } from "./modules/accounts/accounts.service.js";
 import { registerSalesRoutes } from "./modules/sales/sales.routes.js";
 import { createSalesService } from "./modules/sales/sales.service.js";
 
@@ -16,6 +22,7 @@ export interface BuildAppOptions {
   now?: () => Date;
   /** Defaults to DEFAULT_TX_TIMEOUTS. */
   txTimeouts?: TxTimeouts;
+  maxDateRangeDays?: number;
   /** Receives one entry per write transaction (route, ms, statement count). Defaults to the app logger. */
   onTransaction?: (entry: Record<string, unknown>) => void;
 }
@@ -36,6 +43,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     prisma: options.prisma,
     now: options.now,
     txTimeouts: options.txTimeouts,
+    maxDateRangeDays: options.maxDateRangeDays,
     log,
   });
   registerSalesRoutes(app, { service, resolveActor: options.resolveActor });
@@ -44,9 +52,37 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     prisma: options.prisma,
     now: options.now,
     txTimeouts: options.txTimeouts,
+    maxDateRangeDays: options.maxDateRangeDays,
     log,
   });
   registerPurchasesRoutes(app, { service: purchasesService, resolveActor: options.resolveActor });
+
+  const expenseCategoryService = createExpenseCategoryService({
+    prisma: options.prisma,
+    now: options.now,
+    txTimeouts: options.txTimeouts,
+    log,
+  });
+  registerExpenseCategoryRoutes(app, {
+    service: expenseCategoryService,
+    resolveActor: options.resolveActor,
+  });
+  const expensesService = createExpensesService({
+    prisma: options.prisma,
+    now: options.now,
+    txTimeouts: options.txTimeouts,
+    maxDateRangeDays: options.maxDateRangeDays,
+    log,
+  });
+  registerExpensesRoutes(app, { service: expensesService, resolveActor: options.resolveActor });
+  const accountsService = createAccountsService({
+    prisma: options.prisma,
+    now: options.now,
+    txTimeouts: options.txTimeouts,
+    maxDateRangeDays: options.maxDateRangeDays,
+    log,
+  });
+  registerAccountsRoutes(app, { service: accountsService, resolveActor: options.resolveActor });
 
   app.setNotFoundHandler((request, reply) => {
     const error = new AppError(404, "NOT_FOUND", "Route not found.", {

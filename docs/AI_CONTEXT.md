@@ -1,7 +1,7 @@
 # Fabtyna Stores — AI context (read this first)
 
 Briefing for a new AI session working on this repo with no other history.
-Everything below was reviewed against the repository on 2026-10-19. Docs only:
+Everything below was reviewed against the repository on 2026-10-20. Docs only:
 this file does not change code, migrations or `.env`.
 
 Repository root: `c:\Users\Shreda\fabtyna-stores` (Windows, PowerShell).
@@ -35,10 +35,10 @@ phone on slow networks, so the web app is mobile-first with a network status bar
     `lib/api/*.mock.ts` backed by `lib/api/mock-store.ts` (localStorage).
   - Pages: `app/(admin)/**`, login at `app/(auth)/login`.
 - `apps/api` (`@fabtyna/api`) — Prisma **7** + `@prisma/adapter-pg` (node-postgres),
-  PostgreSQL on Neon, vitest, **Fastify 5** HTTP server (`POST /sales`,
-  `GET /sales/:id`, `/health` only; see §6).
+  PostgreSQL on Neon, vitest, **Fastify 5** HTTP server for sales, purchases,
+  expense categories, expenses, and accounts (see §6).
   - Schema: `apps/api/prisma/schema.prisma`; migrations:
-    `apps/api/prisma/migrations/` (**25** migrations); generated client output:
+    `apps/api/prisma/migrations/` (**30** migrations); generated client output:
     `apps/api/generated/prisma/` (git-ignored).
   - `src/db/`: `expected-schema.ts`, `verify.ts`, `audit.ts`.
   - `src/lib/`: `env.ts`, `prisma.ts` (`createPrismaClient`), `password.ts`
@@ -48,7 +48,8 @@ phone on slow networks, so the web app is mobile-first with a network status bar
   - `src/app.ts` (`buildApp`), `src/start.ts` (`startServer`), `src/server.ts`
     (entry), `src/auth/actor.ts` (temporary guard), `src/modules/sales/`
     (schemas, validation, repository, service, routes).
-  - `src/modules/stock/stock.service.ts`; `src/scripts/`: `db-verify.ts`,
+  - `src/modules/stock/stock.service.ts`, `src/modules/expenses/`,
+    `src/modules/accounts/`; `src/scripts/`: `db-verify.ts`,
     `db-audit.ts`, `seed-admin.ts`, `hash-password.ts`.
   - Tests: `apps/api/tests/*.test.ts` + `global-setup.ts` + `test-db.ts` +
     `sales-fixtures.ts`.
@@ -129,12 +130,10 @@ must print "-- This is an empty migration." and exit 0.
 - **Immutable** tables (append-only): all ledgers (`customer_ledger_entries`,
   `supplier_ledger_entries`, `account_ledger_entries`, `loan_ledger_entries`),
   `stock_movements`, `sale_payments`, `supplier_payments`,
-  `loan_repayments`, `cash_snapshots`, and `audit_logs`. Expenses are not
-  blanket-immutable in the database: loan-repayment interest expenses cannot
-  be edited/deleted, and category plus `loanRepaymentId` cannot change on any
-  expense. Ordinary expenses use the app's void-with-reason workflow; the DB
-  enforces the void fields as a pair, but does not itself make every ordinary
-  expense field immutable.
+  `loan_repayments`, `cash_snapshots`, and `audit_logs`. Ordinary expenses are
+  not deleted or edited in place: database triggers permit a one-time
+  void-with-reason transition, and the API reverses the account entry first.
+  Repayment-generated `LOAN_INTEREST` expenses remain immutable.
   Corrections are **reversal rows**: keep `type` and source columns, negate the
   amount exactly, set `reversesEntryId`. Enforced by triggers.
 - **NEVER edit an applied migration.** Every DB change is a new migration. Every
@@ -172,10 +171,10 @@ must print "-- This is an empty migration." and exit 0.
 
 ## 6. Current status (verified)
 
-- Migrations: **24** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
-  The two newest: `20261020000100_sale_reference_sequence`
-  (`sale_reference_seq`) and `20261020000200_idempotency_keys`
-  (`idempotency_keys`, unique `(key, route)`, index on `expiresAt`).
+- Migrations: **30** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
+  The newest four add dynamic expense categories, make `OTHER_INCOME`
+  source-less, correct the category-index names, and make ordinary expense
+  details immutable with a single void transition.
   The 2026-10-19 account migrations add account entry enum values, account
   ledger sources/balances/transfers/guards, default accounts, and a corrective
   account-balance guard/cache migration. The dev and test databases contain the
@@ -193,10 +192,9 @@ must print "-- This is an empty migration." and exit 0.
 - Manual cash snapshots remain historical only. The Money Flow report and
   financial-position cash use account ledger balances. Customer refunds have
   domain support but no UI; refunding must also update the customer ledger.
-- Known purchase limitation: a purchase with a supplier payment remains
-  non-voidable/non-amendable. Reversing supplier payments (and later sale
-  payments) is a separate feature. The current sale-void database guard also
-  blocks a sale with on-account customer ledger payments.
+- A sale can be voided/amended after all later on-account payments are reversed;
+  a purchase can be voided/amended after all supplier payments are reversed.
+  Up-front sale payments are reversed as part of sale void/amend.
 - Tests: see the Sales API second-batch bullet below for the current counts
   (earlier: 122 API tests in 11 files, 224 shared).
   `db:verify` also checks `sale_reference_seq` and the `idempotency_keys`
@@ -303,7 +301,8 @@ must print "-- This is an empty migration." and exit 0.
   - `POST /purchases/:id/payments` → 201 `{ purchase, payment }`: RECEIVED, has a
     supplier, balance due; overpay → 400 with `amountDueKobo`.
   - `POST /purchases/:id/void` → 200 `{ purchase, reversals }`: 409 if already
-    voided; 409 if ANY supplier payment exists (including one paid at receipt);
+    voided; 409 while any supplier payment is still live (including one paid at
+    receipt);
     friendly 409 "already been sold or moved" (product, on hand, needed) when
     the stock is gone; reverses movements, supplier PURCHASE entry, the
     `PURCHASE_PAYMENT` account entry, and recomputes average cost. A void only
@@ -346,8 +345,33 @@ must print "-- This is an empty migration." and exit 0.
 - **Reversal lock orders:** sale reverse = sale → `account_balances` → customer;
   purchase reverse = purchase → `account_balances`. Statement counts: sale
   reverse **11**, purchase reverse **10**.
-- Tests: `apps/api/tests` = 18 files (**176** tests, need the test DB);
-  `packages/shared/src/__tests__` = 9 files (225 tests, no DB). New purchase
+- **Expense categories and Expenses API.** `expense_categories` is seeded with
+  protected system categories and supports user category create, rename,
+  deactivate/reactivate and list. `POST /expenses` writes the expense and its
+  account outflow together; `POST /expenses/:id/void` appends an exact account
+  reversal and requires a reason; `PUT /expenses/:id` voids and recreates in a
+  single transaction. `GET /expenses` and `/expenses/summary` exclude voided
+  rows by default, split `BOTH` amounts in integer kobo, and default to the
+  current Lagos business date.
+- **Expense/account API statement counts** (measured in the focused test DB run,
+  excluding BEGIN/COMMIT): category create **6** (duplicate **3**), rename
+  **4**, deactivate/reactivate **4** each; account create **6** (duplicate **3**),
+  opening balance **5**, reconcile **4**, movement **4**, transfer **5**,
+  transfer reversal **7**, deactivate/reactivate **5** each; expense create
+  **6**, void **9**, amend **19**. These are route counts, not a performance
+  guarantee; database/network contention affects wall time.
+- **Accounts API.** Routes support create, rename, deactivate/reactivate,
+  opening balance, reconcile, manual movement, transfer/reversal, entry
+  reversal, and paginated statements. Account balances are the ledger sum with
+  a trigger-maintained non-negative cache. Defaults remain Cash on hand and
+  Moniepoint. List/statement date bounds are Lagos dates and accept at most
+  `API_MAX_DATE_RANGE_DAYS` inclusive days (default 366).
+- **Shared list date policy.** Sales, purchases, expenses, expense summaries
+  and account statements default to today when no explicit range is supplied;
+  this also applies when a search or debt filter is present. The max inclusive
+  range is configurable by `API_MAX_DATE_RANGE_DAYS`.
+- Tests: `apps/api/tests` = 20 files (**186** tests, need the test DB);
+  `packages/shared/src/__tests__` = 9 files (**226** tests, no DB). New purchase
   files: `purchases-receive`, `purchases-lifecycle`, `purchases-list`,
   `purchases-concurrency` (10 iterations each: two purchases of one product,
   two payments from an account that can afford one, two voids). The
@@ -355,8 +379,8 @@ must print "-- This is an empty migration." and exit 0.
   checks (paid supplier-less purchases are an intended exception).
   Test files run in parallel against Neon; a network drop can still surface as
   a spurious "Can't reach database server" failure, rerun the single test.
-- `apps/api` has no other routes: no payment reversal, expenses, loans, or
-  login. `@fastify/cookie`, `@fastify/cors`, `@fastify/jwt` and
+- `apps/api` has no loan-management routes or sign-in endpoint.
+  `@fastify/cookie`, `@fastify/cors`, `@fastify/jwt` and
   `@fastify/rate-limit` are installed but not used.
 - Auth: **no sign-in endpoint exists.** `AdminUser` + Argon2id hashing + the seed
   script exist; `AdminRole` is explicitly "NOT ENFORCED ANYWHERE YET" — nothing
@@ -366,11 +390,14 @@ must print "-- This is an empty migration." and exit 0.
   `lib/api/index.ts` selects `*MockApi` unless `NEXT_PUBLIC_API_MODE=real`;
   every `*RealApi` stub throws `"not implemented"`. The mock store persists to
   localStorage key `fabtyna-mock-v1`; `resetDemoData` resets it.
-- `pnpm verify` passed on 2026-10-20 (after the purchases API). `db:verify`
-  passed on `fabtyna_dev` and `fabtyna_test`; `db:audit` returned zero rows on
-  both after the last test run. The account-balance concurrency regression passes 20
-  competing-spend races on the test database; it exposed and verified the
-  corrective trigger migration before this status was refreshed.
+- Latest final check: typecheck and lint passed; the one `pnpm verify` run
+  stopped in API tests when `sales-lifecycle.test.ts` cursor pagination exceeded
+  Vitest's 30-second test timeout under the full database suite. The isolated
+  pagination test passed in 27.8 seconds after assigning that test a 120-second
+  timeout. The build phase did not run because `pnpm verify` short-circuits on
+  test failure. `db:verify` passed on `fabtyna_dev` and `fabtyna_test` (30
+  migrations and identical schema objects); `db:audit` returned zero rows on
+  both after the final test run.
 
 ## 6b. Known limitations
 
@@ -388,8 +415,9 @@ must print "-- This is an empty migration." and exit 0.
 - A sale transaction costs ~12 sequential round trips; over remote Neon that is
   ~3 s. Reducing statements (e.g. one read for customer + account) is a later
   optimisation.
-- A purchase with a LIVE supplier payment cannot be voided or amended until that
-  payment is reversed; enforced in the service and by `trg_purchase_void_guard`.
+- The API models categories by `expense_categories.id`; the shared mock/domain
+  model still uses the fixed `ExpenseCategory` enum. The real web API remains
+  stubbed, and mock category management is not yet wired to these routes.
 - Shared fix made with the Purchases API: `receivePurchase` ignored earlier lines
   of the same product when computing average cost and returned duplicate
   `productUpdates`. It now keeps running units/averages per product and emits one
@@ -400,8 +428,9 @@ must print "-- This is an empty migration." and exit 0.
 - Test hygiene: a test must never leave an account that has entries deactivated
   (db:audit flags it, permanently, because test rows are never deleted).
 
-- A voided document keeps its `paidKobo`; reports and money views must ignore
-  voided documents' payments. Customer/supplier ledger reversals cannot carry the
+- A voided document keeps its historical `paidKobo`; reports and money views
+  must exclude voided documents. Reversing a payment on a still-live document
+  decrements `paidKobo`. Customer/supplier ledger reversals cannot carry the
   reason (same-note rule); the reason lives on the account reversal and audit log.
 - db:audit supplier-less rule uses ORIGINAL PURCHASE_PAYMENT entries (not live
   ones) because a void reverses the money but leaves `paidKobo` alone.
@@ -411,6 +440,10 @@ must print "-- This is an empty migration." and exit 0.
 - The void overdraw pre-check uses the locked `account_balances`; if cash was
   spent after the sale, the sale cannot be voided until income is recorded or
   the account is reconciled (by design).
+- `CUSTOMER_REFUND` is still source-backed by `customerRefundId` in the domain
+  and DB trigger, while the approved accounts design treats it as source-less.
+  Only `OTHER_INCOME` was changed to source-less in this pass; manual customer
+  refunds remain unavailable until the owner resolves that mismatch.
 
 ## 7. How to work with the owner
 

@@ -139,9 +139,10 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
       SELECT e.id AS "expenseId",
              COUNT(ale.id) AS "originalEntries"
         FROM expenses e
+        JOIN expense_categories ec ON ec.id = e."categoryId"
         LEFT JOIN account_ledger_entries ale
           ON ale."expenseId" = e.id AND ale."reversesEntryId" IS NULL
-       WHERE e.category <> 'LOAN_INTEREST'
+       WHERE ec.code IS DISTINCT FROM 'LOAN_INTEREST'
        GROUP BY e.id
       HAVING COUNT(ale.id) <> 1
        ORDER BY 1`,
@@ -278,7 +279,6 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
                  WHEN 'SUPPLIER_PAYMENT' THEN "supplierPaymentId" IS NOT NULL
                  WHEN 'PURCHASE_PAYMENT' THEN "purchaseId" IS NOT NULL
                  WHEN 'EXPENSE' THEN "expenseId" IS NOT NULL
-                 WHEN 'OTHER_INCOME' THEN "otherIncomeId" IS NOT NULL
                  WHEN 'CUSTOMER_REFUND' THEN "customerRefundId" IS NOT NULL
                  WHEN 'TRANSFER_IN' THEN "accountTransferId" IS NOT NULL
                  WHEN 'TRANSFER_OUT' THEN "accountTransferId" IS NOT NULL
@@ -291,10 +291,10 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
       SELECT id, type, source_count, expected_source_present
         FROM source_counts
        WHERE (
-         type IN ('OPENING_BALANCE', 'ADJUSTMENT', 'OWNER_CAPITAL', 'OWNER_DRAWING', 'BANK_OR_POS_CHARGE')
+         type IN ('OPENING_BALANCE', 'ADJUSTMENT', 'OWNER_CAPITAL', 'OWNER_DRAWING', 'OTHER_INCOME', 'BANK_OR_POS_CHARGE')
          AND source_count <> 0
        ) OR (
-         type NOT IN ('OPENING_BALANCE', 'ADJUSTMENT', 'OWNER_CAPITAL', 'OWNER_DRAWING', 'BANK_OR_POS_CHARGE')
+         type NOT IN ('OPENING_BALANCE', 'ADJUSTMENT', 'OWNER_CAPITAL', 'OWNER_DRAWING', 'OTHER_INCOME', 'BANK_OR_POS_CHARGE')
          AND (source_count <> 1 OR NOT expected_source_present)
        )
        ORDER BY id`,
@@ -309,7 +309,8 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
       SELECT ale.id, e.id AS "expenseId"
         FROM account_ledger_entries ale
         JOIN expenses e ON e.id = ale."expenseId"
-       WHERE e.category = 'LOAN_INTEREST'
+        JOIN expense_categories ec ON ec.id = e."categoryId"
+       WHERE ec.code = 'LOAN_INTEREST'
        ORDER BY 1`,
   },
 

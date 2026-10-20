@@ -66,6 +66,7 @@ export interface PurchasesServiceOptions {
   now?: () => Date;
   log?: (entry: Record<string, unknown>) => void;
   txTimeouts?: TxTimeouts;
+  maxDateRangeDays?: number;
 }
 
 const STOCK_LOCATIONS: readonly StockLocation[] = ["WAREHOUSE", "RETAIL_SHELF", "MARKET"];
@@ -209,6 +210,7 @@ const notFound = (purchaseId: string): AppError =>
 export function createPurchasesService(options: PurchasesServiceOptions) {
   const { prisma } = options;
   const now = options.now ?? (() => new Date());
+  const maxDateRangeDays = options.maxDateRangeDays ?? 366;
   const { runWrite, withIdempotency } = createWriteRunner({
     prisma,
     now,
@@ -795,7 +797,8 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
     reversePayment,
     voidPurchase: voidExistingPurchase,
     amendPurchase,
-    listPurchases: (query: ListPurchasesQuery) => listPurchases(prisma, query, now()),
+    listPurchases: (query: ListPurchasesQuery) =>
+      listPurchases(prisma, query, now(), maxDateRangeDays),
     getPurchase: (id: string) => getPurchaseDetail(prisma, id),
   };
 }

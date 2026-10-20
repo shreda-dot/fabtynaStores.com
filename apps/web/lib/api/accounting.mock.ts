@@ -425,6 +425,7 @@ export const accountingMockApi: AccountingApi = {
           accountId: account.id,
           type,
           amountKobo: signedAmount,
+          otherIncomeId: null,
           note,
           occurredAt,
         },

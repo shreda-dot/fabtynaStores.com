@@ -11,17 +11,25 @@ export const MAX_LINE_QUANTITY = 1_000_000;
 export const MAX_UNIT_PRICE_KOBO = 10n ** 12n;
 export const MAX_SALE_TOTAL_KOBO = 10n ** 15n;
 
-/** References the server generates look like S-20261020-000123. */
-const GENERATED_REFERENCE_PATTERN = /^S-\d{8}-\d{6,}$/;
+/** References the server generates look like S-20261020-000123 (P- for purchases). */
+export type ReferenceKind = "S" | "P";
+
+const GENERATED_REFERENCE_PATTERN = /^[SP]-\d{8}-\d{6,}$/;
 
 export function isGeneratedReferenceShape(reference: string): boolean {
   return GENERATED_REFERENCE_PATTERN.test(reference);
 }
 
-export function formatSaleReference(soldAt: Date, sequence: bigint): string {
-  const day = getLagosBusinessDate(soldAt).replaceAll("-", "");
-  return `S-${day}-${sequence.toString().padStart(6, "0")}`;
+function formatReference(kind: ReferenceKind, at: Date, sequence: bigint): string {
+  const day = getLagosBusinessDate(at).replaceAll("-", "");
+  return `${kind}-${day}-${sequence.toString().padStart(6, "0")}`;
 }
+
+export const formatSaleReference = (soldAt: Date, sequence: bigint): string =>
+  formatReference("S", soldAt, sequence);
+
+export const formatPurchaseReference = (purchasedAt: Date, sequence: bigint): string =>
+  formatReference("P", purchasedAt, sequence);
 
 export function assertNotInFuture(date: Date, now: Date, field: string, label: string): void {
   if (date.getTime() > now.getTime() + CLOCK_TOLERANCE_MS) {
@@ -37,7 +45,7 @@ export function normaliseClientReference(reference: string | null): string | nul
   }
   if (isGeneratedReferenceShape(trimmed)) {
     throw validationError(
-      "References that look like S-YYYYMMDD-000123 are reserved for the system. Leave the reference empty or choose another one.",
+      "References that look like S-YYYYMMDD-000123 or P-YYYYMMDD-000123 are reserved for the system. Leave the reference empty or choose another one.",
       { field: "reference" },
     );
   }

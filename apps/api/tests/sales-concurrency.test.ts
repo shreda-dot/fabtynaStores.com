@@ -65,7 +65,8 @@ describe("POST /sales: concurrency", () => {
 
   it("leaves the test database audit-clean after the races", async () => {
     const audit = await runDbAudit(connectionString);
-    expect(audit.checks.filter((c) => c.rowCount > 0 || c.error !== undefined)).toEqual([]);
+    // "known" checks are informational by design (e.g. paid purchases with no supplier).
+    expect(audit.checks.filter((c) => c.severity !== "known" && (c.rowCount > 0 || c.error !== undefined))).toEqual([]);
   });
 });
 
@@ -186,6 +187,6 @@ describe("POST /sales: idempotency", () => {
 
   it("leaves the test database audit-clean", async () => {
     const audit = await runDbAudit(connectionString);
-    expect(audit.checks.filter((c) => c.rowCount > 0 || c.error !== undefined)).toEqual([]);
+    expect(audit.checks.filter((c) => c.severity !== "known" && (c.rowCount > 0 || c.error !== undefined))).toEqual([]);
   });
 });

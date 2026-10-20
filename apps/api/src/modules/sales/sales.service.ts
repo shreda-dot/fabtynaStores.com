@@ -16,9 +16,9 @@ import {
 } from "@fabtyna/shared";
 import type { Actor } from "../../auth/actor.js";
 import { AppError, businessRuleError, validationError } from "../../lib/errors.js";
-import { claimIdempotencyKey, hashRequestBody, storeIdempotentResponse } from "../../lib/idempotency.js";
-import { withRetry } from "../../lib/retry.js";
-import { DEFAULT_TX_TIMEOUTS, type TxTimeouts } from "../../lib/tx-options.js";
+import { hashRequestBody } from "../../lib/idempotency.js";
+import { createWriteRunner } from "../../lib/tx.js";
+import type { TxTimeouts } from "../../lib/tx-options.js";
 import {
   insertLaterPayment,
   insertSale,
@@ -170,73 +170,12 @@ export function createSalesService(options: SalesServiceOptions) {
   const { prisma } = options;
   const now = options.now ?? (() => new Date());
   const log = options.log ?? (() => undefined);
-  const timeouts = options.txTimeouts ?? DEFAULT_TX_TIMEOUTS;
-
-  /** One transaction per attempt; deadlocks are retried as a whole, and every attempt is logged with its statement count. */
-  async function runWrite(
-    route: string,
-    extra: Record<string, unknown>,
-    work: (ctx: TxContext) => Promise<SaleResponse>,
-  ): Promise<SaleResponse> {
-    let attempts = 0;
-    return withRetry(
-      async () => {
-        attempts += 1;
-        const startedAt = Date.now();
-        const queries = { count: 0 };
-        const result = await prisma.$transaction(
-          async (tx) => {
-            const ctx: TxContext = { tx, queries };
-            await setLocalTimeouts(ctx, timeouts.lockTimeoutMs);
-            return work(ctx);
-          },
-          { timeout: timeouts.timeoutMs, maxWait: timeouts.maxWaitMs },
-        );
-        log({
-          route,
-          txMs: Date.now() - startedAt,
-          queries: queries.count,
-          attempts,
-          replayed: result.replayed,
-          ...extra,
-        });
-        return result;
-      },
-      { onRetry: (attempt) => log({ route, retry: attempt }) },
-    );
-  }
-
-  /**
-   * Claims the Idempotency-Key inside the transaction (see lib/idempotency.ts),
-   * runs the work, and stores the response in the same transaction so the
-   * replay can never disagree with what was committed.
-   */
-  async function withIdempotency(
-    ctx: TxContext,
-    input: { route: string; key: string | null; requestHash: string },
-    work: () => Promise<{ status: number; body: unknown }>,
-  ): Promise<SaleResponse> {
-    let claimId: string | null = null;
-    if (input.key !== null) {
-      ctx.queries.count += 2;
-      const claim = await claimIdempotencyKey(ctx.tx, {
-        key: input.key,
-        route: input.route,
-        requestHash: input.requestHash,
-        now: now(),
-      });
-      if (claim.kind === "replay") {
-        return { status: claim.status, body: claim.body, replayed: true };
-      }
-      claimId = claim.id;
-    }
-    const outcome = await work();
-    if (claimId !== null) {
-      ctx.queries.count += 1;
-      await storeIdempotentResponse(ctx.tx, claimId, outcome.status, outcome.body as Prisma.InputJsonValue);
-    }
-    return { ...outcome, replayed: false };
-  }
+  const { runWrite, withIdempotency } = createWriteRunner({
+    prisma,
+    now,
+    log,
+    txTimeouts: options.txTimeouts,
+  });
 
   /* ---------------------------------------------------------------- *
    * Record a sale (shared by POST /sales and PUT /sales/:id)

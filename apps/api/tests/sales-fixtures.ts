@@ -254,3 +254,98 @@ export async function postSale(
   });
   return { status: response.statusCode, body: response.json() as Record<string, any>, headers: response.headers };
 }
+
+export async function seedSupplier(
+  pg: Client,
+  input: { deactivated?: boolean } = {},
+): Promise<{ id: string; name: string }> {
+  const id = newId("purch_supplier");
+  const name = `Supplier ${id}`;
+  await pg.query(`INSERT INTO suppliers (id, name, "deletedAt", "updatedAt") VALUES ($1, $2, $3, now())`, [
+    id,
+    name,
+    input.deactivated === true ? new Date() : null,
+  ]);
+  return { id, name };
+}
+
+/** Puts money into an account through a legal OWNER_CAPITAL entry. */
+export async function fundAccount(pg: Client, accountId: string, amountKobo: bigint): Promise<void> {
+  await pg.query(
+    `INSERT INTO account_ledger_entries (id, "accountId", type, "amountKobo") VALUES ($1, $2, 'OWNER_CAPITAL', $3::bigint)`,
+    [newId("purch_fund"), accountId, amountKobo.toString()],
+  );
+}
+
+export interface PurchaseBodyInput {
+  productId?: string;
+  quantity?: number;
+  unit?: "UNIT" | "PACK";
+  lineTotalKobo?: string;
+  supplierId?: string | null;
+  amountPaidNowKobo?: string;
+  accountId?: string | null;
+  paymentMethod?: "CASH" | "TRANSFER" | "OTHER";
+  location?: "WAREHOUSE" | "RETAIL_SHELF" | "MARKET";
+  reference?: string | null;
+  purchasedAt?: string;
+  dueDate?: string | null;
+  lines?: Array<{ productId: string; unit?: "UNIT" | "PACK"; quantity: number; lineTotalKobo: string }>;
+}
+
+export function purchaseBody(input: PurchaseBodyInput): Record<string, unknown> {
+  const lines = input.lines ?? [
+    {
+      productId: input.productId as string,
+      unit: input.unit,
+      quantity: input.quantity ?? 10,
+      lineTotalKobo: input.lineTotalKobo ?? "10000",
+    },
+  ];
+  return {
+    supplierId: input.supplierId ?? null,
+    location: input.location ?? "WAREHOUSE",
+    purchasedAt: input.purchasedAt ?? new Date().toISOString(),
+    notes: null,
+    reference: input.reference ?? null,
+    amountPaidNowKobo: input.amountPaidNowKobo ?? "0",
+    dueDate: input.dueDate ?? null,
+    ...(input.paymentMethod ? { paymentMethod: input.paymentMethod } : {}),
+    accountId: input.accountId ?? null,
+    lines: lines.map((line) => ({
+      productId: line.productId,
+      unit: line.unit ?? "UNIT",
+      quantity: line.quantity,
+      lineTotalKobo: line.lineTotalKobo,
+    })),
+  };
+}
+
+/** Any JSON call against the app: returns status, parsed body and headers. */
+export async function call(
+  app: FastifyInstance,
+  method: "GET" | "POST" | "PUT",
+  url: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+) {
+  const response = await app.inject({
+    method,
+    url,
+    ...(body === undefined ? {} : { payload: body as object }),
+    headers: body === undefined ? headers : { "content-type": "application/json", ...headers },
+  });
+  return { status: response.statusCode, body: response.json() as Record<string, any>, headers: response.headers };
+}
+
+export const postPurchase = (app: FastifyInstance, body: unknown, headers: Record<string, string> = {}) =>
+  call(app, "POST", "/purchases", body, headers);
+
+/** A product with no stock and a zero average cost: stock is then built through real purchases. */
+export const seedBlankProduct = (pg: Client, input: { name?: string; unitsPerPack?: number } = {}) =>
+  seedProduct(pg, { ...input, averageCostKobo: 0n, stock: 0 });
+
+export async function averageCostOf(pg: Client, productId: string): Promise<bigint> {
+  const result = await pg.query(`SELECT "averageCostKobo"::text AS c FROM products WHERE id = $1`, [productId]);
+  return BigInt(result.rows[0].c);
+}

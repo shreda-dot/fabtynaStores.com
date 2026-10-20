@@ -17,132 +17,19 @@ import type {
  * query per table and written with one `createMany` per table.
  */
 
-export interface TxContext {
-  tx: Prisma.TransactionClient;
-  /** Counts database round trips so the service can log them. */
-  queries: { count: number };
-}
+// The transaction context, the generic row locks and the audit insert now live
+// in lib/ so purchases use the very same ones; re-exported for this module.
+import { counted, insertAuditLog, type AuditWrite, type TxContext } from "../../lib/tx.js";
 
-function counted(ctx: TxContext): void {
-  ctx.queries.count += 1;
-}
-
-/** `SET LOCAL` only: it ends with the transaction, so it is safe on any connection. */
-export async function setLocalTimeouts(ctx: TxContext, lockTimeoutMs: number): Promise<void> {
-  counted(ctx);
-  // `lockTimeoutMs` is a validated integer, never user input.
-  await ctx.tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '${Math.trunc(lockTimeoutMs)}ms'`);
-}
-
-interface ProductRow {
-  id: string;
-  name: string;
-  sku: string | null;
-  category: Product["category"];
-  packName: string;
-  unitsPerPack: number;
-  saleChannel: Product["saleChannel"];
-  retailPriceKobo: bigint;
-  wholesalePriceKobo: bigint;
-  averageCostKobo: bigint;
-  reorderLevelUnits: number;
-  deletedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-/**
- * Locks the products being sold, in id order. Every sale takes product locks in
- * the same order, so two sales over overlapping products wait for each other
- * instead of deadlocking.
- */
-export async function lockProducts(ctx: TxContext, productIds: readonly string[]): Promise<Product[]> {
-  counted(ctx);
-  const ids = [...new Set(productIds)].sort();
-  const rows = await ctx.tx.$queryRaw<ProductRow[]>`
-    SELECT id, name, sku, category, "packName", "unitsPerPack", "saleChannel",
-           "retailPriceKobo", "wholesalePriceKobo", "averageCostKobo",
-           "reorderLevelUnits", "deletedAt", "createdAt", "updatedAt"
-      FROM products
-     WHERE id = ANY(${ids}::text[])
-     ORDER BY id
-       FOR UPDATE`;
-  return rows;
-}
-
-export interface StockKey {
-  productId: string;
-  location: StockLocation;
-}
-
-export const stockKey = (productId: string, location: StockLocation): string =>
-  `${productId}:${location}`;
-
-/**
- * Locks stock balance rows ordered by (productId, location). The product and
- * location lists are crossed (a superset may be locked, never a subset), which
- * keeps one statement per table and the same order for every request. A product
- * that has never moved has no row; it counts as zero available.
- */
-export async function lockStockBalances(
-  ctx: TxContext,
-  keys: readonly StockKey[],
-): Promise<Map<string, number>> {
-  const ids = [...new Set(keys.map((key) => key.productId))].sort();
-  const locations = [...new Set(keys.map((key) => key.location))];
-  if (ids.length === 0) {
-    return new Map();
-  }
-  counted(ctx);
-  const rows = await ctx.tx.$queryRaw<Array<{ productId: string; location: StockLocation; units: number }>>`
-    SELECT "productId", location, "quantityUnits"::int AS units
-      FROM stock_balances
-     WHERE "productId" = ANY(${ids}::text[])
-       AND location = ANY(${locations}::"StockLocation"[])
-     ORDER BY "productId", location
-       FOR UPDATE`;
-  return new Map(rows.map((row) => [stockKey(row.productId, row.location), row.units]));
-}
-
-export interface LockedAccount {
-  id: string;
-  name: string;
-  type: "CASH" | "BANK" | "POS";
-  isActive: boolean;
-  /** From account_balances; a never-used account has no row and counts as zero. */
-  balanceKobo: bigint;
-}
-
-/**
- * Locks the `account_balances` rows (ordered by accountId) and reads the
- * accounts in the SAME statement. The locking CTE is materialised by Postgres
- * (a CTE with FOR UPDATE is never inlined), so the lock is taken in sorted order.
- */
-export async function lockAccounts(
-  ctx: TxContext,
-  accountIds: readonly string[],
-): Promise<Map<string, LockedAccount>> {
-  const ids = [...new Set(accountIds)].sort();
-  if (ids.length === 0) {
-    return new Map();
-  }
-  counted(ctx);
-  const rows = await ctx.tx.$queryRaw<
-    Array<{ id: string; name: string; type: LockedAccount["type"]; isActive: boolean; balanceKobo: string }>
-  >`
-    WITH locked AS (
-      SELECT "accountId", "balanceKobo"
-        FROM account_balances
-       WHERE "accountId" = ANY(${ids}::text[])
-       ORDER BY "accountId"
-         FOR UPDATE
-    )
-    SELECT a.id, a.name, a.type::text AS type, a."isActive", COALESCE(l."balanceKobo", 0)::text AS "balanceKobo"
-      FROM accounts a
-      LEFT JOIN locked l ON l."accountId" = a.id
-     WHERE a.id = ANY(${ids}::text[])`;
-  return new Map(rows.map((row) => [row.id, { ...row, balanceKobo: BigInt(row.balanceKobo) }]));
-}
+export { setLocalTimeouts, type TxContext } from "../../lib/tx.js";
+export {
+  lockAccounts,
+  lockProducts,
+  lockStockBalances,
+  stockKey,
+  type LockedAccount,
+  type StockKey,
+} from "../../lib/locks.js";
 
 export interface LockedCustomer {
   id: string;
@@ -333,28 +220,8 @@ export async function insertSale(ctx: TxContext, write: SaleWrite) {
  * Later payments, void and amend
  * ------------------------------------------------------------------ */
 
-export interface AuditWrite {
-  actorId: string;
-  action: string;
-  entityId: string;
-  beforeData: Prisma.InputJsonValue;
-  afterData: Prisma.InputJsonValue;
-  metadata: Prisma.InputJsonValue;
-}
-
 export async function insertSaleAudit(ctx: TxContext, audit: AuditWrite): Promise<void> {
-  counted(ctx);
-  await ctx.tx.auditLog.create({
-    data: {
-      actorId: audit.actorId,
-      action: audit.action,
-      entityType: "sale",
-      entityId: audit.entityId,
-      beforeData: audit.beforeData,
-      afterData: audit.afterData,
-      metadata: audit.metadata,
-    },
-  });
+  await insertAuditLog(ctx, "sale", audit);
 }
 
 /** The rows a void needs, read AFTER the locks. Quantities are plain numbers like the domain types. */

@@ -178,6 +178,8 @@ export function receivePurchase(
   const movements: StockMovement[] = [];
   const productUpdates: Array<{ id: string; averageCostKobo: bigint }> = [];
   let totalKobo = 0n;
+  const runningUnitsByProduct = new Map<string, bigint>();
+  const runningAverageByProduct = new Map<string, bigint>();
 
   for (const line of input.lines) {
     const product = productById.get(line.productId);
@@ -241,14 +243,27 @@ export function receivePurchase(
       createdAt: input.purchasedAt,
     });
 
-    const existingUnits = BigInt(totalUnitsForProduct(existingMovements, line.productId));
+    // Several lines may be the same product: each one must average on top of
+    // the previous line, not on the pre-purchase stock.
+    const runningUnits =
+      runningUnitsByProduct.get(line.productId) ??
+      BigInt(totalUnitsForProduct(existingMovements, line.productId));
+    const runningAverage =
+      runningAverageByProduct.get(line.productId) ?? product.averageCostKobo;
     const newAverage = calculateWeightedAverageCostKobo(
-      existingUnits,
-      product.averageCostKobo,
+      runningUnits,
+      runningAverage,
       BigInt(quantityUnits),
       line.lineTotalKobo,
     );
-    productUpdates.push({ id: line.productId, averageCostKobo: newAverage });
+    runningUnitsByProduct.set(line.productId, runningUnits + BigInt(quantityUnits));
+    runningAverageByProduct.set(line.productId, newAverage);
+    const updateIndex = productUpdates.findIndex((update) => update.id === line.productId);
+    if (updateIndex >= 0) {
+      productUpdates[updateIndex] = { id: line.productId, averageCostKobo: newAverage };
+    } else {
+      productUpdates.push({ id: line.productId, averageCostKobo: newAverage });
+    }
 
     totalKobo += line.lineTotalKobo;
   }

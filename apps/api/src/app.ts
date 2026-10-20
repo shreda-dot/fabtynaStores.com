@@ -4,6 +4,8 @@ import type { PrismaClient } from "../generated/prisma/client.js";
 import type { ActorResolver } from "./auth/actor.js";
 import { AppError, mapKnownError } from "./lib/errors.js";
 import type { TxTimeouts } from "./lib/tx-options.js";
+import { registerPurchasesRoutes } from "./modules/purchases/purchases.routes.js";
+import { createPurchasesService } from "./modules/purchases/purchases.service.js";
 import { registerSalesRoutes } from "./modules/sales/sales.routes.js";
 import { createSalesService } from "./modules/sales/sales.service.js";
 
@@ -26,16 +28,25 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
 
   app.get("/health", async () => ({ status: "ok" }));
 
+  const log = (entry: Record<string, unknown>) => {
+    app.log.info(entry, "tx");
+    options.onTransaction?.(entry);
+  };
   const service = createSalesService({
     prisma: options.prisma,
     now: options.now,
     txTimeouts: options.txTimeouts,
-    log: (entry) => {
-      app.log.info(entry, "sales");
-      options.onTransaction?.(entry);
-    },
+    log,
   });
   registerSalesRoutes(app, { service, resolveActor: options.resolveActor });
+
+  const purchasesService = createPurchasesService({
+    prisma: options.prisma,
+    now: options.now,
+    txTimeouts: options.txTimeouts,
+    log,
+  });
+  registerPurchasesRoutes(app, { service: purchasesService, resolveActor: options.resolveActor });
 
   app.setNotFoundHandler((request, reply) => {
     const error = new AppError(404, "NOT_FOUND", "Route not found.", {

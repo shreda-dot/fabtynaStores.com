@@ -50,6 +50,32 @@ function makeProduct(overrides: Partial<Product> = {}): Product {
 }
 
 describe("receivePurchase", () => {
+  it("averages two lines of the same product on top of each other", () => {
+    const product = makeProduct({ id: "p1", unitsPerPack: 1, averageCostKobo: 0n });
+    const result = receivePurchase(
+      {
+        supplierId: "s1",
+        createdById: "admin",
+        location: "WAREHOUSE",
+        purchasedAt: baseDate,
+        notes: null,
+        reference: "PUR-DUP",
+        accountId: TEST_ACCOUNT_ID,
+        lines: [
+          { productId: "p1", unit: "UNIT", quantity: 10, lineTotalKobo: 10000n },
+          { productId: "p1", unit: "UNIT", quantity: 5, lineTotalKobo: 10000n },
+        ],
+      },
+      [product],
+      [],
+      newId,
+    );
+
+    expect(result.productUpdates).toHaveLength(1);
+    // 20000 kobo over 15 units, rounded: the same as one combined line.
+    expect(result.productUpdates[0].averageCostKobo).toBe(1333n);
+  });
+
   it("converts a crate purchase to units", () => {
     const product = makeProduct({ id: "p1", unitsPerPack: 24, averageCostKobo: 0n });
     const result = receivePurchase(

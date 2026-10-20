@@ -38,7 +38,7 @@ phone on slow networks, so the web app is mobile-first with a network status bar
   PostgreSQL on Neon, vitest, **Fastify 5** HTTP server (`POST /sales`,
   `GET /sales/:id`, `/health` only; see §6).
   - Schema: `apps/api/prisma/schema.prisma`; migrations:
-    `apps/api/prisma/migrations/` (**24** migrations); generated client output:
+    `apps/api/prisma/migrations/` (**25** migrations); generated client output:
     `apps/api/generated/prisma/` (git-ignored).
   - `src/db/`: `expected-schema.ts`, `verify.ts`, `audit.ts`.
   - `src/lib/`: `env.ts`, `prisma.ts` (`createPrismaClient`), `password.ts`
@@ -287,12 +287,55 @@ must print "-- This is an empty migration." and exit 0.
   BEGIN/COMMIT and without an Idempotency-Key; a key adds 3), measured on the
   test DB: payment **9**, void (paid cash sale, with customer) **16**, amend
   **21**. Not optimised for latency on purpose.
-- Tests: `apps/api/tests` = 13 files (**138** tests, need the test DB);
-  `packages/shared/src/__tests__` = 9 files (224 passed, no DB). New files:
-  `sales-lifecycle.test.ts` (payments, void, amend, list, detail) and
-  `sales-concurrency-writes.test.ts` (10 iterations each: two payments that
-  exceed the balance, two voids).
-- `apps/api` has no other routes: no later-payment reversal, purchases, or
+- **Purchases API** (`apps/api/src/modules/purchases`, same pattern and shared
+  helpers `lib/tx.ts`, `lib/locks.ts`, `lib/list-helpers.ts`):
+  - `POST /purchases` → 201: purchase (RECEIVED, reference `P-YYYYMMDD-nnnnnn`
+    from `purchase_reference_seq`; a client reference that looks generated is
+    rejected 400), lines, stock movements into the purchase's ONE `location`,
+    supplier PURCHASE ledger entry (supplier given), and money paid at receipt:
+    supplier → `supplier_payments` + supplier PAYMENT entry + account
+    `SUPPLIER_PAYMENT`; no supplier → account `PURCHASE_PAYMENT` keyed on
+    `purchaseId`. `averageCostKobo` comes from the shared domain. Credit
+    purchases move no money. An account that cannot afford the payment gets the
+    friendly 409 (account, balance, amount, "record income or reconcile first").
+  - `POST /purchases/:id/payments` → 201 `{ purchase, payment }`: RECEIVED, has a
+    supplier, balance due; overpay → 400 with `amountDueKobo`.
+  - `POST /purchases/:id/void` → 200 `{ purchase, reversals }`: 409 if already
+    voided; 409 if ANY supplier payment exists (including one paid at receipt);
+    friendly 409 "already been sold or moved" (product, on hand, needed) when
+    the stock is gone; reverses movements, supplier PURCHASE entry, the
+    `PURCHASE_PAYMENT` account entry, and recomputes average cost. A void only
+    puts money BACK, so it cannot overdraw an account; a deactivated account
+    gets a friendly 409 instead.
+  - `PUT /purchases/:id` (amend) → 200 `{ purchase, voidedPurchaseId }`: void +
+    new purchase in ONE transaction, audit metadata `amendedFromPurchaseId` /
+    `amendedByPurchaseId`.
+  - `GET /purchases` (from, to, supplierId, status, unpaid, overdue, q; keyset
+    cursor on `(purchasedAt desc, id desc)`) and `GET /purchases/:id` (lines with
+    product name, payments with account name and `reversed`, supplier,
+    `moneyEntries`). Existing indexes suffice; no index migration.
+  - Idempotency route keys: `POST /purchases`, `POST /purchases/{id}/payments`,
+    `POST /purchases/{id}/void`, `PUT /purchases/{id}`.
+- **Purchase lock order** (`acquireLocks` in `purchases.service.ts`): **purchase
+  row → product rows (sorted by id) → `stock_balances` for each product across
+  ALL locations (average cost uses total units; sorted by productId, location)
+  → `account_balances` (sorted by accountId) → supplier row `FOR SHARE`.**
+  Two purchases of one product serialise through the product row, so the
+  average cost is never computed from stale stock. Sales order is unchanged
+  (sale → products → stock → accounts → customer).
+- **Purchase statement counts** (measured, test DB, no Idempotency-Key):
+  create credit 1 line **11**, create part-paid 1 line **15**, later payment
+  **8**, void **11**, amend **22**.
+- Tests: `apps/api/tests` = 17 files (**160** tests, need the test DB);
+  `packages/shared/src/__tests__` = 9 files (225 tests, no DB). New purchase
+  files: `purchases-receive`, `purchases-lifecycle`, `purchases-list`,
+  `purchases-concurrency` (10 iterations each: two purchases of one product,
+  two payments from an account that can afford one, two voids). The
+  "audit-clean" tests in `sales-concurrency.test.ts` ignore `severity: known`
+  checks (paid supplier-less purchases are an intended exception).
+  Test files run in parallel against Neon; a network drop can still surface as
+  a spurious "Can't reach database server" failure, rerun the single test.
+- `apps/api` has no other routes: no payment reversal, expenses, loans, or
   login. `@fastify/cookie`, `@fastify/cors`, `@fastify/jwt` and
   `@fastify/rate-limit` are installed but not used.
 - Auth: **no sign-in endpoint exists.** `AdminUser` + Argon2id hashing + the seed
@@ -303,9 +346,9 @@ must print "-- This is an empty migration." and exit 0.
   `lib/api/index.ts` selects `*MockApi` unless `NEXT_PUBLIC_API_MODE=real`;
   every `*RealApi` stub throws `"not implemented"`. The mock store persists to
   localStorage key `fabtyna-mock-v1`; `resetDemoData` resets it.
-- `pnpm verify` passed on 2026-10-19. `db:verify` passed on `fabtyna_dev` and
-  `fabtyna_test`; `db:audit` returned zero rows on both databases on two
-  consecutive runs. The account-balance concurrency regression passes 20
+- `pnpm verify` passed on 2026-10-20 (after the purchases API). `db:verify`
+  passed on `fabtyna_dev` and `fabtyna_test`; `db:audit` returned zero rows on
+  both after the last test run. The account-balance concurrency regression passes 20
   competing-spend races on the test database; it exposed and verified the
   corrective trigger migration before this status was refreshed.
 
@@ -325,6 +368,20 @@ must print "-- This is an empty migration." and exit 0.
 - A sale transaction costs ~12 sequential round trips; over remote Neon that is
   ~3 s. Reducing statements (e.g. one read for customer + account) is a later
   optimisation.
+- A purchase with any supplier payment (including one paid at receipt) cannot be
+  voided or amended until reverse-payment is built. This is enforced ONLY in the
+  service: unlike sales (`trg_sale_void_guard`) there is no database backstop;
+  a guard trigger is a proposal, not built.
+- Shared fix made with the Purchases API: `receivePurchase` ignored earlier lines
+  of the same product when computing average cost and returned duplicate
+  `productUpdates`. It now keeps running units/averages per product and emits one
+  update per product, with a test.
+- A purchase has ONE `location` (not per line). `paidAt` of money paid at receipt
+  equals `purchasedAt`. Purchase `quantity` is a JSON number (same limitation as
+  sales).
+- Test hygiene: a test must never leave an account that has entries deactivated
+  (db:audit flags it, permanently, because test rows are never deleted).
+
 - Purchase supplier payments and sale payments cannot be reversed yet
   (unchanged). Consequently a sale with a later payment cannot be voided or
   amended (409), and a voided sale keeps its `paidKobo`; reports and the money

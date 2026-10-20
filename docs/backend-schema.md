@@ -71,6 +71,7 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261019000300_account_balance_guard_fix` | Corrects the account-balance write guard copied with the same `pg_trigger_depth() = 0` / `RETURN NULL` defect previously found in stock balances. Reconciles existing cached rows from the immutable ledger and inserts missing balance rows; does not edit prior migrations or ledger entries. |
 | `20261020000100_sale_reference_sequence` | Creates `sale_reference_seq` (BIGINT). The Sales API formats generated sale references as `S-YYYYMMDD-000123` from `nextval`; a sequence value is never reused, so concurrent requests cannot collide (gaps after a rollback are expected). |
 | `20261020000200_idempotency_keys` | Creates `idempotency_keys` (`key`, `route`, `requestHash`, `responseStatus`, `responseBody`, `createdAt`, `expiresAt`), unique index `idempotency_keys_key_route_key` on `(key, route)` and `idempotency_keys_expiresAt_idx`. Rows are claimed inside the sale transaction and expire after 24 h; an hourly job deletes expired rows. When login exists the uniqueness gains `actorId`. |
+| `20261020000300_purchase_reference_sequence` | Creates `purchase_reference_seq` (BIGINT). The Purchases API formats generated references as `P-YYYYMMDD-000123` from `nextval` (same rules as sales: never reused, gaps after a rollback are expected). |
 
 ---
 
@@ -409,6 +410,10 @@ object names.
 | Sale payment amount ≤ amount due; `paidAt`/`soldAt` not in the future | The domain checks the amount; the future-date limit (5 min tolerance) and "sale is COMPLETED" are checked in `sales.service.ts` under the sale row lock. |
 | Void refused for already-voided sales and for later (on-account) payments; friendly overdraw message | `trg_sale_void_guard` and `ck_account_balances_nonnegative` are the backstops; the service checks first, under the lock order sale → products → stock_balances → account_balances → customer, to return a friendly 409. |
 | Amend = void + new sale in one transaction                   | Pure service orchestration; the link is audit metadata (`amendedBySaleId` / `amendedFromSaleId`), no schema change.                                                                        |
+| Purchase void refused when ANY supplier payment exists       | **No database backstop** (sales have `trg_sale_void_guard`). Checked in `purchases.service.ts` under the purchase row lock; a guard trigger is a proposal only.                            |
+| Purchase void refused when its stock was already sold; friendly overspend/overdraw messages | `ck_stock_balances_nonnegative` and `ck_account_balances_nonnegative` are the backstops; the service checks first, under the lock order purchase → products → stock_balances (all locations) → account_balances → supplier (`FOR SHARE`). |
+| Purchase `averageCostKobo` is recomputed on receive and void | Done by the shared domain, never by SQL; two purchases of one product serialise through the product row so the average is never computed from stale stock. |
+| Amend purchase = void + new purchase in one transaction      | Service orchestration; link in audit metadata (`amendedFromPurchaseId` / `amendedByPurchaseId`), no schema change. |
 
 ---
 

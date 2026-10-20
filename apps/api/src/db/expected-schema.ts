@@ -64,6 +64,7 @@ export const EXPECTED_MIGRATIONS = [
   "20261019000300_account_balance_guard_fix",
   "20261020000100_sale_reference_sequence",
   "20261020000200_idempotency_keys",
+  "20261020000300_purchase_reference_sequence",
 ] as const;
 
 /**
@@ -85,7 +86,7 @@ export const EXPECTED_TABLES = [
  * Standalone sequences (pg_class.relkind = 'S'). Checked one-directionally.
  * `sale_reference_seq` (20261020000100) feeds server-generated sale references.
  */
-export const EXPECTED_SEQUENCES = ["sale_reference_seq"] as const;
+export const EXPECTED_SEQUENCES = ["sale_reference_seq", "purchase_reference_seq"] as const;
 
 /**
  * Plain (non-partial) indexes that carry a rule. Checked one-directionally.

@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
+import { DEFAULT_TX_TIMEOUTS, type TxTimeouts } from "./tx-options.js";
 
 // Prisma 7 no longer loads `.env` on our behalf and `tsx` does not either, so
 // the API loads its own file (resolved from this file, not from the current
@@ -22,6 +23,26 @@ export interface RuntimeEnv {
   allowUnauthenticatedDev: boolean;
   /** Email of the active admin that created rows while there is no login. */
   devActorEmail: string | null;
+  /** Transaction timing for write endpoints (see lib/tx-options.ts). */
+  txTimeouts: TxTimeouts;
+}
+
+function readPositiveInt(
+  source: NodeJS.ProcessEnv,
+  name: string,
+  fallback: number,
+  problems: string[],
+): number {
+  const raw = source[name]?.trim() ?? "";
+  if (raw === "") {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 100 || parsed > 600_000) {
+    problems.push(`${name} must be an integer number of milliseconds between 100 and 600000.`);
+    return fallback;
+  }
+  return parsed;
 }
 
 function isPostgresUrl(value: string): boolean {
@@ -71,6 +92,15 @@ export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): Runtime
     }
   }
 
+  const txTimeouts: TxTimeouts = {
+    timeoutMs: readPositiveInt(source, "API_TX_TIMEOUT_MS", DEFAULT_TX_TIMEOUTS.timeoutMs, problems),
+    maxWaitMs: readPositiveInt(source, "API_TX_MAX_WAIT_MS", DEFAULT_TX_TIMEOUTS.maxWaitMs, problems),
+    lockTimeoutMs: readPositiveInt(source, "API_LOCK_TIMEOUT_MS", DEFAULT_TX_TIMEOUTS.lockTimeoutMs, problems),
+  };
+  if (txTimeouts.lockTimeoutMs >= txTimeouts.timeoutMs) {
+    problems.push("API_LOCK_TIMEOUT_MS must be smaller than API_TX_TIMEOUT_MS.");
+  }
+
   if (problems.length > 0) {
     throw new Error(
       `Invalid environment configuration:\n  - ${problems.join("\n  - ")}\n` +
@@ -88,5 +118,6 @@ export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): Runtime
     nodeEnv: source.NODE_ENV?.trim() || "development",
     allowUnauthenticatedDev: source.ALLOW_UNAUTHENTICATED_DEV?.trim() === "true",
     devActorEmail: devActorEmail === "" ? null : devActorEmail,
+    txTimeouts,
   };
 }

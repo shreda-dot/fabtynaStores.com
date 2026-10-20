@@ -134,6 +134,17 @@ export function mapKnownError(error: unknown): AppError | null {
       { constraint: "ck_stock_balances_nonnegative" },
     );
   }
+  if (
+    info.sqlState === "23514" &&
+    (info.message?.includes("ck_account_balances_nonnegative") ?? false)
+  ) {
+    // The services check balances first and return a message naming the account;
+    // this is the backstop if two requests still raced past that check.
+    return businessRuleError(
+      "This would take an account below zero. Record income or reconcile first, then try again.",
+      { constraint: "ck_account_balances_nonnegative" },
+    );
+  }
   if (info.sqlState === "P0001" && info.message !== null) {
     return businessRuleError(info.message);
   }

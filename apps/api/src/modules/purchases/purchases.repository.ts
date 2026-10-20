@@ -252,12 +252,24 @@ export interface PurchaseLedgers {
   accountLedger: AccountLedgerEntry[];
 }
 
-/** The purchase's own ledger rows (including reversals, which keep the source ids). Needs only the purchase lock. */
-export async function loadPurchaseLedgers(ctx: TxContext, purchaseId: string): Promise<PurchaseLedgers> {
+/**
+ * The purchase's own ledger rows (including reversals, which keep the source ids). Supplier payment
+ * entries are keyed on the payment, not the purchase, so the account ledger is also read by payment id:
+ * that is how a payment's reversal (and so whether it is still live) is found.
+ */
+export async function loadPurchaseLedgers(
+  ctx: TxContext,
+  purchaseId: string,
+  paymentIds: readonly string[] = [],
+): Promise<PurchaseLedgers> {
   counted(ctx);
-  const supplierLedger = await ctx.tx.supplierLedgerEntry.findMany({ where: { purchaseId } });
+  const supplierLedger = await ctx.tx.supplierLedgerEntry.findMany({
+    where: paymentIds.length > 0 ? { OR: [{ purchaseId }, { supplierPaymentId: { in: [...paymentIds] } }] } : { purchaseId },
+  });
   counted(ctx);
-  const accountLedger = await ctx.tx.accountLedgerEntry.findMany({ where: { purchaseId } });
+  const accountLedger = await ctx.tx.accountLedgerEntry.findMany({
+    where: paymentIds.length > 0 ? { OR: [{ purchaseId }, { supplierPaymentId: { in: [...paymentIds] } }] } : { purchaseId },
+  });
   return { supplierLedger, accountLedger };
 }
 
@@ -401,4 +413,62 @@ export async function insertPurchaseVoid(ctx: TxContext, write: PurchaseVoidWrit
 
   counted(ctx);
   return tx.purchase.update({ where: { id: write.purchaseId }, data: { status: "VOIDED" } });
+}
+
+/** One supplier payment with the ledger rows that prove whether it is still live. Needs only the purchase lock. */
+export async function loadPaymentForReversal(ctx: TxContext, purchaseId: string, paymentId: string) {
+  counted(ctx);
+  const payment = await ctx.tx.supplierPayment.findFirst({ where: { id: paymentId, purchaseId } });
+  if (payment === null) {
+    return null;
+  }
+  counted(ctx);
+  const supplierLedger = await ctx.tx.supplierLedgerEntry.findMany({ where: { supplierPaymentId: paymentId } });
+  counted(ctx);
+  const accountLedger = await ctx.tx.accountLedgerEntry.findMany({ where: { supplierPaymentId: paymentId } });
+  return { payment, supplierLedger, accountLedger };
+}
+
+export interface PaymentReversalWrite {
+  purchaseId: string;
+  supplierReversal: SupplierLedgerEntry;
+  accountReversal: AccountLedgerEntry;
+  newPaidKobo: bigint;
+}
+
+export async function insertPurchasePaymentReversal(ctx: TxContext, write: PaymentReversalWrite) {
+  const { tx } = ctx;
+  const supplier = write.supplierReversal;
+  counted(ctx);
+  await tx.supplierLedgerEntry.create({
+    data: {
+      id: supplier.id,
+      supplierId: supplier.supplierId,
+      type: supplier.type,
+      amountKobo: supplier.amountKobo,
+      purchaseId: supplier.purchaseId,
+      supplierPaymentId: supplier.supplierPaymentId,
+      reversesEntryId: supplier.reversesEntryId,
+      note: supplier.note,
+      occurredAt: supplier.occurredAt,
+    },
+  });
+
+  const account = write.accountReversal;
+  counted(ctx);
+  await tx.accountLedgerEntry.create({
+    data: {
+      id: account.id,
+      accountId: account.accountId,
+      type: account.type,
+      amountKobo: account.amountKobo,
+      supplierPaymentId: account.supplierPaymentId,
+      reversesEntryId: account.reversesEntryId,
+      note: account.note,
+      occurredAt: account.occurredAt,
+    },
+  });
+
+  counted(ctx);
+  return tx.purchase.update({ where: { id: write.purchaseId }, data: { paidKobo: write.newPaidKobo } });
 }

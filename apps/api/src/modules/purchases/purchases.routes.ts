@@ -5,8 +5,10 @@ import {
   createPurchaseDtoSchema,
   idempotencyKeySchema,
   listPurchasesQuerySchema,
+  paymentReversalParamsSchema,
   purchaseIdParamsSchema,
   recordPurchasePaymentBodySchema,
+  reversePaymentBodySchema,
   zodIssues,
 } from "./purchases.schemas.js";
 import type { PurchaseResponse, PurchasesService } from "./purchases.service.js";
@@ -79,6 +81,23 @@ export function registerPurchasesRoutes(
       throw validationError("The payment is not valid.", zodIssues(parsed.error));
     }
     return send(reply, await deps.service.recordPayment(purchaseId, parsed.data, actor, idempotencyKey));
+  });
+
+  app.post("/purchases/:id/payments/:paymentId/reverse", async (request, reply) => {
+    const actor = await deps.resolveActor(request);
+    const params = paymentReversalParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      throw validationError("Invalid purchase or payment id.", zodIssues(params.error));
+    }
+    const idempotencyKey = readIdempotencyKey(request);
+    const parsed = reversePaymentBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw validationError("The reversal is not valid.", zodIssues(parsed.error));
+    }
+    return send(
+      reply,
+      await deps.service.reversePayment(params.data.id, params.data.paymentId, parsed.data, actor, idempotencyKey),
+    );
   });
 
   app.post("/purchases/:id/void", async (request, reply) => {

@@ -5,6 +5,8 @@ import {
   formatNaira,
   receivePurchase,
   recordPurchasePayment,
+  reversePurchasePayment,
+  reversedSupplierPaymentIds,
   toPurchaseDto,
   toSupplierPaymentDto,
   voidPurchase,
@@ -28,6 +30,8 @@ import {
   insertPurchase,
   insertPurchaseAudit,
   insertPurchaseVoid,
+  insertPurchasePaymentReversal,
+  loadPaymentForReversal,
   loadProductMovements,
   loadPurchaseLedgers,
   loadPurchaseParts,
@@ -39,13 +43,20 @@ import {
   type PurchaseLedgers,
   type PurchaseParts,
 } from "./purchases.repository.js";
-import type { CreatePurchaseDto, ListPurchasesQuery, RecordPurchasePaymentBody } from "./purchases.schemas.js";
+import type {
+  CreatePurchaseDto,
+  ListPurchasesQuery,
+  RecordPurchasePaymentBody,
+  ReversePaymentBody,
+} from "./purchases.schemas.js";
 import { assertPurchaseWithinBounds } from "./purchases.validation.js";
 
 export const CREATE_PURCHASE_ROUTE = "POST /purchases";
 /** The purchase id is part of the idempotency route key, so one key can never cross purchases. */
 export const purchasePaymentRoute = (purchaseId: string): string => `POST /purchases/${purchaseId}/payments`;
 export const purchaseVoidRoute = (purchaseId: string): string => `POST /purchases/${purchaseId}/void`;
+export const purchasePaymentReverseRoute = (purchaseId: string, paymentId: string): string =>
+  `POST /purchases/${purchaseId}/payments/${paymentId}/reverse`;
 export const purchaseAmendRoute = (purchaseId: string): string => `PUT /purchases/${purchaseId}`;
 
 export type PurchaseResponse = WriteResponse;
@@ -177,6 +188,20 @@ function assertCanSpend(account: LockedAccount, amountKobo: bigint): void {
 
 const alreadyVoided = (purchaseId: string): AppError =>
   businessRuleError("This purchase has already been voided.", { purchaseId });
+
+function toDomainAccount(account: LockedAccount): Account {
+  const epoch = new Date(0);
+  return {
+    id: account.id,
+    name: account.name,
+    type: account.type,
+    isActive: account.isActive,
+    deactivatedAt: null,
+    note: null,
+    createdAt: epoch,
+    updatedAt: epoch,
+  };
+}
 
 const notFound = (purchaseId: string): AppError =>
   new AppError(404, "NOT_FOUND", "Purchase not found.", { id: purchaseId });
@@ -337,20 +362,23 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
       });
     }
     const parts = await loadPurchaseParts(ctx, purchase.id);
-    if (parts.supplierPayments.length > 0) {
+    const ledgers = await loadPurchaseLedgers(ctx, purchase.id, parts.supplierPayments.map((p) => p.id));
+    // Mirrors trg_purchase_void_guard: only a LIVE (not yet reversed) supplier payment blocks a void.
+    const reversed = reversedSupplierPaymentIds(ledgers.accountLedger);
+    const livePayments = parts.supplierPayments.filter((payment) => !reversed.has(payment.id));
+    if (livePayments.length > 0) {
       throw businessRuleError(
-        "This purchase has supplier payments recorded. Reverse the payments first (feature coming); until then it cannot be voided or amended.",
-        { purchaseId: purchase.id, paymentCount: parts.supplierPayments.length },
+        "This purchase has supplier payments that have not been reversed. Reverse the payments first, then void or amend it.",
+        { purchaseId: purchase.id, livePaymentCount: livePayments.length },
       );
     }
-    const ledgers = await loadPurchaseLedgers(ctx, purchase.id);
     return { parts, ledgers };
   }
 
   function voidPlan(purchase: Purchase, parts: PurchaseParts, ledgers: PurchaseLedgers): LockPlan {
     return {
       productIds: parts.lines.map((line) => line.productId),
-      accountIds: ledgers.accountLedger.map((entry) => entry.accountId),
+      accountIds: ledgers.accountLedger.filter((entry) => entry.type === "PURCHASE_PAYMENT").map((entry) => entry.accountId),
       supplierIds: purchase.supplierId ? [purchase.supplierId] : [],
     };
   }
@@ -413,17 +441,7 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
       }
     }
 
-    const epoch = new Date(0);
-    const domainAccounts: Account[] = [...locked.accounts.values()].map((account) => ({
-      id: account.id,
-      name: account.name,
-      type: account.type,
-      isActive: account.isActive,
-      deactivatedAt: null,
-      note: null,
-      createdAt: epoch,
-      updatedAt: epoch,
-    }));
+    const domainAccounts: Account[] = [...locked.accounts.values()].map(toDomainAccount);
 
     const reversal = voidPurchase(
       purchase.id,
@@ -618,6 +636,79 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
     );
   }
 
+  async function reversePayment(
+    purchaseId: string,
+    paymentId: string,
+    dto: ReversePaymentBody,
+    actor: Actor,
+    idempotencyKey: string | null,
+  ): Promise<PurchaseResponse> {
+    const reversedAt = dto.reversedAt ? new Date(dto.reversedAt) : now();
+    assertNotInFuture(reversedAt, now(), "reversedAt", "The reversal date");
+    const route = purchasePaymentReverseRoute(purchaseId, paymentId);
+
+    return runWrite(route, {}, (ctx) =>
+      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+        const purchase = await lockPurchase(ctx, purchaseId);
+        if (purchase === null) {
+          throw notFound(purchaseId);
+        }
+        if (purchase.status === "VOIDED") {
+          throw alreadyVoided(purchaseId);
+        }
+        const rows = await loadPaymentForReversal(ctx, purchaseId, paymentId);
+        if (rows === null) {
+          throw new AppError(404, "NOT_FOUND", "That payment does not belong to this purchase.", {
+            purchaseId,
+            paymentId,
+          });
+        }
+        if (rows.accountLedger.some((entry) => entry.reversesEntryId !== null)) {
+          throw businessRuleError("This payment has already been reversed.", { purchaseId, paymentId });
+        }
+
+        // The money goes back into the account, so it can never overdraw; still locked to serialize with spenders.
+        const locked = await acquireLocks(ctx, { productIds: [], accountIds: [rows.payment.accountId], supplierIds: [] });
+        const result = reversePurchasePayment(
+          purchaseId,
+          paymentId,
+          dto.reason,
+          reversedAt,
+          [purchase],
+          [rows.payment],
+          rows.supplierLedger,
+          rows.accountLedger,
+          [...locked.accounts.values()].map(toDomainAccount),
+          randomUUID,
+        );
+        const updated = await insertPurchasePaymentReversal(ctx, {
+          purchaseId,
+          supplierReversal: result.supplierReversal,
+          accountReversal: result.accountReversal,
+          newPaidKobo: result.purchase.paidKobo,
+        });
+        await insertPurchaseAudit(ctx, {
+          actorId: actor.id,
+          action: "purchase.payment.reverse",
+          entityId: purchaseId,
+          beforeData: { paidKobo: purchase.paidKobo.toString() },
+          afterData: {
+            paidKobo: result.purchase.paidKobo.toString(),
+            paymentId,
+            amountKobo: rows.payment.amountKobo.toString(),
+            accountId: rows.payment.accountId,
+            reason: dto.reason,
+            reversedAt: reversedAt.toISOString(),
+            supplierLedgerReversalId: result.supplierReversal.id,
+            accountEntryReversalId: result.accountReversal.id,
+          },
+          metadata: { idempotencyKey, actorEmail: actor.email },
+        });
+        return { status: 201, body: { purchase: toPurchaseDto(updated), reversedPaymentId: paymentId } };
+      }),
+    );
+  }
+
   async function voidExistingPurchase(
     purchaseId: string,
     actor: Actor,
@@ -701,6 +792,7 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
   return {
     createPurchase,
     recordPayment,
+    reversePayment,
     voidPurchase: voidExistingPurchase,
     amendPurchase,
     listPurchases: (query: ListPurchasesQuery) => listPurchases(prisma, query, now()),

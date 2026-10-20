@@ -8,7 +8,8 @@ import {
 import { DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from "../sales/sales.schemas.js";
 
 // Same header and error-flattening helpers as sales: one version.
-export { idempotencyKeySchema, zodIssues } from "../sales/sales.schemas.js";
+export { idempotencyKeySchema, zodIssues, paymentReversalParamsSchema, reversePaymentBodySchema } from "../sales/sales.schemas.js";
+export type { ReversePaymentBody } from "../sales/sales.schemas.js";
 
 export { createPurchaseDtoSchema };
 export type CreatePurchaseDto = z.infer<typeof createPurchaseDtoSchema>;

@@ -20,6 +20,20 @@ export const idempotencyKeySchema = z
 
 export const saleIdParamsSchema = z.object({ id: z.string().min(1) }).strict();
 
+/** Params of POST /sales/:id/payments/:paymentId/reverse (and the purchases twin). */
+export const paymentReversalParamsSchema = z
+  .object({ id: z.string().min(1), paymentId: z.string().min(1) })
+  .strict();
+
+/** Body of a payment reversal. The reason is mandatory; reversedAt defaults to now. */
+export const reversePaymentBodySchema = z
+  .object({
+    reason: z.string().trim().min(1, "A reason is required.").max(500),
+    reversedAt: isoDateTimeSchema.optional(),
+  })
+  .strict();
+export type ReversePaymentBody = z.infer<typeof reversePaymentBodySchema>;
+
 /** Body of POST /sales/:id/payments. Money is an integer kobo string, like every DTO. */
 export const recordPaymentDtoSchema = z
   .object({

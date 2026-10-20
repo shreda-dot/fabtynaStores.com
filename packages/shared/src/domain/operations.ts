@@ -690,6 +690,7 @@ function buildAccountReversals(
   accounts: readonly Account[],
   reversedAt: Date,
   newId: IdGenerator,
+  note?: string,
 ): AccountLedgerEntry[] {
   if (targets.length === 0) return [];
 
@@ -712,11 +713,253 @@ function buildAccountReversals(
   const created: AccountLedgerEntry[] = [];
   const all: AccountLedgerEntry[] = [...existingAccountLedger];
   for (const target of targets) {
-    const reversal = buildLedgerReversal(target, all, newId(), reversedAt);
+    const built = buildLedgerReversal(target, all, newId(), reversedAt);
+    const reversal = note === undefined ? built : { ...built, note };
     all.push(reversal);
     created.push(reversal);
   }
   return created;
+}
+
+/** Ids of account entries that already have a reversal row. */
+function reversedAccountEntryIds(
+  accountLedger: readonly AccountLedgerEntry[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of accountLedger) {
+    if (entry.reversesEntryId !== null) ids.add(entry.reversesEntryId);
+  }
+  return ids;
+}
+
+/**
+ * Ids of supplier payments that have been reversed. A payment is live until
+ * the account entry it posted is reversed; the payment tables carry no flag.
+ */
+export function reversedSupplierPaymentIds(
+  accountLedger: readonly AccountLedgerEntry[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of accountLedger) {
+    if (
+      entry.type === "SUPPLIER_PAYMENT" &&
+      entry.reversesEntryId !== null &&
+      entry.supplierPaymentId !== null
+    ) {
+      ids.add(entry.supplierPaymentId);
+    }
+  }
+  return ids;
+}
+
+/** Ids of sale payments whose customer PAYMENT ledger entry has been reversed. */
+export function reversedSalePaymentIds(
+  customerLedger: readonly CustomerLedgerEntry[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of customerLedger) {
+    if (
+      entry.type === "PAYMENT" &&
+      entry.reversesEntryId !== null &&
+      entry.salePaymentId !== null
+    ) {
+      ids.add(entry.salePaymentId);
+    }
+  }
+  return ids;
+}
+
+function requireReason(reason: string): string {
+  const trimmed = reason.trim();
+  if (trimmed === "") {
+    throw new RangeError("A reason is required to reverse a payment.");
+  }
+  return trimmed;
+}
+
+export interface ReverseSalePaymentResult {
+  sale: Sale;
+  customerReversal: CustomerLedgerEntry;
+  /** Money out of the account the payment was taken into. */
+  accountReversal: AccountLedgerEntry;
+}
+
+/**
+ * Reverses a LATER (on-account) sale payment: the customer owes it again, the
+ * account gives the money back and `paidKobo` drops. An up-front payment has
+ * no customer PAYMENT entry and is corrected through void or amend instead.
+ */
+export function reverseSalePayment(
+  saleId: string,
+  paymentId: string,
+  reason: string,
+  reversedAt: Date,
+  existingSales: readonly Sale[],
+  existingSalePayments: readonly SalePayment[],
+  existingCustomerLedger: readonly CustomerLedgerEntry[],
+  existingAccountLedger: readonly AccountLedgerEntry[],
+  existingAccounts: readonly Account[],
+  newId: IdGenerator,
+): ReverseSalePaymentResult {
+  if (!Number.isFinite(reversedAt.getTime())) {
+    throw new RangeError("Reversal date must be valid.");
+  }
+  const note = requireReason(reason);
+
+  const sale = existingSales.find((s) => s.id === saleId);
+  if (!sale) throw new RangeError(`Sale '${saleId}' not found.`);
+  if (sale.status === "VOIDED") {
+    throw new RangeError("This sale has been voided, so its payments cannot be reversed.");
+  }
+  const payment = existingSalePayments.find(
+    (p) => p.id === paymentId && p.saleId === saleId,
+  );
+  if (!payment) throw new RangeError("That payment does not belong to this sale.");
+  if (sale.customerId === null) {
+    throw new RangeError(
+      "A sale with no customer cannot have a payment reversed. Void the sale instead.",
+    );
+  }
+
+  const customerTarget = existingCustomerLedger.find(
+    (e) =>
+      e.type === "PAYMENT" &&
+      e.salePaymentId === paymentId &&
+      e.reversesEntryId === null,
+  );
+  if (!customerTarget) {
+    throw new RangeError(
+      "This payment was taken when the sale was recorded. Void or amend the sale to correct it.",
+    );
+  }
+  if (existingCustomerLedger.some((e) => e.reversesEntryId === customerTarget.id)) {
+    throw new RangeError("This payment has already been reversed.");
+  }
+
+  const accountTarget = existingAccountLedger.find(
+    (e) =>
+      e.type === "SALE_PAYMENT" &&
+      e.salePaymentId === paymentId &&
+      e.reversesEntryId === null,
+  );
+  if (!accountTarget) {
+    throw new RangeError("The money entry for this payment was not found.");
+  }
+
+  const [accountReversal] = buildAccountReversals(
+    [accountTarget],
+    existingAccountLedger,
+    existingAccounts,
+    reversedAt,
+    newId,
+    note,
+  );
+  const customerReversal = buildLedgerReversal(
+    customerTarget,
+    existingCustomerLedger,
+    newId(),
+    reversedAt,
+  );
+
+  return {
+    sale: {
+      ...sale,
+      paidKobo: sale.paidKobo - payment.amountKobo,
+      updatedAt: reversedAt,
+    },
+    customerReversal,
+    accountReversal: accountReversal!,
+  };
+}
+
+export interface ReversePurchasePaymentResult {
+  purchase: Purchase;
+  supplierReversal: SupplierLedgerEntry;
+  /** Money back into the account the payment left. */
+  accountReversal: AccountLedgerEntry;
+}
+
+/** Reverses any supplier payment, including one paid at receipt. */
+export function reversePurchasePayment(
+  purchaseId: string,
+  paymentId: string,
+  reason: string,
+  reversedAt: Date,
+  existingPurchases: readonly Purchase[],
+  existingSupplierPayments: readonly SupplierPayment[],
+  existingSupplierLedger: readonly SupplierLedgerEntry[],
+  existingAccountLedger: readonly AccountLedgerEntry[],
+  existingAccounts: readonly Account[],
+  newId: IdGenerator,
+): ReversePurchasePaymentResult {
+  if (!Number.isFinite(reversedAt.getTime())) {
+    throw new RangeError("Reversal date must be valid.");
+  }
+  const note = requireReason(reason);
+
+  const purchase = existingPurchases.find((p) => p.id === purchaseId);
+  if (!purchase) throw new RangeError(`Purchase '${purchaseId}' not found.`);
+  if (purchase.status === "VOIDED") {
+    throw new RangeError("This purchase has been voided, so its payments cannot be reversed.");
+  }
+  const payment = existingSupplierPayments.find(
+    (p) => p.id === paymentId && p.purchaseId === purchaseId,
+  );
+  if (!payment) throw new RangeError("That payment does not belong to this purchase.");
+
+  const supplierTarget = existingSupplierLedger.find(
+    (e) =>
+      e.type === "PAYMENT" &&
+      e.supplierPaymentId === paymentId &&
+      e.reversesEntryId === null,
+  );
+  if (!supplierTarget) {
+    throw new RangeError("The supplier ledger entry for this payment was not found.");
+  }
+  if (
+    existingAccountLedger.some(
+      (e) =>
+        e.type === "SUPPLIER_PAYMENT" &&
+        e.supplierPaymentId === paymentId &&
+        e.reversesEntryId !== null,
+    )
+  ) {
+    throw new RangeError("This payment has already been reversed.");
+  }
+  const accountTarget = existingAccountLedger.find(
+    (e) =>
+      e.type === "SUPPLIER_PAYMENT" &&
+      e.supplierPaymentId === paymentId &&
+      e.reversesEntryId === null,
+  );
+  if (!accountTarget) {
+    throw new RangeError("The money entry for this payment was not found.");
+  }
+
+  const [accountReversal] = buildAccountReversals(
+    [accountTarget],
+    existingAccountLedger,
+    existingAccounts,
+    reversedAt,
+    newId,
+    note,
+  );
+  const supplierReversal = buildLedgerReversal(
+    supplierTarget,
+    existingSupplierLedger,
+    newId(),
+    reversedAt,
+  );
+
+  return {
+    purchase: {
+      ...purchase,
+      paidKobo: purchase.paidKobo - payment.amountKobo,
+      updatedAt: reversedAt,
+    },
+    supplierReversal,
+    accountReversal: accountReversal!,
+  };
 }
 
 export function voidPurchase(
@@ -743,15 +986,16 @@ export function voidPurchase(
     throw new RangeError("This purchase has already been voided.");
   }
 
-  // Payments are immutable and cannot be silently discarded by a void, so a
-  // part-paid purchase is blocked here. (Legacy purchases defaulted to
-  // "fully paid" by the v5 migration have no payment rows and stay voidable.)
-  const hasPayments = existingSupplierPayments.some(
-    (payment) => payment.purchaseId === purchaseId,
+  // A payment blocks the void only while it is LIVE (its account entry has no
+  // reversal row). Mirrors `trg_purchase_void_guard`.
+  const reversedPayments = reversedSupplierPaymentIds(existingAccountLedger);
+  const hasLivePayments = existingSupplierPayments.some(
+    (payment) =>
+      payment.purchaseId === purchaseId && !reversedPayments.has(payment.id),
   );
-  if (hasPayments) {
+  if (hasLivePayments) {
     throw new RangeError(
-      "This purchase has supplier payments recorded and cannot be voided. Reverse the payments instead of voiding the purchase.",
+      "This purchase has supplier payments recorded and cannot be voided. Reverse the payments first.",
     );
   }
 
@@ -818,11 +1062,13 @@ export function voidPurchase(
   // A supplier-less cash purchase posted a PURCHASE_PAYMENT entry and no
   // supplier payment row, so voiding it must put that money back. A purchase
   // with a supplier is blocked above when any supplier payment exists.
+  const reversedPurchaseEntries = reversedAccountEntryIds(existingAccountLedger);
   const accountTargets = existingAccountLedger.filter(
     (entry) =>
       entry.type === "PURCHASE_PAYMENT" &&
       entry.purchaseId === purchaseId &&
-      entry.reversesEntryId === null,
+      entry.reversesEntryId === null &&
+      !reversedPurchaseEntries.has(entry.id),
   );
   const reversalAccountLedgerEntries = buildAccountReversals(
     accountTargets,
@@ -1187,15 +1433,19 @@ export function voidSale(
   const salePaymentIds = new Set(
     existingSalePayments.filter((p) => p.saleId === saleId).map((p) => p.id),
   );
+  // A later payment blocks the void only while it is LIVE (not reversed).
+  const reversedLater = reversedSalePaymentIds(existingCustomerLedger);
   const hasOnAccountPayment = existingCustomerLedger.some(
     (e) =>
       e.type === "PAYMENT" &&
+      e.reversesEntryId === null &&
       e.salePaymentId !== null &&
-      salePaymentIds.has(e.salePaymentId),
+      salePaymentIds.has(e.salePaymentId) &&
+      !reversedLater.has(e.salePaymentId),
   );
   if (hasOnAccountPayment) {
     throw new RangeError(
-      "This sale has an on-account payment recorded and cannot be voided. Reverse the payment instead of voiding the sale.",
+      "This sale has an on-account payment recorded and cannot be voided. Reverse the payment first.",
     );
   }
 
@@ -1251,12 +1501,14 @@ export function voidSale(
   // Every sale payment took money into an account, so voiding the sale has to
   // put it back. If that cash has already been spent the reversal is refused
   // with a message naming the account, rather than leaving a negative balance.
+  const alreadyReversedAccountEntries = reversedAccountEntryIds(existingAccountLedger);
   const accountTargets = existingAccountLedger.filter(
     (entry) =>
       entry.type === "SALE_PAYMENT" &&
       entry.salePaymentId !== null &&
       salePaymentIds.has(entry.salePaymentId) &&
-      entry.reversesEntryId === null,
+      entry.reversesEntryId === null &&
+      !alreadyReversedAccountEntries.has(entry.id),
   );
   const reversalAccountLedgerEntries = buildAccountReversals(
     accountTargets,
@@ -1558,6 +1810,7 @@ export function salesSummary(
   existingProducts: readonly Product[],
   existingExpenses: readonly Expense[] = [],
   existingSalePayments: readonly SalePayment[] = [],
+  reversedSalePayments: ReadonlySet<string> = new Set(),
 ): SalesSummaryResult {
   if (from.getTime() > to.getTime()) {
     throw new RangeError("From date must be on or before to date.");
@@ -1649,8 +1902,10 @@ export function salesSummary(
 
   const salesById = new Map(existingSales.map((s) => [s.id, s]));
   for (const payment of existingSalePayments) {
+    if (reversedSalePayments.has(payment.id)) {
+      continue;
+    }
     if (
-      payment.paidAt.getTime() < from.getTime() ||
       payment.paidAt.getTime() >= to.getTime()
     ) {
       continue;

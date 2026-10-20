@@ -356,31 +356,46 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
        ORDER BY s.id`,
   },
   {
-    name: "purchases.paidKobo = Σ supplier_payments.amountKobo",
+    name: "purchases.paidKobo = Σ live supplier_payments.amountKobo",
     description:
-      "\`paidKobo\` is denormalised from the payment rows (purchases with a supplier only).",
+      "\`paidKobo\` is denormalised from the payment rows (purchases with a supplier only). A payment whose SUPPLIER_PAYMENT account entry was reversed no longer counts.",
     severity: "fatal",
     sql: `
       SELECT p.id,
              p."paidKobo"::text                        AS "headerKobo",
-             COALESCE(SUM(sp."amountKobo"), 0)::text   AS "paymentsKobo"
+             COALESCE(SUM(sp."amountKobo"), 0)::text   AS "livePaymentsKobo"
         FROM purchases p
-        LEFT JOIN supplier_payments sp ON sp."purchaseId" = p.id
+        LEFT JOIN supplier_payments sp
+          ON sp."purchaseId" = p.id
+         AND NOT EXISTS (
+           SELECT 1 FROM account_ledger_entries r
+            WHERE r."supplierPaymentId" = sp.id
+              AND r.type = 'SUPPLIER_PAYMENT'
+              AND r."reversesEntryId" IS NOT NULL
+         )
        WHERE p."supplierId" IS NOT NULL
        GROUP BY p.id, p."paidKobo"
       HAVING p."paidKobo" <> COALESCE(SUM(sp."amountKobo"), 0)
        ORDER BY p.id`,
   },
   {
-    name: "sales.paidKobo = Σ sale_payments.amountKobo",
-    description: "\`paidKobo\` is denormalised from the payment rows.",
+    name: "sales.paidKobo = Σ live sale_payments.amountKobo",
+    description:
+      "\`paidKobo\` is denormalised from the payment rows. A later payment whose customer PAYMENT entry was reversed no longer counts. (A void leaves paidKobo alone, so a voided sale is checked the same way.)",
     severity: "fatal",
     sql: `
       SELECT s.id,
              s."paidKobo"::text                        AS "headerKobo",
-             COALESCE(SUM(sp."amountKobo"), 0)::text   AS "paymentsKobo"
+             COALESCE(SUM(sp."amountKobo"), 0)::text   AS "livePaymentsKobo"
         FROM sales s
-        LEFT JOIN sale_payments sp ON sp."saleId" = s.id
+        LEFT JOIN sale_payments sp
+          ON sp."saleId" = s.id
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_ledger_entries r
+            WHERE r."salePaymentId" = sp.id
+              AND r.type = 'PAYMENT'
+              AND r."reversesEntryId" IS NOT NULL
+         )
        GROUP BY s.id, s."paidKobo"
       HAVING s."paidKobo" <> COALESCE(SUM(sp."amountKobo"), 0)
        ORDER BY s.id`,
@@ -407,15 +422,22 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
        ORDER BY 1, 2`,
   },
   {
-    name: "paid purchases with no supplier (known exception)",
+    name: "supplier-less purchases: paidKobo = Σ original PURCHASE_PAYMENT entries",
     description:
-      "A supplier-less purchase records no supplier_payments row (SupplierPayment.supplierId is NOT NULL), so its paidKobo cannot be reconciled. Deliberate, not drift.",
-    severity: "known",
+      "A supplier-less purchase has no supplier_payments row; its money is the PURCHASE_PAYMENT account entry (keyed on the purchase). The original entries must add up to paidKobo for any status: a void reverses the money but leaves paidKobo alone.",
+    severity: "fatal",
     sql: `
-      SELECT p.id, p."paidKobo"::text AS "paidKobo"
+      SELECT p.id,
+             p."paidKobo"::text                          AS "paidKobo",
+             (-COALESCE(SUM(a."amountKobo"), 0))::text   AS "entriesKobo"
         FROM purchases p
+        LEFT JOIN account_ledger_entries a
+          ON a."purchaseId" = p.id
+         AND a.type = 'PURCHASE_PAYMENT'
+         AND a."reversesEntryId" IS NULL
        WHERE p."supplierId" IS NULL
-         AND p."paidKobo" <> 0
+       GROUP BY p.id, p."paidKobo"
+      HAVING p."paidKobo" <> -COALESCE(SUM(a."amountKobo"), 0)
        ORDER BY p.id`,
   },
 ];

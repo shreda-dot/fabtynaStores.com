@@ -65,6 +65,7 @@ export const EXPECTED_MIGRATIONS = [
   "20261020000100_sale_reference_sequence",
   "20261020000200_idempotency_keys",
   "20261020000300_purchase_reference_sequence",
+  "20261020000400_reverse_payment_guards",
 ] as const;
 
 /**
@@ -249,6 +250,8 @@ export const EXPECTED_TRIGGERS = [
   // 20261017092000_sale_void_guard
   "trg_sale_void_guard",
 
+  // 20261020000400_reverse_payment_guards
+  "trg_purchase_void_guard",
   // 20261017100000_stock_balances
   "trg_stock_movement_apply",
   "trg_stock_balances_guard",

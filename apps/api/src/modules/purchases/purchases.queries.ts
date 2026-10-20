@@ -169,6 +169,10 @@ export async function getPurchaseDetail(prisma: PrismaClient, id: string) {
   return {
     ...dto,
     balanceDueKobo: balanceDue.toString(),
+    livePaymentsKobo: payments
+      .filter((payment) => !reversedPaymentIds.has(payment.id))
+      .reduce((sum, payment) => sum + payment.amountKobo, 0n)
+      .toString(),
     supplier:
       supplier === null
         ? null

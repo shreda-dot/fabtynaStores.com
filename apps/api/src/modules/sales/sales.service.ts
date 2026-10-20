@@ -5,6 +5,8 @@ import {
   formatNaira,
   recordSale,
   recordSalePayment,
+  reversedSalePaymentIds,
+  reverseSalePayment,
   toSaleDto,
   toSalePaymentDto,
   voidSale,
@@ -21,9 +23,11 @@ import { createWriteRunner } from "../../lib/tx.js";
 import type { TxTimeouts } from "../../lib/tx-options.js";
 import {
   insertLaterPayment,
+  insertSalePaymentReversal,
   insertSale,
   insertSaleAudit,
   insertVoid,
+  loadPaymentForReversal,
   loadSaleHistory,
   loadSaleParts,
   lockAccounts,
@@ -43,7 +47,7 @@ import {
   type TxContext,
 } from "./sales.repository.js";
 import { getSaleDetail, listSales } from "./sales.queries.js";
-import type { CreateSaleDto, ListSalesQuery, RecordPaymentDto } from "./sales.schemas.js";
+import type { CreateSaleDto, ListSalesQuery, RecordPaymentDto, ReversePaymentBody } from "./sales.schemas.js";
 import {
   assertLocationMatchesChannel,
   assertNotInFuture,
@@ -57,6 +61,8 @@ export const CREATE_SALE_ROUTE = "POST /sales";
 /** The sale id is part of the idempotency route key, so one key can never cross sales. */
 export const paymentRoute = (saleId: string): string => `POST /sales/${saleId}/payments`;
 export const voidRoute = (saleId: string): string => `POST /sales/${saleId}/void`;
+export const paymentReverseRoute = (saleId: string, paymentId: string): string =>
+  `POST /sales/${saleId}/payments/${paymentId}/reverse`;
 export const amendRoute = (saleId: string): string => `PUT /sales/${saleId}`;
 
 export interface SaleResponse {
@@ -165,6 +171,37 @@ function assertAccountReceivesMoney(locked: Locked, accountId: string): LockedAc
 
 const alreadyVoided = (saleId: string): AppError =>
   businessRuleError("This sale has already been voided.", { saleId });
+
+function toDomainAccount(account: LockedAccount): Account {
+  const epoch = new Date(0);
+  return {
+    id: account.id,
+    name: account.name,
+    type: account.type,
+    isActive: account.isActive,
+    deactivatedAt: null,
+    note: null,
+    createdAt: epoch,
+    updatedAt: epoch,
+  };
+}
+
+/** Refuses taking money back out of an account that no longer holds it, naming the account, its balance and the amount. */
+function assertCanGiveBack(account: LockedAccount, amountKobo: bigint): void {
+  try {
+    assertAccountWillRemainNonnegative(account, account.balanceKobo, -amountKobo, "reversal");
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw businessRuleError(error.message, {
+        accountId: account.id,
+        accountName: account.name,
+        balanceKobo: account.balanceKobo.toString(),
+        amountKobo: amountKobo.toString(),
+      });
+    }
+    throw error;
+  }
+}
 
 export function createSalesService(options: SalesServiceOptions) {
   const { prisma } = options;
@@ -350,15 +387,21 @@ export function createSalesService(options: SalesServiceOptions) {
     if (sale.status !== "COMPLETED") {
       throw businessRuleError("Only a completed sale can be voided.", { saleId: sale.id, status: sale.status });
     }
-    // Mirrors trg_sale_void_guard, which stays as the backstop: a later (on-account)
-    // payment is a customer PAYMENT ledger entry that points at one of the sale's payments.
+    // Mirrors trg_sale_void_guard, which stays as the backstop: a LIVE later (on-account) payment is a
+    // customer PAYMENT ledger entry, pointing at one of the sale's payments, that has not been reversed.
     const paymentIds = new Set(parts.payments.map((payment) => payment.id));
-    const hasOnAccountPayment = history.customerLedger.some(
-      (entry) => entry.type === "PAYMENT" && entry.salePaymentId !== null && paymentIds.has(entry.salePaymentId),
+    const reversedLater = reversedSalePaymentIds(history.customerLedger);
+    const hasLiveOnAccountPayment = history.customerLedger.some(
+      (entry) =>
+        entry.type === "PAYMENT" &&
+        entry.reversesEntryId === null &&
+        entry.salePaymentId !== null &&
+        paymentIds.has(entry.salePaymentId) &&
+        !reversedLater.has(entry.salePaymentId),
     );
-    if (hasOnAccountPayment) {
+    if (hasLiveOnAccountPayment) {
       throw businessRuleError(
-        "This sale has a payment received after the sale. Reverse the payments first (feature not built yet).",
+        "This sale has a payment received after the sale. Reverse the payments first, then void or amend it.",
         { saleId: sale.id },
       );
     }
@@ -406,6 +449,13 @@ export function createSalesService(options: SalesServiceOptions) {
       const account = locked.accounts.get(accountId);
       if (account === undefined) {
         continue;
+      }
+      // Same friendly 409 the purchases module gives, instead of the raw trigger message.
+      if (!account.isActive) {
+        throw businessRuleError(
+          `Account '${account.name}' is deactivated, so the money cannot be taken back out. Reactivate it first.`,
+          { accountId: account.id },
+        );
       }
       try {
         assertAccountWillRemainNonnegative(account, account.balanceKobo, delta, "reversal");
@@ -582,6 +632,106 @@ export function createSalesService(options: SalesServiceOptions) {
     );
   }
 
+  async function reversePayment(
+    saleId: string,
+    paymentId: string,
+    dto: ReversePaymentBody,
+    actor: Actor,
+    idempotencyKey: string | null,
+  ): Promise<SaleResponse> {
+    const reversedAt = dto.reversedAt ? new Date(dto.reversedAt) : now();
+    assertNotInFuture(reversedAt, now(), "reversedAt", "The reversal date");
+    const route = paymentReverseRoute(saleId, paymentId);
+
+    return runWrite(route, {}, (ctx) =>
+      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+        const sale = await lockSale(ctx, saleId);
+        if (sale === null) {
+          throw new AppError(404, "NOT_FOUND", "Sale not found.", { id: saleId });
+        }
+        if (sale.status === "VOIDED") {
+          throw alreadyVoided(saleId);
+        }
+        if (sale.customerId === null) {
+          throw businessRuleError(
+            "A sale with no customer cannot have a payment reversed, because it would be left unpaid with nobody to owe it. Void the sale instead.",
+            { saleId },
+          );
+        }
+        const rows = await loadPaymentForReversal(ctx, saleId, paymentId);
+        if (rows === null) {
+          throw new AppError(404, "NOT_FOUND", "That payment does not belong to this sale.", { saleId, paymentId });
+        }
+        const original = rows.customerLedger.find((entry) => entry.type === "PAYMENT" && entry.reversesEntryId === null);
+        if (original === undefined) {
+          throw businessRuleError(
+            "This payment was taken when the sale was recorded, so it cannot be reversed on its own. Void or amend the sale to correct it.",
+            { saleId, paymentId },
+          );
+        }
+        if (rows.customerLedger.some((entry) => entry.reversesEntryId !== null)) {
+          throw businessRuleError("This payment has already been reversed.", { saleId, paymentId });
+        }
+
+        // Money goes back OUT of the account, so it must be able to afford it.
+        const locked = await acquireLocks(ctx, {
+          productIds: [],
+          stockKeys: [],
+          accountIds: [rows.payment.accountId],
+          customerIds: [sale.customerId],
+        });
+        const account = locked.accounts.get(rows.payment.accountId);
+        if (account === undefined) {
+          throw validationError("The account for this payment no longer exists.", { paymentId });
+        }
+        if (!account.isActive) {
+          throw businessRuleError(
+            `Account '${account.name}' is deactivated, so the money cannot be taken back out. Reactivate it first.`,
+            { accountId: account.id },
+          );
+        }
+        const result = reverseSalePayment(
+          saleId,
+          paymentId,
+          dto.reason,
+          reversedAt,
+          [sale],
+          [rows.payment],
+          rows.customerLedger,
+          rows.accountLedger,
+          [...locked.accounts.values()].map(toDomainAccount),
+          randomUUID,
+        );
+        // The domain only sees this payment's entries, so the real balance is checked here.
+        assertCanGiveBack(account, rows.payment.amountKobo);
+        const updated = await insertSalePaymentReversal(ctx, {
+          saleId,
+          customerReversal: result.customerReversal,
+          accountReversal: result.accountReversal,
+          newPaidKobo: result.sale.paidKobo,
+        });
+        await insertSaleAudit(ctx, {
+          actorId: actor.id,
+          action: "sale.payment.reverse",
+          entityId: saleId,
+          beforeData: { paidKobo: sale.paidKobo.toString() },
+          afterData: {
+            paidKobo: result.sale.paidKobo.toString(),
+            paymentId,
+            amountKobo: rows.payment.amountKobo.toString(),
+            accountId: rows.payment.accountId,
+            reason: dto.reason,
+            reversedAt: reversedAt.toISOString(),
+            customerLedgerReversalId: result.customerReversal.id,
+            accountEntryReversalId: result.accountReversal.id,
+          },
+          metadata: { idempotencyKey, actorEmail: actor.email },
+        });
+        return { status: 201, body: { sale: toSaleDto(updated), reversedPaymentId: paymentId } };
+      }),
+    );
+  }
+
   async function voidExistingSale(
     saleId: string,
     actor: Actor,
@@ -691,7 +841,15 @@ export function createSalesService(options: SalesServiceOptions) {
     return listSales(prisma, query);
   }
 
-  return { createSale, recordPayment, voidSale: voidExistingSale, amendSale, getSale, listSales: list };
+  return {
+    createSale,
+    recordPayment,
+    reversePayment,
+    voidSale: voidExistingSale,
+    amendSale,
+    getSale,
+    listSales: list,
+  };
 }
 
 export type SalesService = ReturnType<typeof createSalesService>;

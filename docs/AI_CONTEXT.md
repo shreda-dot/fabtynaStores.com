@@ -165,7 +165,9 @@ must print "-- This is an empty migration." and exit 0.
   negative (`ck_stock_balances_nonnegative`), and must never be written by
   hand (`trg_stock_balances_guard`). Wholesale PACK lines may be fractional
   (`NUMERIC(12,4)`) but must resolve to a whole number of units.
-- A sale with an on-account payment cannot be voided (`trg_sale_void_guard`).
+- A sale with a LIVE on-account payment (customer PAYMENT entry with no reversal)
+  cannot be voided (`trg_sale_void_guard`); a purchase with a LIVE supplier payment
+  cannot be voided (`trg_purchase_void_guard`). Reverse the payment first.
   An unpaid sale requires a customer; an unpaid purchase requires a supplier.
 
 ## 6. Current status (verified)
@@ -326,7 +328,25 @@ must print "-- This is an empty migration." and exit 0.
 - **Purchase statement counts** (measured, test DB, no Idempotency-Key):
   create credit 1 line **11**, create part-paid 1 line **15**, later payment
   **8**, void **11**, amend **22**.
-- Tests: `apps/api/tests` = 17 files (**160** tests, need the test DB);
+- **Reverse payment (done).** `POST /sales/{id}/payments/{paymentId}/reverse` and
+  `POST /purchases/{id}/payments/{paymentId}/reverse` (body `reason` 1-500 chars,
+  optional `reversedAt`; idempotent; one transaction each). A payment is LIVE until
+  its original account entry has a reversal row; there is no reversed flag.
+  Sale: only later (on-account) payments, on a sale with a customer (walk-in sales
+  and up-front payments are corrected by void/amend); writes customer ledger
+  reversal, account reversal (money out, friendly overdraw check) and decrements
+  `paidKobo`. Purchase: any supplier payment incl. one paid at receipt; supplier
+  ledger reversal, account reversal (money back in) and `paidKobo` decrement.
+  The reason is stored on the account reversal note (exempted in
+  `fn_check_reversal_integrity`) and in the audit log. Void and amend of a
+  document work once no live payment remains. Detail endpoints return
+  `livePaymentsKobo`. Shared: `reverseSalePayment`, `reversePurchasePayment`,
+  `reversedSalePaymentIds`, `reversedSupplierPaymentIds`; `salesSummary` takes an
+  optional 8th `reversedSalePayments` set (callers must pass it).
+- **Reversal lock orders:** sale reverse = sale → `account_balances` → customer;
+  purchase reverse = purchase → `account_balances`. Statement counts: sale
+  reverse **11**, purchase reverse **10**.
+- Tests: `apps/api/tests` = 18 files (**176** tests, need the test DB);
   `packages/shared/src/__tests__` = 9 files (225 tests, no DB). New purchase
   files: `purchases-receive`, `purchases-lifecycle`, `purchases-list`,
   `purchases-concurrency` (10 iterations each: two purchases of one product,
@@ -368,10 +388,8 @@ must print "-- This is an empty migration." and exit 0.
 - A sale transaction costs ~12 sequential round trips; over remote Neon that is
   ~3 s. Reducing statements (e.g. one read for customer + account) is a later
   optimisation.
-- A purchase with any supplier payment (including one paid at receipt) cannot be
-  voided or amended until reverse-payment is built. This is enforced ONLY in the
-  service: unlike sales (`trg_sale_void_guard`) there is no database backstop;
-  a guard trigger is a proposal, not built.
+- A purchase with a LIVE supplier payment cannot be voided or amended until that
+  payment is reversed; enforced in the service and by `trg_purchase_void_guard`.
 - Shared fix made with the Purchases API: `receivePurchase` ignored earlier lines
   of the same product when computing average cost and returned duplicate
   `productUpdates`. It now keeps running units/averages per product and emits one
@@ -382,10 +400,12 @@ must print "-- This is an empty migration." and exit 0.
 - Test hygiene: a test must never leave an account that has entries deactivated
   (db:audit flags it, permanently, because test rows are never deleted).
 
-- Purchase supplier payments and sale payments cannot be reversed yet
-  (unchanged). Consequently a sale with a later payment cannot be voided or
-  amended (409), and a voided sale keeps its `paidKobo`; reports and the money
-  views must ignore voided sales' payments.
+- A voided document keeps its `paidKobo`; reports and money views must ignore
+  voided documents' payments. Customer/supplier ledger reversals cannot carry the
+  reason (same-note rule); the reason lives on the account reversal and audit log.
+- db:audit supplier-less rule uses ORIGINAL PURCHASE_PAYMENT entries (not live
+  ones) because a void reverses the money but leaves `paidKobo` alone.
+- Neon network drops can fail single tests (503/ENOTFOUND); rerun the test.
 - `GET /sales` post-filters (`status`, `channel`, `unpaid`, `q`) scan the
   `soldAt` range; add a partial/trigram index if the table grows large.
 - The void overdraw pre-check uses the locked `account_balances`; if cash was

@@ -400,3 +400,61 @@ export async function insertVoid(ctx: TxContext, write: VoidWrite) {
   counted(ctx);
   return tx.sale.update({ where: { id: write.saleId }, data: { status: "VOIDED" } });
 }
+
+/** One sale payment with the ledger rows that prove whether it is a later payment and whether it is still live. */
+export async function loadPaymentForReversal(ctx: TxContext, saleId: string, paymentId: string) {
+  counted(ctx);
+  const payment = await ctx.tx.salePayment.findFirst({ where: { id: paymentId, saleId } });
+  if (payment === null) {
+    return null;
+  }
+  counted(ctx);
+  const customerLedger = await ctx.tx.customerLedgerEntry.findMany({ where: { salePaymentId: paymentId } });
+  counted(ctx);
+  const accountLedger = await ctx.tx.accountLedgerEntry.findMany({ where: { salePaymentId: paymentId } });
+  return { payment, customerLedger, accountLedger };
+}
+
+export interface SalePaymentReversalWrite {
+  saleId: string;
+  customerReversal: CustomerLedgerEntry;
+  accountReversal: AccountLedgerEntry;
+  newPaidKobo: bigint;
+}
+
+export async function insertSalePaymentReversal(ctx: TxContext, write: SalePaymentReversalWrite) {
+  const { tx } = ctx;
+  const customer = write.customerReversal;
+  counted(ctx);
+  await tx.customerLedgerEntry.create({
+    data: {
+      id: customer.id,
+      customerId: customer.customerId,
+      type: customer.type,
+      amountKobo: customer.amountKobo,
+      saleId: customer.saleId,
+      salePaymentId: customer.salePaymentId,
+      reversesEntryId: customer.reversesEntryId,
+      note: customer.note,
+      occurredAt: customer.occurredAt,
+    },
+  });
+
+  const account = write.accountReversal;
+  counted(ctx);
+  await tx.accountLedgerEntry.create({
+    data: {
+      id: account.id,
+      accountId: account.accountId,
+      type: account.type,
+      amountKobo: account.amountKobo,
+      salePaymentId: account.salePaymentId,
+      reversesEntryId: account.reversesEntryId,
+      note: account.note,
+      occurredAt: account.occurredAt,
+    },
+  });
+
+  counted(ctx);
+  return tx.sale.update({ where: { id: write.saleId }, data: { paidKobo: write.newPaidKobo } });
+}

@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { createSaleDtoSchema } from "@fabtyna/shared";
+import {
+  createSaleDtoSchema,
+  idSchema,
+  isoDateTimeSchema,
+  lagosDateStringSchema,
+  positiveKoboStringSchema,
+} from "@fabtyna/shared";
 import { IDEMPOTENCY_KEY_PATTERN } from "../../lib/idempotency.js";
 
 export { createSaleDtoSchema };
@@ -13,6 +19,44 @@ export const idempotencyKeySchema = z
   );
 
 export const saleIdParamsSchema = z.object({ id: z.string().min(1) }).strict();
+
+/** Body of POST /sales/:id/payments. Money is an integer kobo string, like every DTO. */
+export const recordPaymentDtoSchema = z
+  .object({
+    amountKobo: positiveKoboStringSchema,
+    accountId: idSchema,
+    paidAt: isoDateTimeSchema,
+  })
+  .strict();
+export type RecordPaymentDto = z.infer<typeof recordPaymentDtoSchema>;
+
+export const MAX_LIST_LIMIT = 200;
+export const DEFAULT_LIST_LIMIT = 50;
+
+const optionalText = (max: number) => z.string().trim().min(1).max(max).optional();
+
+/** Query string of GET /sales. Everything is optional. */
+export const listSalesQuerySchema = z
+  .object({
+    from: lagosDateStringSchema.optional(),
+    to: lagosDateStringSchema.optional(),
+    status: z.enum(["DRAFT", "COMPLETED", "VOIDED"]).optional(),
+    channel: z.enum(["RETAIL", "WHOLESALE"]).optional(),
+    customerId: optionalText(128),
+    unpaid: z
+      .enum(["true", "false"])
+      .transform((value) => value === "true")
+      .optional(),
+    q: optionalText(100),
+    limit: z.coerce.number().int().min(1).max(MAX_LIST_LIMIT).default(DEFAULT_LIST_LIMIT),
+    cursor: optionalText(400),
+  })
+  .strict()
+  .refine((query) => query.from === undefined || query.to === undefined || query.from <= query.to, {
+    message: "'from' must not be after 'to'.",
+    path: ["from"],
+  });
+export type ListSalesQuery = z.infer<typeof listSalesQuerySchema>;
 
 /** Flattens a Zod error into a short list a client can show next to fields. */
 export function zodIssues(error: z.ZodError): Array<{ path: string; message: string }> {

@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "../../../generated/prisma/client.js";
+import type { Prisma } from "../../../generated/prisma/client.js";
 import type {
   AccountLedgerEntry,
   CustomerLedgerEntry,
@@ -28,9 +28,10 @@ function counted(ctx: TxContext): void {
 }
 
 /** `SET LOCAL` only: it ends with the transaction, so it is safe on any connection. */
-export async function setLocalTimeouts(ctx: TxContext): Promise<void> {
+export async function setLocalTimeouts(ctx: TxContext, lockTimeoutMs: number): Promise<void> {
   counted(ctx);
-  await ctx.tx.$executeRawUnsafe("SET LOCAL lock_timeout = '15s'");
+  // `lockTimeoutMs` is a validated integer, never user input.
+  await ctx.tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '${Math.trunc(lockTimeoutMs)}ms'`);
 }
 
 interface ProductRow {
@@ -69,44 +70,117 @@ export async function lockProducts(ctx: TxContext, productIds: readonly string[]
   return rows;
 }
 
+export interface StockKey {
+  productId: string;
+  location: StockLocation;
+}
+
+export const stockKey = (productId: string, location: StockLocation): string =>
+  `${productId}:${location}`;
+
 /**
- * Locks the stock balance rows of the products at the sale's location, ordered
- * by (productId, location). A product that has never moved has no row; it
- * counts as zero available.
+ * Locks stock balance rows ordered by (productId, location). The product and
+ * location lists are crossed (a superset may be locked, never a subset), which
+ * keeps one statement per table and the same order for every request. A product
+ * that has never moved has no row; it counts as zero available.
  */
 export async function lockStockBalances(
   ctx: TxContext,
-  productIds: readonly string[],
-  location: StockLocation,
+  keys: readonly StockKey[],
 ): Promise<Map<string, number>> {
+  const ids = [...new Set(keys.map((key) => key.productId))].sort();
+  const locations = [...new Set(keys.map((key) => key.location))];
+  if (ids.length === 0) {
+    return new Map();
+  }
   counted(ctx);
-  const ids = [...new Set(productIds)].sort();
-  const rows = await ctx.tx.$queryRaw<Array<{ productId: string; units: number }>>`
-    SELECT "productId", "quantityUnits"::int AS units
+  const rows = await ctx.tx.$queryRaw<Array<{ productId: string; location: StockLocation; units: number }>>`
+    SELECT "productId", location, "quantityUnits"::int AS units
       FROM stock_balances
      WHERE "productId" = ANY(${ids}::text[])
-       AND location = ${location}::"StockLocation"
+       AND location = ANY(${locations}::"StockLocation"[])
      ORDER BY "productId", location
        FOR UPDATE`;
-  return new Map(rows.map((row) => [row.productId, row.units]));
+  return new Map(rows.map((row) => [stockKey(row.productId, row.location), row.units]));
 }
 
-export async function findCustomerForSale(ctx: TxContext, customerId: string) {
+export interface LockedAccount {
+  id: string;
+  name: string;
+  type: "CASH" | "BANK" | "POS";
+  isActive: boolean;
+  /** From account_balances; a never-used account has no row and counts as zero. */
+  balanceKobo: bigint;
+}
+
+/**
+ * Locks the `account_balances` rows (ordered by accountId) and reads the
+ * accounts in the SAME statement. The locking CTE is materialised by Postgres
+ * (a CTE with FOR UPDATE is never inlined), so the lock is taken in sorted order.
+ */
+export async function lockAccounts(
+  ctx: TxContext,
+  accountIds: readonly string[],
+): Promise<Map<string, LockedAccount>> {
+  const ids = [...new Set(accountIds)].sort();
+  if (ids.length === 0) {
+    return new Map();
+  }
   counted(ctx);
-  return ctx.tx.customer.findUnique({
-    where: { id: customerId },
-    select: { id: true, name: true, type: true, deletedAt: true },
-  });
+  const rows = await ctx.tx.$queryRaw<
+    Array<{ id: string; name: string; type: LockedAccount["type"]; isActive: boolean; balanceKobo: string }>
+  >`
+    WITH locked AS (
+      SELECT "accountId", "balanceKobo"
+        FROM account_balances
+       WHERE "accountId" = ANY(${ids}::text[])
+       ORDER BY "accountId"
+         FOR UPDATE
+    )
+    SELECT a.id, a.name, a.type::text AS type, a."isActive", COALESCE(l."balanceKobo", 0)::text AS "balanceKobo"
+      FROM accounts a
+      LEFT JOIN locked l ON l."accountId" = a.id
+     WHERE a.id = ANY(${ids}::text[])`;
+  return new Map(rows.map((row) => [row.id, { ...row, balanceKobo: BigInt(row.balanceKobo) }]));
 }
 
-export async function findAccountForSale(ctx: TxContext, accountId: string) {
+export interface LockedCustomer {
+  id: string;
+  name: string;
+  type: "RETAIL" | "WHOLESALE";
+  deletedAt: Date | null;
+}
+
+/** Locks customer rows ordered by id: always the LAST lock a request takes. */
+export async function lockCustomers(
+  ctx: TxContext,
+  customerIds: readonly string[],
+): Promise<Map<string, LockedCustomer>> {
+  const ids = [...new Set(customerIds)].sort();
+  if (ids.length === 0) {
+    return new Map();
+  }
   counted(ctx);
-  return ctx.tx.account.findUnique({
-    where: { id: accountId },
-    select: { id: true, name: true, isActive: true },
-  });
+  const rows = await ctx.tx.$queryRaw<LockedCustomer[]>`
+    SELECT id, name, type, "deletedAt"
+      FROM customers
+     WHERE id = ANY(${ids}::text[])
+     ORDER BY id
+       FOR UPDATE`;
+  return new Map(rows.map((row) => [row.id, row]));
 }
 
+/** Locks one sale row. Always the FIRST lock a request takes. */
+export async function lockSale(ctx: TxContext, saleId: string): Promise<Sale | null> {
+  counted(ctx);
+  const rows = await ctx.tx.$queryRaw<Sale[]>`
+    SELECT id, "customerId", "customerName", "createdById", channel, status, reference, notes,
+           "totalKobo", "paidKobo", "soldAt", "createdAt", "updatedAt"
+      FROM sales
+     WHERE id = ${saleId}
+       FOR UPDATE`;
+  return rows[0] ?? null;
+}
 export async function nextSaleSequence(ctx: TxContext): Promise<bigint> {
   counted(ctx);
   const rows = await ctx.tx.$queryRaw<Array<{ n: string }>>`
@@ -255,6 +329,207 @@ export async function insertSale(ctx: TxContext, write: SaleWrite) {
   return stored;
 }
 
-export async function findSaleById(prisma: PrismaClient, id: string) {
-  return prisma.sale.findUnique({ where: { id } });
+/* ------------------------------------------------------------------ *
+ * Later payments, void and amend
+ * ------------------------------------------------------------------ */
+
+export interface AuditWrite {
+  actorId: string;
+  action: string;
+  entityId: string;
+  beforeData: Prisma.InputJsonValue;
+  afterData: Prisma.InputJsonValue;
+  metadata: Prisma.InputJsonValue;
+}
+
+export async function insertSaleAudit(ctx: TxContext, audit: AuditWrite): Promise<void> {
+  counted(ctx);
+  await ctx.tx.auditLog.create({
+    data: {
+      actorId: audit.actorId,
+      action: audit.action,
+      entityType: "sale",
+      entityId: audit.entityId,
+      beforeData: audit.beforeData,
+      afterData: audit.afterData,
+      metadata: audit.metadata,
+    },
+  });
+}
+
+/** The rows a void needs, read AFTER the locks. Quantities are plain numbers like the domain types. */
+export interface SaleParts {
+  lines: Array<SaleLine & { location: StockLocation }>;
+  payments: SalePayment[];
+}
+
+export async function loadSaleParts(ctx: TxContext, saleId: string): Promise<SaleParts> {
+  counted(ctx);
+  const lines = await ctx.tx.saleLine.findMany({ where: { saleId }, orderBy: { id: "asc" } });
+  counted(ctx);
+  const payments = await ctx.tx.salePayment.findMany({ where: { saleId }, orderBy: { id: "asc" } });
+  return {
+    lines: lines.map((line) => ({ ...line, quantity: Number(line.quantity) })),
+    payments,
+  };
+}
+
+export interface SaleHistory {
+  movements: StockMovement[];
+  customerLedger: CustomerLedgerEntry[];
+  accountLedger: AccountLedgerEntry[];
+}
+
+/** Every row the domain's voidSale looks at for ONE sale, including rows that already reverse others. */
+export async function loadSaleHistory(ctx: TxContext, parts: SaleParts, saleId: string): Promise<SaleHistory> {
+  const lineIds = parts.lines.map((line) => line.id);
+  const paymentIds = parts.payments.map((payment) => payment.id);
+
+  counted(ctx);
+  const movements = await ctx.tx.stockMovement.findMany({ where: { saleLineId: { in: lineIds } } });
+
+  counted(ctx);
+  const customerLedger = await ctx.tx.customerLedgerEntry.findMany({
+    where: { OR: [{ saleId }, ...(paymentIds.length > 0 ? [{ salePaymentId: { in: paymentIds } }] : [])] },
+  });
+
+  let accountLedger: AccountLedgerEntry[] = [];
+  if (paymentIds.length > 0) {
+    counted(ctx);
+    accountLedger = await ctx.tx.accountLedgerEntry.findMany({ where: { salePaymentId: { in: paymentIds } } });
+  }
+  return { movements, customerLedger, accountLedger };
+}
+
+/** A payment received later: the payment, the customer's PAYMENT entry, the account entry, and the sale's new paidKobo. */
+export interface LaterPaymentWrite {
+  saleId: string;
+  payment: SalePayment;
+  customerLedgerEntry: CustomerLedgerEntry | null;
+  accountEntry: AccountLedgerEntry;
+  newPaidKobo: bigint;
+}
+
+export async function insertLaterPayment(ctx: TxContext, write: LaterPaymentWrite) {
+  const { tx } = ctx;
+
+  counted(ctx);
+  await tx.salePayment.create({
+    data: {
+      id: write.payment.id,
+      saleId: write.saleId,
+      accountId: write.payment.accountId,
+      amountKobo: write.payment.amountKobo,
+      paidAt: write.payment.paidAt,
+    },
+  });
+
+  if (write.customerLedgerEntry !== null) {
+    const entry = write.customerLedgerEntry;
+    counted(ctx);
+    await tx.customerLedgerEntry.create({
+      data: {
+        id: entry.id,
+        customerId: entry.customerId,
+        type: "PAYMENT",
+        amountKobo: entry.amountKobo,
+        // saleId stays null on purpose: ux_customer_ledger_sale_active allows one live row per sale.
+        saleId: null,
+        salePaymentId: entry.salePaymentId,
+        occurredAt: entry.occurredAt,
+      },
+    });
+  }
+
+  counted(ctx);
+  await tx.accountLedgerEntry.create({
+    data: {
+      id: write.accountEntry.id,
+      accountId: write.accountEntry.accountId,
+      type: "SALE_PAYMENT",
+      amountKobo: write.accountEntry.amountKobo,
+      salePaymentId: write.accountEntry.salePaymentId,
+      occurredAt: write.accountEntry.occurredAt,
+    },
+  });
+
+  counted(ctx);
+  return tx.sale.update({ where: { id: write.saleId }, data: { paidKobo: write.newPaidKobo } });
+}
+
+export interface VoidWrite {
+  saleId: string;
+  reversalMovements: StockMovement[];
+  reversalCustomerLedgerEntry: CustomerLedgerEntry | null;
+  reversalAccountLedgerEntries: AccountLedgerEntry[];
+}
+
+/**
+ * Writes the reversals in dependency order, then flips the sale to VOIDED.
+ * `sales.paidKobo` is deliberately untouched (the document lock only lets
+ * paidKobo, status and updatedAt change, and the money history stays visible);
+ * reports must ignore the payments of VOIDED sales.
+ */
+export async function insertVoid(ctx: TxContext, write: VoidWrite) {
+  const { tx } = ctx;
+
+  const sorted = [...write.reversalMovements].sort(
+    (a, b) =>
+      (a.productId < b.productId ? -1 : a.productId > b.productId ? 1 : 0) ||
+      (a.location < b.location ? -1 : a.location > b.location ? 1 : 0) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+  if (sorted.length > 0) {
+    counted(ctx);
+    await tx.stockMovement.createMany({
+      data: sorted.map((movement) => ({
+        id: movement.id,
+        productId: movement.productId,
+        location: movement.location,
+        type: "SALE" as const,
+        quantityUnits: movement.quantityUnits,
+        unitCostKobo: movement.unitCostKobo,
+        saleLineId: movement.saleLineId,
+        reversesEntryId: movement.reversesEntryId,
+        occurredAt: movement.occurredAt,
+      })),
+    });
+  }
+
+  if (write.reversalCustomerLedgerEntry !== null) {
+    const entry = write.reversalCustomerLedgerEntry;
+    counted(ctx);
+    await tx.customerLedgerEntry.create({
+      data: {
+        id: entry.id,
+        customerId: entry.customerId,
+        type: entry.type,
+        amountKobo: entry.amountKobo,
+        saleId: entry.saleId,
+        salePaymentId: entry.salePaymentId,
+        reversesEntryId: entry.reversesEntryId,
+        note: entry.note,
+        occurredAt: entry.occurredAt,
+      },
+    });
+  }
+
+  if (write.reversalAccountLedgerEntries.length > 0) {
+    counted(ctx);
+    await tx.accountLedgerEntry.createMany({
+      data: write.reversalAccountLedgerEntries.map((entry) => ({
+        id: entry.id,
+        accountId: entry.accountId,
+        type: entry.type,
+        amountKobo: entry.amountKobo,
+        salePaymentId: entry.salePaymentId,
+        reversesEntryId: entry.reversesEntryId,
+        note: entry.note,
+        occurredAt: entry.occurredAt,
+      })),
+    });
+  }
+
+  counted(ctx);
+  return tx.sale.update({ where: { id: write.saleId }, data: { status: "VOIDED" } });
 }

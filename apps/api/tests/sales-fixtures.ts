@@ -19,6 +19,8 @@ export interface Harness {
   pg: Client;
   actor: Actor;
   app: FastifyInstance;
+  /** One entry per committed transaction attempt: route, txMs, queries (statement count). */
+  txLog: Array<Record<string, unknown>>;
   close(): Promise<void>;
 }
 
@@ -41,10 +43,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     [actor.id, actor.email],
   );
 
+  const txLog: Array<Record<string, unknown>> = [];
   const app = buildApp({
     prisma: options.wrapPrisma ? options.wrapPrisma(prisma) : prisma,
     resolveActor: createDevActorResolver(actor),
     now: options.now,
+    onTransaction: (entry) => txLog.push(entry),
   });
   await app.ready();
 
@@ -53,6 +57,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     pg,
     actor,
     app,
+    txLog,
     async close() {
       await app.close();
       await prisma.$disconnect();

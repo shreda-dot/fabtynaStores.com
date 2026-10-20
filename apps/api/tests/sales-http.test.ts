@@ -34,6 +34,7 @@ function envWith(overrides: Partial<RuntimeEnv>): RuntimeEnv {
     nodeEnv: "development",
     allowUnauthenticatedDev: true,
     devActorEmail: null,
+    txTimeouts: { timeoutMs: 20_000, maxWaitMs: 10_000, lockTimeoutMs: 15_000 },
     ...overrides,
   };
 }
@@ -55,7 +56,8 @@ describe("HTTP: success and error envelopes", () => {
     expect(created.status).toBe(201);
     const fetched = await h.app.inject({ method: "GET", url: `/sales/${created.body.id}` });
     expect(fetched.statusCode).toBe(200);
-    expect(fetched.json()).toEqual(created.body);
+    expect(fetched.json()).toMatchObject(created.body);
+    expect(fetched.json().lines).toHaveLength(1);
   });
 
   it("GET /sales/:id returns the 404 envelope when missing", async () => {

@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import type { ActorResolver } from "./auth/actor.js";
 import { AppError, mapKnownError } from "./lib/errors.js";
+import type { TxTimeouts } from "./lib/tx-options.js";
 import { registerSalesRoutes } from "./modules/sales/sales.routes.js";
 import { createSalesService } from "./modules/sales/sales.service.js";
 
@@ -11,6 +12,10 @@ export interface BuildAppOptions {
   resolveActor: ActorResolver;
   logger?: boolean;
   now?: () => Date;
+  /** Defaults to DEFAULT_TX_TIMEOUTS. */
+  txTimeouts?: TxTimeouts;
+  /** Receives one entry per write transaction (route, ms, statement count). Defaults to the app logger. */
+  onTransaction?: (entry: Record<string, unknown>) => void;
 }
 
 export function buildApp(options: BuildAppOptions): FastifyInstance {
@@ -24,7 +29,11 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   const service = createSalesService({
     prisma: options.prisma,
     now: options.now,
-    log: (entry) => app.log.info(entry, "sales"),
+    txTimeouts: options.txTimeouts,
+    log: (entry) => {
+      app.log.info(entry, "sales");
+      options.onTransaction?.(entry);
+    },
   });
   registerSalesRoutes(app, { service, resolveActor: options.resolveActor });
 

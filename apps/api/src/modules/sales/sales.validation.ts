@@ -23,12 +23,9 @@ export function formatSaleReference(soldAt: Date, sequence: bigint): string {
   return `S-${day}-${sequence.toString().padStart(6, "0")}`;
 }
 
-export function assertSoldAtNotInFuture(soldAt: Date, now: Date): void {
-  if (soldAt.getTime() > now.getTime() + CLOCK_TOLERANCE_MS) {
-    throw validationError("The sale date cannot be in the future.", {
-      field: "soldAt",
-      soldAt: soldAt.toISOString(),
-    });
+export function assertNotInFuture(date: Date, now: Date, field: string, label: string): void {
+  if (date.getTime() > now.getTime() + CLOCK_TOLERANCE_MS) {
+    throw validationError(`${label} cannot be in the future.`, { field, [field]: date.toISOString() });
   }
 }
 

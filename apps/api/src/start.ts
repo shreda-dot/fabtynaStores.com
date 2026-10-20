@@ -32,6 +32,7 @@ export async function startServer(
       prisma,
       resolveActor: createDevActorResolver(actor),
       logger: overrides.logger ?? true,
+      txTimeouts: env.txTimeouts,
     });
 
     const stopCleanup = startIdempotencyCleanup(prisma, {

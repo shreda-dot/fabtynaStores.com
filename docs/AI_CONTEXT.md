@@ -195,8 +195,8 @@ must print "-- This is an empty migration." and exit 0.
   non-voidable/non-amendable. Reversing supplier payments (and later sale
   payments) is a separate feature. The current sale-void database guard also
   blocks a sale with on-account customer ledger payments.
-- Tests: `apps/api/tests` = 11 files (122 passed in the latest full run, need
-  the test DB); `packages/shared/src/__tests__` = 9 files (224 passed, no DB).
+- Tests: see the Sales API second-batch bullet below for the current counts
+  (earlier: 122 API tests in 11 files, 224 shared).
   `db:verify` also checks `sale_reference_seq` and the `idempotency_keys`
   indexes (`EXPECTED_SEQUENCES`, `EXPECTED_INDEXES`).
 - **Sales API (first real operation).** `POST /sales` records a sale as ONE
@@ -239,7 +239,60 @@ must print "-- This is an empty migration." and exit 0.
   emptied. Measured on the test DB over the remote Neon link (via `inject`):
   1-line sale ≈ 3.0–3.7 s, 5-line sale ≈ 3.0–9 s; time is dominated by ~12
   sequential round trips, not by the line count.
-- `apps/api` has no other routes: no void, later payments, purchases, or
+- **Sales API, second batch (payments, void, amend, list, detail).** Same
+  transaction/retry/idempotency/audit pattern as `POST /sales`:
+  - `POST /sales/:id/payments` body `{ amountKobo, accountId, paidAt }` (field is
+    `amountKobo`, an integer-kobo string, following the DTO convention) → 201
+    `{ sale, payment }`. Writes `sale_payments`, a negative customer `PAYMENT`
+    ledger entry (`saleId` NULL, because of the one-live-entry-per-sale index),
+    a positive `SALE_PAYMENT` account entry, and updates `paidKobo`/`updatedAt`.
+    Amount > 0 and ≤ amount due (400 with `amountDueKobo`); fully paid or voided
+    → friendly 409; `paidAt` not > 5 min in the future; account active.
+  - `POST /sales/:id/void` → 200 `{ sale, reversals }`. 409 if already voided;
+    409 "reverse the payments first (feature not built yet)" if a later
+    (on-account) payment exists (`trg_sale_void_guard` is the backstop). Reverses
+    every stock movement, the customer SALE entry and every up-front payment's
+    account entry. `paidKobo` is unchanged (document lock); reports must exclude
+    voided sales. An overdrawing reversal is refused with the friendly message
+    (account, balance, amount, "record income or reconcile first"), checked
+    against the LOCKED `account_balances`; `ck_account_balances_nonnegative` is
+    the backstop (mapped to 409).
+  - `PUT /sales/:id` (amend) → 200 `{ sale, voidedSaleId }`: void + new sale in
+    ONE transaction with a newly generated reference (a reference in the body is
+    ignored). Link: the original's `sale.void` audit row has
+    `amendedBySaleId`; the new `sale.create` row has `amendedFromSaleId`.
+  - `GET /sales`: filters `from`/`to` (Lagos dates), `status`, `channel`,
+    `customerId`, `unpaid`, `q` (reference or customer name, ILIKE); keyset
+    cursor on `(soldAt desc, id desc)`, default 50, max 200, `nextCursor`.
+    Ordering and date range use `sales(soldAt)`; `status`/`channel`/`unpaid`/`q`
+    are post-filters (an `ILIKE '%x%'` cannot use a btree). No index migration:
+    at this shop's volume a scan is cheap; a partial or trigram index is the
+    future option.
+  - `GET /sales/:id`: sale DTO + `balanceDueKobo`, `customer`, `lines` (product
+    name, unit, location; internal cost is not exposed) and `payments` (account
+    name, amount, paidAt, `reversed` derived from the account ledger).
+  - Every write supports `Idempotency-Key`; the route key includes the sale id
+    (`POST /sales/{id}/payments`, `/void`, `PUT /sales/{id}`).
+  - Timeouts come from env (`API_TX_TIMEOUT_MS`=20000, `API_TX_MAX_WAIT_MS`=10000,
+    `API_LOCK_TIMEOUT_MS`=15000; lock timeout must be below the tx timeout).
+- **ONE lock order for the whole sales module** (`acquireLocks` in
+  `sales.service.ts`): **sale row → product rows (sorted by id) →
+  `stock_balances` (sorted by productId, location) → `account_balances` (sorted
+  by accountId, one statement) → customer row.** Locks are taken before any
+  check that depends on them, so simultaneous requests cannot overpay a sale,
+  void twice or overspend an account. `account_balances` is locked through a
+  materialised `FOR UPDATE` CTE; an account with no balance row yet has nothing
+  to lock and counts as zero.
+- **Statement counts** (application statements inside the transaction, excluding
+  BEGIN/COMMIT and without an Idempotency-Key; a key adds 3), measured on the
+  test DB: payment **9**, void (paid cash sale, with customer) **16**, amend
+  **21**. Not optimised for latency on purpose.
+- Tests: `apps/api/tests` = 13 files (**138** tests, need the test DB);
+  `packages/shared/src/__tests__` = 9 files (224 passed, no DB). New files:
+  `sales-lifecycle.test.ts` (payments, void, amend, list, detail) and
+  `sales-concurrency-writes.test.ts` (10 iterations each: two payments that
+  exceed the balance, two voids).
+- `apps/api` has no other routes: no later-payment reversal, purchases, or
   login. `@fastify/cookie`, `@fastify/cors`, `@fastify/jwt` and
   `@fastify/rate-limit` are installed but not used.
 - Auth: **no sign-in endpoint exists.** `AdminUser` + Argon2id hashing + the seed
@@ -273,7 +326,14 @@ must print "-- This is an empty migration." and exit 0.
   ~3 s. Reducing statements (e.g. one read for customer + account) is a later
   optimisation.
 - Purchase supplier payments and sale payments cannot be reversed yet
-  (unchanged).
+  (unchanged). Consequently a sale with a later payment cannot be voided or
+  amended (409), and a voided sale keeps its `paidKobo`; reports and the money
+  views must ignore voided sales' payments.
+- `GET /sales` post-filters (`status`, `channel`, `unpaid`, `q`) scan the
+  `soldAt` range; add a partial/trigram index if the table grows large.
+- The void overdraw pre-check uses the locked `account_balances`; if cash was
+  spent after the sale, the sale cannot be voided until income is recorded or
+  the account is reconciled (by design).
 
 ## 7. How to work with the owner
 

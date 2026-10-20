@@ -406,6 +406,9 @@ object names.
 | A `PURCHASE`/`SALE` line quantity must result in whole units | Arithmetic and pack snapshots are resolved before the insert. A fractional `PACK` quantity (½ crate) is accepted, but only when it resolves to a whole number of base units — the check is done in scaled integers in `receivePurchase`/`recordSale`. |
 | VOIDED sales/purchases/transfers must not be edited          | Immutability plus the status triggers cover most of it; the remaining "don't offer the action in the UI" checks live in the app.                                                           |
 | Debtor aging / payment allocation to the oldest unpaid sale  | Computed at query time; there is no allocation table.                                                                                                                                      |
+| Sale payment amount ≤ amount due; `paidAt`/`soldAt` not in the future | The domain checks the amount; the future-date limit (5 min tolerance) and "sale is COMPLETED" are checked in `sales.service.ts` under the sale row lock. |
+| Void refused for already-voided sales and for later (on-account) payments; friendly overdraw message | `trg_sale_void_guard` and `ck_account_balances_nonnegative` are the backstops; the service checks first, under the lock order sale → products → stock_balances → account_balances → customer, to return a friendly 409. |
+| Amend = void + new sale in one transaction                   | Pure service orchestration; the link is audit metadata (`amendedBySaleId` / `amendedFromSaleId`), no schema change.                                                                        |
 
 ---
 

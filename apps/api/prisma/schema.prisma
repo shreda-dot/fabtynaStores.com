@@ -239,6 +239,26 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+/// Replay protection for retried POST requests (migration
+/// `20261020000200_idempotency_keys`). Operational, not a ledger: a row is
+/// claimed inside the request's own transaction, updated once with the response,
+/// and purged after `expiresAt`. Unique on (key, route) for now; an `actorId`
+/// joins the unique key when login exists.
+model IdempotencyKey {
+  id             String   @id @default(cuid())
+  key            String
+  route          String
+  requestHash    String
+  responseStatus Int?
+  responseBody   Json?
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  @@unique([key, route])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
 // =====================================================================
 // Catalogue and parties
 // =====================================================================

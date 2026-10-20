@@ -35,16 +35,23 @@ phone on slow networks, so the web app is mobile-first with a network status bar
     `lib/api/*.mock.ts` backed by `lib/api/mock-store.ts` (localStorage).
   - Pages: `app/(admin)/**`, login at `app/(auth)/login`.
 - `apps/api` (`@fabtyna/api`) — Prisma **7** + `@prisma/adapter-pg` (node-postgres),
-  PostgreSQL on Neon, vitest. **No HTTP server exists yet** (see §6).
+  PostgreSQL on Neon, vitest, **Fastify 5** HTTP server (`POST /sales`,
+  `GET /sales/:id`, `/health` only; see §6).
   - Schema: `apps/api/prisma/schema.prisma`; migrations:
-    `apps/api/prisma/migrations/` (**21** migrations); generated client output:
+    `apps/api/prisma/migrations/` (**24** migrations); generated client output:
     `apps/api/generated/prisma/` (git-ignored).
   - `src/db/`: `expected-schema.ts`, `verify.ts`, `audit.ts`.
   - `src/lib/`: `env.ts`, `prisma.ts` (`createPrismaClient`), `password.ts`
-    (Argon2id, `@node-rs/argon2`), `seed-admin.ts`, `ledger.ts`, `lagos-time.ts`.
+    (Argon2id, `@node-rs/argon2`), `seed-admin.ts`, `ledger.ts`, `lagos-time.ts`,
+    `errors.ts` (error envelope + Postgres error mapping), `retry.ts`,
+    `idempotency.ts`.
+  - `src/app.ts` (`buildApp`), `src/start.ts` (`startServer`), `src/server.ts`
+    (entry), `src/auth/actor.ts` (temporary guard), `src/modules/sales/`
+    (schemas, validation, repository, service, routes).
   - `src/modules/stock/stock.service.ts`; `src/scripts/`: `db-verify.ts`,
     `db-audit.ts`, `seed-admin.ts`, `hash-password.ts`.
-  - Tests: `apps/api/tests/*.test.ts` + `global-setup.ts` + `test-db.ts`.
+  - Tests: `apps/api/tests/*.test.ts` + `global-setup.ts` + `test-db.ts` +
+    `sales-fixtures.ts`.
 - `docs/` — `backend-schema.md` (full table + constraint inventory),
   `FABTYNA_PLAN.md`, `phase5-schema-draft.prisma`. Also `.trae/documents/*.md`.
 
@@ -63,8 +70,9 @@ API (`pnpm --filter @fabtyna/api …`):
 - `db:seed:admin` → `tsx src/scripts/seed-admin.ts`, flag `-- --additional`.
 - `hash-password` → `tsx src/scripts/hash-password.ts` (interactive, no args).
 - `test` (vitest run), `typecheck`, `build`, `prisma:format`, `prisma:validate`.
-- `dev`/`start` scripts point at `src/server.ts` / `dist/server.js`, which do
-  not exist yet — do not assume an HTTP server is runnable.
+- `dev`/`start` run `src/server.ts` / `dist/server.js`. `dev` (tsx) is verified;
+  `start` runs the compiled output, which imports the shared package as
+  TypeScript source, so use `dev` until a deployment build exists.
 
 Shared: `pnpm --filter @fabtyna/shared test` (vitest run) and `typecheck`.
 (`pnpm --filter @fabtyna/shared exec vitest run` also works, but the script is
@@ -76,9 +84,12 @@ Neon Postgres. The committed `apps/api/.env.example` uses two databases named
 `fabtyna_dev` and `fabtyna_test`; real values live in git-ignored `.env`.
 
 Variable NAMES (never values):
-- `DATABASE_URL` — pooled Neon endpoint, used by the runtime client.
+- `DATABASE_URL` — pooled Neon endpoint. Optional; the API does not use it yet.
 - `DIRECT_URL` — direct (unpooled) endpoint, used by schema/migration commands
-  via `apps/api/prisma.config.ts`.
+  via `apps/api/prisma.config.ts` AND by the running API (below).
+- `DB_POOL_MAX` (API pool size, 1–10, default 10).
+- `ALLOW_UNAUTHENTICATED_DEV`, `DEV_ACTOR_EMAIL` — the temporary no-login guard
+  (below). `NODE_ENV=production` refuses to start.
 - `TEST_DATABASE_URL` / `TEST_DIRECT_URL` — the test suite only.
 - `PORT` (API, default 3001); `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH` (admin seed).
 - Web (`apps/web`, names only): `NEXT_PUBLIC_API_MODE` (default `"mock"`),
@@ -94,6 +105,19 @@ refuses to run unless `TEST_DATABASE_URL` is set, differs from `DATABASE_URL`,
 and its database name contains `test`; prefers `TEST_DIRECT_URL` when present.
 `tests/global-setup.ts` runs `db:verify` against the test DB before any test and
 aborts the whole run on drift.
+It also refuses any URL whose host contains `-pooler`: tests must use the Neon
+**direct** (non-pooled) endpoint, because the pooler drops long-lived,
+transactional and concurrent connections ("Connection terminated unexpectedly").
+
+Why the API process uses `DIRECT_URL` with a small pool (max 10): the pooled
+endpoint dropped connections during long, transactional, row-locking work (the
+test failures that led to the `-pooler` guard), and a sale is one interactive
+transaction that takes `FOR UPDATE` row locks and runs ~12 statements. Revisit
+at deployment (a pooler in session mode, or a bigger pool, may be right there).
+
+Standing schema-drift check (do NOT run `prisma migrate dev --create-only`, it
+hangs): `pnpm --filter @fabtyna/api exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script --exit-code --config prisma.config.ts`
+must print "-- This is an empty migration." and exit 0.
 
 ## 5. Non-negotiable rules
 
@@ -146,7 +170,10 @@ aborts the whole run on drift.
 
 ## 6. Current status (verified)
 
-- Migrations: **22** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
+- Migrations: **24** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
+  The two newest: `20261020000100_sale_reference_sequence`
+  (`sale_reference_seq`) and `20261020000200_idempotency_keys`
+  (`idempotency_keys`, unique `(key, route)`, index on `expiresAt`).
   The 2026-10-19 account migrations add account entry enum values, account
   ledger sources/balances/transfers/guards, default accounts, and a corrective
   account-balance guard/cache migration. The dev and test databases contain the
@@ -168,14 +195,53 @@ aborts the whole run on drift.
   non-voidable/non-amendable. Reversing supplier payments (and later sale
   payments) is a separate feature. The current sale-void database guard also
   blocks a sale with on-account customer ledger payments.
-- Tests: `apps/api/tests` = 8 files (84 passed in the latest `pnpm verify`,
-  need the test DB); `packages/shared/src/__tests__` = 9 files (223 passed,
-  no DB).
-- `apps/api` implements no operations/HTTP routes yet: only the Prisma schema,
-  the DB tooling (`db:verify`/`db:audit`), admin seeding, password hashing, and
-  `modules/stock/stock.service.ts`. Fastify, `@fastify/cookie`, `@fastify/cors`,
-  `@fastify/jwt`, `@fastify/rate-limit` and `pg` are installed but not referenced
-  by any source file.
+- Tests: `apps/api/tests` = 11 files (122 passed in the latest full run, need
+  the test DB); `packages/shared/src/__tests__` = 9 files (224 passed, no DB).
+  `db:verify` also checks `sale_reference_seq` and the `idempotency_keys`
+  indexes (`EXPECTED_SEQUENCES`, `EXPECTED_INDEXES`).
+- **Sales API (first real operation).** `POST /sales` records a sale as ONE
+  interactive transaction (timeout 20 s, maxWait 10 s, `SET LOCAL lock_timeout
+  = '15s'`, retry up to 3× on 40P01/40001, then 503): idempotency claim →
+  lock products (by id) → lock `stock_balances` (by productId, location) →
+  validate customer/product/account/channel/location → shared `recordSale`
+  (one pass) → friendly stock check against the locked balances → reference
+  from `sale_reference_seq` (`S-YYYYMMDD-000123`, Lagos date of `soldAt`;
+  client references that look like it are rejected 400) → batched inserts
+  (sale, lines, movements sorted, customer ledger if unpaid, payments, account
+  entries, audit row) → store the idempotent response. `GET /sales/:id`
+  returns the sale DTO. Errors use `{ error: { code, message, details } }`.
+  Money received is a LIST of payments inside the service/repository (0 or 1
+  today) while the public DTO takes a single `paidKobo` + `accountId`.
+  The service adds what `recordSale` does not check: customer/product/account
+  exist and are active, `product.saleChannel` allows the channel, location fits
+  the channel (RETAIL → RETAIL_SHELF/MARKET, WHOLESALE → WAREHOUSE), `soldAt`
+  not > 5 min in the future, size bounds. The service also fixed a shared bug
+  (below). `creditLimitKobo` is NOT enforced anywhere (stored/displayed only),
+  so no customer lock exists.
+- **Idempotency**: optional `Idempotency-Key` header (8–128 chars). The key is
+  claimed inside the sale transaction with `INSERT … ON CONFLICT DO NOTHING` on
+  unique `(key, route)`, so a second simultaneous request waits for the first,
+  then replays its stored response (`Idempotent-Replayed: true`, original
+  status). Same key + different body → 422 `IDEMPOTENCY_MISMATCH`. Rows expire
+  after **24 h**; an unref'd hourly job (`startIdempotencyCleanup`) deletes
+  expired rows in batches. When login exists, add `actorId` to the uniqueness
+  (key stays `(key, route)` for now).
+- **Temporary auth guard (fail-closed)**: `NODE_ENV=production` refuses to
+  start; otherwise `ALLOW_UNAUTHENTICATED_DEV=true` is required, the server
+  listens on **127.0.0.1 only**, and `createdById` is the active admin named by
+  `DEV_ACTOR_EMAIL`. The ONE place real auth replaces: the `ActorResolver` in
+  `apps/api/src/auth/actor.ts` (delete `assertUnauthenticatedModeAllowed` and
+  `loadDevActor` with it).
+- Test isolation: nothing committed to immutable tables can be deleted, so each
+  test creates its OWN product/customer/account/reference prefix and asserts
+  row counts scoped to those. `seed-admin.test.ts` runs against an isolated
+  schema (`seed_admin_test`) because `public.admin_users` can no longer be
+  emptied. Measured on the test DB over the remote Neon link (via `inject`):
+  1-line sale ≈ 3.0–3.7 s, 5-line sale ≈ 3.0–9 s; time is dominated by ~12
+  sequential round trips, not by the line count.
+- `apps/api` has no other routes: no void, later payments, purchases, or
+  login. `@fastify/cookie`, `@fastify/cors`, `@fastify/jwt` and
+  `@fastify/rate-limit` are installed but not used.
 - Auth: **no sign-in endpoint exists.** `AdminUser` + Argon2id hashing + the seed
   script exist; `AdminRole` is explicitly "NOT ENFORCED ANYWHERE YET" — nothing
   reads it. The web app has a client-side demo login only
@@ -189,6 +255,25 @@ aborts the whole run on drift.
   consecutive runs. The account-balance concurrency regression passes 20
   competing-spend races on the test database; it exposed and verified the
   corrective trigger migration before this status was refreshed.
+
+## 6b. Known limitations
+
+- **Quantity is a JSON number in the sale DTO** (`quantity: z.number()`), so a
+  client could send a value with float noise. The domain rejects more than 4
+  decimals or exponents, but a decimal STRING in the DTO would be safer.
+  Follow-up in `packages/shared`.
+- **Customer type vs sale channel is a UI-only rule** (`sales/new` filters
+  customers by `type === channel`). The domain and database do not enforce it,
+  and `POST /sales` does not either; decide whether to enforce it.
+- **`creditLimitKobo` is not enforced** anywhere.
+- Shared fix made with the Sales API: `recordSale` ignored earlier lines of the
+  same sale in its stock check (two lines for one product could oversell). It
+  now counts them (`takenByEarlierLines`), with a test.
+- A sale transaction costs ~12 sequential round trips; over remote Neon that is
+  ~3 s. Reducing statements (e.g. one read for customer + account) is a later
+  optimisation.
+- Purchase supplier payments and sale payments cannot be reversed yet
+  (unchanged).
 
 ## 7. How to work with the owner
 

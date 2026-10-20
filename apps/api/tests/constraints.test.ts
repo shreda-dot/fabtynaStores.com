@@ -234,7 +234,10 @@ describe("ck_sales_unpaid_requires_customer (strict)", () => {
         paidKobo: 1000n,
       });
 
-      const { rows } = await c.query(`select count(*)::int as n from sales`);
+      const { rows } = await c.query(
+        `select count(*)::int as n from sales where "createdById" = $1`,
+        [adminId],
+      );
       expect(rows[0].n).toBe(1);
     });
   });
@@ -303,7 +306,10 @@ describe("ck_purchases_unpaid_requires_supplier", () => {
         paidKobo: 1000n,
       });
 
-      const { rows } = await c.query(`select count(*)::int as n from purchases`);
+      const { rows } = await c.query(
+        `select count(*)::int as n from purchases where "createdById" = $1`,
+        [adminId],
+      );
       expect(rows[0].n).toBe(1);
     });
   });

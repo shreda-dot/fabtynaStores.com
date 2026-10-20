@@ -62,6 +62,8 @@ export const EXPECTED_MIGRATIONS = [
   "20261019000100_account_ledger_sources",
   "20261019000200_default_accounts",
   "20261019000300_account_balance_guard_fix",
+  "20261020000100_sale_reference_sequence",
+  "20261020000200_idempotency_keys",
 ] as const;
 
 /**
@@ -75,6 +77,25 @@ export const EXPECTED_TABLES = [
   "stock_balances",
   "account_transfers",
   "account_balances",
+  // 20261020000200_idempotency_keys
+  "idempotency_keys",
+] as const;
+
+/**
+ * Standalone sequences (pg_class.relkind = 'S'). Checked one-directionally.
+ * `sale_reference_seq` (20261020000100) feeds server-generated sale references.
+ */
+export const EXPECTED_SEQUENCES = ["sale_reference_seq"] as const;
+
+/**
+ * Plain (non-partial) indexes that carry a rule. Checked one-directionally.
+ * `idempotency_keys_key_route_key` is what makes two simultaneous requests with
+ * one Idempotency-Key unable to both claim it; `..._expiresAt_idx` keeps the
+ * expiry cleanup from scanning the table (20261020000200).
+ */
+export const EXPECTED_INDEXES = [
+  "idempotency_keys_key_route_key",
+  "idempotency_keys_expiresAt_idx",
 ] as const;
 
 /**

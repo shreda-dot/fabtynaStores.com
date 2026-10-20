@@ -861,6 +861,35 @@ describe("recordSale", () => {
     expect(recorded.customerLedgerEntry).toBeNull();
     expect(recorded.salePayment?.amountKobo).toBe(1000n);
   });
+
+  it("rejects two lines for one product whose combined quantity exceeds stock", () => {
+    const { product, movements } = stockedProductAndMovements();
+
+    // Stock is 24 units: each 15-unit line fits alone, together they do not.
+    expect(() =>
+      recordSale(
+        {
+          customerId: null,
+          customerName: null,
+          createdById: "admin",
+          channel: "RETAIL",
+          location: "WAREHOUSE",
+          soldAt: baseDate,
+          notes: null,
+          reference: null,
+          paidKobo: 15000n,
+          accountId: TEST_ACCOUNT_ID,
+          lines: [
+            { productId: "p1", unit: "UNIT", quantity: 15, unitPriceKobo: 500n },
+            { productId: "p1", unit: "UNIT", quantity: 15, unitPriceKobo: 500n },
+          ],
+        },
+        [product],
+        movements,
+        newId,
+      ),
+    ).toThrow(RangeError);
+  });
 });
 
 describe("voidAdjustment", () => {

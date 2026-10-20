@@ -86,6 +86,8 @@ function report(result: VerifyResult, source: string): void {
     { label: "Triggers", kind: "trigger" },
     { label: "Partial indexes", kind: "partial index" },
     { label: "Hand-written foreign keys", kind: "foreign key" },
+    { label: "Sequences", kind: "sequence" },
+    { label: "Indexes", kind: "index" },
   ];
 
   for (const { label, kind } of kinds) {

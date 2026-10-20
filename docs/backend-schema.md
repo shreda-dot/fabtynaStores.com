@@ -39,7 +39,7 @@ dev --create-only` diffs the schema against the database. The one surviving
 | Table names        | `snake_case` via `@@map`.                                                                                                                                                         |
 | Column names       | **camelCase** — Prisma maps table names only. Raw SQL must double-quote them (`"paidKobo"`).                                                                                      |
 | Ledgers            | Append-only. A correction is a **new** row whose `reversesEntryId` points at the original.                                                                                        |
-| Connection strings | Migrations/schema commands use `DIRECT_URL` (direct Neon host, no pooler) declared in `prisma.config.ts`. The runtime client uses pooled `DATABASE_URL` through a driver adapter. |
+| Connection strings | Migrations/schema commands use `DIRECT_URL` (direct Neon host, no pooler) declared in `prisma.config.ts`. **The API process also uses `DIRECT_URL`**, with a small pool (`DB_POOL_MAX`, max 10): the pooled endpoint dropped connections during long transactional work, and a sale is one interactive transaction with `FOR UPDATE` row locks. Revisit at deployment. Tests use `TEST_DATABASE_URL` (direct; a `-pooler` host is refused). `DATABASE_URL` (pooled) is optional and unused by the API for now. |
 
 ---
 
@@ -69,6 +69,8 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261019000100_account_ledger_sources` | Makes payment account references required; adds account deactivation state, purchase/loan ledger sources, transfer documents, derived non-negative account balances, expense void fields, source/sign/note/opening-balance constraints, indexes and account-ledger triggers. |
 | `20261019000200_default_accounts` | Idempotently creates Cash on hand (`CASH`) and Moniepoint (`BANK`) using SQL-generated IDs (Prisma's `cuid()` default is client-side). Both `fabtyna_dev` and `fabtyna_test` contain these defaults after migration unless an operator has subsequently changed them. |
 | `20261019000300_account_balance_guard_fix` | Corrects the account-balance write guard copied with the same `pg_trigger_depth() = 0` / `RETURN NULL` defect previously found in stock balances. Reconciles existing cached rows from the immutable ledger and inserts missing balance rows; does not edit prior migrations or ledger entries. |
+| `20261020000100_sale_reference_sequence` | Creates `sale_reference_seq` (BIGINT). The Sales API formats generated sale references as `S-YYYYMMDD-000123` from `nextval`; a sequence value is never reused, so concurrent requests cannot collide (gaps after a rollback are expected). |
+| `20261020000200_idempotency_keys` | Creates `idempotency_keys` (`key`, `route`, `requestHash`, `responseStatus`, `responseBody`, `createdAt`, `expiresAt`), unique index `idempotency_keys_key_route_key` on `(key, route)` and `idempotency_keys_expiresAt_idx`. Rows are claimed inside the sale transaction and expire after 24 h; an hourly job deletes expired rows. When login exists the uniqueness gains `actorId`. |
 
 ---
 

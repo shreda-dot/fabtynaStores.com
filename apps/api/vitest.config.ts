@@ -10,5 +10,7 @@ export default defineConfig({
     // out mid-transaction, which then poisoned the next test in the file with
     // "current transaction is aborted".
     testTimeout: 30_000,
+    // Setup hooks (seeding, schema creation) hit the same slow remote database.
+    hookTimeout: 60_000,
   },
 });

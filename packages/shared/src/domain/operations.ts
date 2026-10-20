@@ -1003,8 +1003,14 @@ export function recordSale(
       )
       .reduce((sum, m) => sum + m.quantityUnits, 0);
 
+    // Earlier lines of this same sale have already taken stock; without them
+    // two lines for one product could each pass while together overselling.
+    const takenByEarlierLines = movements
+      .filter((m) => m.productId === line.productId)
+      .reduce((sum, m) => sum + m.quantityUnits, 0);
+
     assertStockWillRemainNonnegative(
-      BigInt(currentAtLocation),
+      BigInt(currentAtLocation + takenByEarlierLines),
       BigInt(-quantityUnits),
     );
 

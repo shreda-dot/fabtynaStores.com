@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createPrismaClient, type PrismaClient } from "../src/lib/prisma.js";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { Client } from "pg";
+import { PrismaClient } from "../generated/prisma/client.js";
 import { hashPassword, verifyPassword } from "../src/lib/password.js";
 import { assertNotATestDatabase, seedAdmin } from "../src/lib/seed-admin.js";
 import { resolveTestConnectionString } from "./test-db.js";
@@ -7,23 +9,41 @@ import { resolveTestConnectionString } from "./test-db.js";
 /**
  * Seed-script behaviour, proven against the TEST database only.
  *
- * Every row these tests create is removed again: `admin_users` is emptied
- * before each test (so "creates an OWNER on an empty database" really starts
- * empty) and once more in `afterAll`. The vitest global setup
- * (tests/global-setup.ts) runs `db:verify` first and aborts the run if the
- * schema does not match `src/db/expected-schema.ts`.
+ * "Creates an OWNER on an empty database" needs an empty `admin_users`, but the
+ * real table can never be emptied: committed sales and audit rows (immutable)
+ * reference admins. So these tests run against an ISOLATED copy of the table in
+ * their own Postgres schema (`seed_admin_test`), emptied before each test and
+ * dropped at the end. The real `public.admin_users` is never touched. The
+ * vitest global setup (tests/global-setup.ts) runs `db:verify` first.
  */
 
 const connectionString = resolveTestConnectionString();
+const ISOLATED_SCHEMA = "seed_admin_test";
 const PASSWORD = "correct horse battery staple";
 
 let prisma: PrismaClient;
+let pg: Client;
 let passwordHash: string;
 let seq = 0;
 const nextEmail = (): string => `seed_admin_${Date.now()}_${seq++}@example.test`;
 
+const seed = (options: Parameters<typeof seedAdmin>[1]) => seedAdmin(connectionString, options, prisma);
+
 beforeAll(async () => {
-  prisma = createPrismaClient(connectionString);
+  pg = new Client({ connectionString, ssl: { rejectUnauthorized: false } });
+  await pg.connect();
+  await pg.query(`DROP SCHEMA IF EXISTS ${ISOLATED_SCHEMA} CASCADE`);
+  await pg.query(`CREATE SCHEMA ${ISOLATED_SCHEMA}`);
+  await pg.query(`CREATE TYPE ${ISOLATED_SCHEMA}."AdminRole" AS ENUM ('OWNER', 'STAFF')`);
+  await pg.query(`CREATE TABLE ${ISOLATED_SCHEMA}.admin_users (LIKE public.admin_users INCLUDING ALL)`);
+  // Prisma casts enums to the schema-qualified type, so the copy needs its own.
+  await pg.query(`ALTER TABLE ${ISOLATED_SCHEMA}.admin_users ALTER COLUMN role DROP DEFAULT`);
+  await pg.query(
+    `ALTER TABLE ${ISOLATED_SCHEMA}.admin_users ALTER COLUMN role TYPE ${ISOLATED_SCHEMA}."AdminRole" USING role::text::${ISOLATED_SCHEMA}."AdminRole"`,
+  );
+  await pg.query(`ALTER TABLE ${ISOLATED_SCHEMA}.admin_users ALTER COLUMN role SET DEFAULT 'STAFF'`);
+
+  prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }, { schema: ISOLATED_SCHEMA }) });
   passwordHash = await hashPassword(PASSWORD);
 });
 
@@ -32,15 +52,16 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
-  await prisma.adminUser.deleteMany();
   await prisma.$disconnect();
+  await pg.query(`DROP SCHEMA IF EXISTS ${ISOLATED_SCHEMA} CASCADE`);
+  await pg.end();
 });
 
 describe("seedAdmin", () => {
   it("creates an OWNER on an empty database, normalising the email", async () => {
     const raw = `  ${nextEmail().toUpperCase()}  `;
 
-    const created = await seedAdmin(connectionString, { email: raw, passwordHash, additional: false });
+    const created = await seed({ email: raw, passwordHash, additional: false });
 
     expect(created.role).toBe("OWNER");
     expect(created.email).toBe(raw.trim().toLowerCase());
@@ -51,17 +72,17 @@ describe("seedAdmin", () => {
   });
 
   it("refuses to create a second owner once an admin exists", async () => {
-    await seedAdmin(connectionString, { email: nextEmail(), passwordHash, additional: false });
+    await seed({ email: nextEmail(), passwordHash, additional: false });
 
     await expect(
-      seedAdmin(connectionString, { email: nextEmail(), passwordHash, additional: false }),
+      seed({ email: nextEmail(), passwordHash, additional: false }),
     ).rejects.toThrow(/already exists/);
   });
 
   it("creates a STAFF account with --additional", async () => {
-    await seedAdmin(connectionString, { email: nextEmail(), passwordHash, additional: false });
+    await seed({ email: nextEmail(), passwordHash, additional: false });
 
-    const created = await seedAdmin(connectionString, {
+    const created = await seed({
       email: nextEmail(),
       passwordHash,
       additional: true,
@@ -74,16 +95,16 @@ describe("seedAdmin", () => {
 
   it("refuses --additional when the email is already taken", async () => {
     const email = nextEmail();
-    await seedAdmin(connectionString, { email, passwordHash, additional: false });
+    await seed({ email, passwordHash, additional: false });
 
     await expect(
-      seedAdmin(connectionString, { email, passwordHash, additional: true }),
+      seed({ email, passwordHash, additional: true }),
     ).rejects.toThrow(/already exists/);
   });
 
   it("stores a hash that verifies against the original password", async () => {
     const email = nextEmail();
-    await seedAdmin(connectionString, { email, passwordHash, additional: false });
+    await seed({ email, passwordHash, additional: false });
 
     const row = await prisma.adminUser.findUniqueOrThrow({ where: { email } });
     await expect(verifyPassword(row.passwordHash, PASSWORD)).resolves.toBe(true);
@@ -91,13 +112,13 @@ describe("seedAdmin", () => {
 
   it("rejects an invalid email address", async () => {
     await expect(
-      seedAdmin(connectionString, { email: "not-an-email", passwordHash, additional: false }),
+      seed({ email: "not-an-email", passwordHash, additional: false }),
     ).rejects.toThrow(/valid email address/);
   });
 
   it("rejects a hash that is not argon2id", async () => {
     await expect(
-      seedAdmin(connectionString, { email: nextEmail(), passwordHash: "plain-text", additional: false }),
+      seed({ email: nextEmail(), passwordHash: "plain-text", additional: false }),
     ).rejects.toThrow(/Argon2id/);
   });
 });

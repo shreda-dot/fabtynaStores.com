@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { databaseNameOf } from "../db/verify.js";
-import { createPrismaClient } from "./prisma.js";
+import { createPrismaClient, type PrismaClient } from "./prisma.js";
 import { isArgon2idHash } from "./password.js";
 
 /**
@@ -42,6 +42,8 @@ export interface SeededAdmin {
 export async function seedAdmin(
   connectionString: string,
   options: SeedAdminOptions,
+  /** Lets a test point the seed at an isolated schema; the caller owns (and disconnects) it. */
+  client?: PrismaClient,
 ): Promise<SeededAdmin> {
   const parsedEmail = emailSchema.safeParse(options.email);
   if (!parsedEmail.success) {
@@ -56,7 +58,7 @@ export async function seedAdmin(
     );
   }
 
-  const prisma = createPrismaClient(connectionString);
+  const prisma = client ?? createPrismaClient(connectionString);
   try {
     if (options.additional) {
       const clash = await prisma.adminUser.findUnique({ where: { email }, select: { id: true } });
@@ -78,7 +80,9 @@ export async function seedAdmin(
 
     return { email: created.email, role: created.role };
   } finally {
-    await prisma.$disconnect();
+    if (client === undefined) {
+      await prisma.$disconnect();
+    }
   }
 }
 

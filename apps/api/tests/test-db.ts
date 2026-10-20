@@ -40,7 +40,20 @@ export function resolveTestConnectionString(): string {
   }
 
   // Prefer the direct (non-pooled) connection when one is provided.
-  return (process.env.TEST_DIRECT_URL ?? "").trim() || testUrl;
+  const effective = (process.env.TEST_DIRECT_URL ?? "").trim() || testUrl;
+
+  for (const candidate of [testUrl, effective]) {
+    if (new URL(candidate).hostname.toLowerCase().includes("-pooler")) {
+      throw new Error(
+        "TEST_DATABASE_URL points at a pooled Neon endpoint (host contains \"-pooler\") — refusing to run. " +
+          "The tests use long-lived sessions, explicit transactions and concurrent clients, and the pooler " +
+          "drops those connections (\"Connection terminated unexpectedly\"). Set TEST_DATABASE_URL to the " +
+          "direct (non-pooled) Neon endpoint.",
+      );
+    }
+  }
+
+  return effective;
 }
 
 /**

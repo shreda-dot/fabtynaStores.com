@@ -7,12 +7,21 @@ import { config } from "dotenv";
 config({ path: fileURLToPath(new URL("../../.env", import.meta.url)) });
 
 export interface RuntimeEnv {
-  /** Pooled Neon connection string used by the running API. */
-  databaseUrl: string;
-  /** Direct Neon connection string; only needed for schema/migration commands. */
-  directUrl: string | null;
+  /**
+   * Connection string the API process uses: the DIRECT (non-pooled) Neon
+   * endpoint. Transactions with row locks fail on the pooled endpoint.
+   */
+  apiDatabaseUrl: string;
+  /** Pooled endpoint, kept for later deployment work; unused by the API now. */
+  databaseUrl: string | null;
+  /** Maximum connections in the API's pool. */
+  dbPoolMax: number;
   port: number;
   nodeEnv: string;
+  /** `ALLOW_UNAUTHENTICATED_DEV=true`: explicit opt-in to run with no login. */
+  allowUnauthenticatedDev: boolean;
+  /** Email of the active admin that created rows while there is no login. */
+  devActorEmail: string | null;
 }
 
 function isPostgresUrl(value: string): boolean {
@@ -28,16 +37,16 @@ function isPostgresUrl(value: string): boolean {
 export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): RuntimeEnv {
   const problems: string[] = [];
 
-  const databaseUrl = source.DATABASE_URL?.trim() ?? "";
-  if (databaseUrl === "") {
-    problems.push("DATABASE_URL is missing (the pooled Neon connection string).");
-  } else if (!isPostgresUrl(databaseUrl)) {
-    problems.push("DATABASE_URL must start with postgres:// or postgresql://.");
+  const directUrl = source.DIRECT_URL?.trim() ?? "";
+  if (directUrl === "") {
+    problems.push("DIRECT_URL is missing (the direct, non-pooled Neon connection string the API uses).");
+  } else if (!isPostgresUrl(directUrl)) {
+    problems.push("DIRECT_URL must start with postgres:// or postgresql://.");
   }
 
-  const rawDirectUrl = source.DIRECT_URL?.trim() ?? "";
-  if (rawDirectUrl !== "" && !isPostgresUrl(rawDirectUrl)) {
-    problems.push("DIRECT_URL must start with postgres:// or postgresql://.");
+  const rawDatabaseUrl = source.DATABASE_URL?.trim() ?? "";
+  if (rawDatabaseUrl !== "" && !isPostgresUrl(rawDatabaseUrl)) {
+    problems.push("DATABASE_URL must start with postgres:// or postgresql://.");
   }
 
   const rawPort = source.PORT?.trim() ?? "";
@@ -51,6 +60,17 @@ export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): Runtime
     }
   }
 
+  const rawPoolMax = source.DB_POOL_MAX?.trim() ?? "";
+  let dbPoolMax = 10;
+  if (rawPoolMax !== "") {
+    const parsed = Number(rawPoolMax);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 10) {
+      problems.push("DB_POOL_MAX must be an integer between 1 and 10.");
+    } else {
+      dbPoolMax = parsed;
+    }
+  }
+
   if (problems.length > 0) {
     throw new Error(
       `Invalid environment configuration:\n  - ${problems.join("\n  - ")}\n` +
@@ -58,10 +78,15 @@ export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): Runtime
     );
   }
 
+  const devActorEmail = source.DEV_ACTOR_EMAIL?.trim().toLowerCase() ?? "";
+
   return {
-    databaseUrl,
-    directUrl: rawDirectUrl === "" ? null : rawDirectUrl,
+    apiDatabaseUrl: directUrl,
+    databaseUrl: rawDatabaseUrl === "" ? null : rawDatabaseUrl,
+    dbPoolMax,
     port,
     nodeEnv: source.NODE_ENV?.trim() || "development",
+    allowUnauthenticatedDev: source.ALLOW_UNAUTHENTICATED_DEV?.trim() === "true",
+    devActorEmail: devActorEmail === "" ? null : devActorEmail,
   };
 }

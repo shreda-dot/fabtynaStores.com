@@ -6,8 +6,10 @@ import { Client } from "pg";
 import {
   EXPECTED_CHECK_CONSTRAINTS,
   EXPECTED_FOREIGN_KEYS,
+  EXPECTED_INDEXES,
   EXPECTED_MIGRATIONS,
   EXPECTED_PARTIAL_INDEXES,
+  EXPECTED_SEQUENCES,
   EXPECTED_TABLES,
   EXPECTED_TRIGGERS,
 } from "./expected-schema.js";
@@ -34,7 +36,9 @@ export type VerifyKind =
   | "check constraint"
   | "trigger"
   | "partial index"
-  | "foreign key";
+  | "foreign key"
+  | "sequence"
+  | "index";
 
 export interface VerifyItem {
   kind: VerifyKind;
@@ -65,6 +69,8 @@ export interface VerifyResult {
     triggers: string[];
     partialIndexes: string[];
     foreignKeys: string[];
+    sequences: string[];
+    indexes: string[];
   };
   failures: VerifyItem[];
 }
@@ -154,7 +160,27 @@ export async function runDbVerify(connectionString: string): Promise<VerifyResul
         ORDER BY c.relname`,
     );
 
+    const sequenceRows = await client.query<{ relname: string }>(
+      `SELECT c.relname
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind = 'S'
+          AND n.nspname = 'public'
+        ORDER BY c.relname`,
+    );
+
+    const indexNameRows = await client.query<{ indexname: string }>(
+      `SELECT ic.relname AS indexname
+         FROM pg_index i
+         JOIN pg_class ic ON ic.oid = i.indexrelid
+         JOIN pg_namespace n ON n.oid = ic.relnamespace
+        WHERE n.nspname = 'public'
+        ORDER BY ic.relname`,
+    );
+
     const appliedMigrations = migrationRows.rows.map((row) => row.migration_name);
+    const foundSequences = sequenceRows.rows.map((row) => row.relname);
+    const foundIndexes = indexNameRows.rows.map((row) => row.indexname);
     const foundCheckConstraints = checkRows.rows.map((row) => row.conname);
     const foundTriggers = triggerRows.rows.map((row) => row.tgname);
     const foundPartialIndexes = indexRows.rows.map((row) => row.indexname);
@@ -254,6 +280,24 @@ export async function runDbVerify(connectionString: string): Promise<VerifyResul
       );
     }
 
+    const foundSequenceSet = new Set(foundSequences);
+    for (const name of EXPECTED_SEQUENCES) {
+      items.push(
+        foundSequenceSet.has(name)
+          ? { kind: "sequence", name, ok: true }
+          : { kind: "sequence", name, ok: false, detail: "missing from the database" },
+      );
+    }
+
+    const foundIndexSet = new Set(foundIndexes);
+    for (const name of EXPECTED_INDEXES) {
+      items.push(
+        foundIndexSet.has(name)
+          ? { kind: "index", name, ok: true }
+          : { kind: "index", name, ok: false, detail: "missing from the database" },
+      );
+    }
+
     const failures = items.filter((item) => !item.ok);
 
     const migrationHistory: MigrationHistoryEntry[] = migrationRows.rows.map((row) => ({
@@ -275,6 +319,8 @@ export async function runDbVerify(connectionString: string): Promise<VerifyResul
         triggers: foundTriggers,
         partialIndexes: foundPartialIndexes,
         foreignKeys: foundForeignKeys,
+        sequences: foundSequences,
+        indexes: foundIndexes,
       },
       failures,
     };

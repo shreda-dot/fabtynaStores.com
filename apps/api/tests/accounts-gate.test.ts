@@ -249,6 +249,54 @@ describe("4A close-out coverage gaps", () => {
     expect(await accountBalanceOf(h.pg, account.id)).toBe(0n);
   });
 
+  it("distinguishes a reversal row from an original entry that was reversed", async () => {
+    const account = await createAccount(`Reversal flags ${newId("account")}`);
+    const movement = await h.app.inject({
+      method: "POST",
+      url: `/accounts/${account.id}/movements`,
+      payload: { type: "OWNER_CAPITAL", amountKobo: "1000", note: "Opening funds" },
+    });
+    expect(movement.statusCode).toBe(201);
+    const originalId = movement.json<{ id: string }>().id;
+    const reversal = await h.app.inject({
+      method: "POST",
+      url: `/account-entries/${originalId}/reverse`,
+      payload: { reason: "Entry was duplicated" },
+    });
+    expect(reversal.statusCode).toBe(201);
+    const reversalId = reversal.json<{ reversal: Array<{ id: string }> }>().reversal[0]!.id;
+
+    const statement = await h.app.inject({
+      method: "GET",
+      url: `/accounts/${account.id}/statement`,
+    });
+    expect(statement.statusCode).toBe(200);
+    const entries = statement.json<{
+      entries: Array<{
+        id: string;
+        isReversal: boolean;
+        reversesEntryId: string | null;
+        reversedByEntryId: string | null;
+      }>;
+    }>().entries;
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: originalId,
+          isReversal: false,
+          reversesEntryId: null,
+          reversedByEntryId: reversalId,
+        }),
+        expect.objectContaining({
+          id: reversalId,
+          isReversal: true,
+          reversesEntryId: originalId,
+          reversedByEntryId: null,
+        }),
+      ]),
+    );
+  });
+
   it("records all four manual movement types with the correct sign", async () => {
     const account = await createAccount(`Manual movements ${newId("account")}`);
     const actions = [

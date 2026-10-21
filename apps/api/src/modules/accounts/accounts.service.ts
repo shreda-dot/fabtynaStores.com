@@ -478,6 +478,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
         occurredAt: Date | null;
         note: string | null;
         reversesEntryId: string | null;
+        reversedByEntryId: string | null;
         sourceDescription: string | null;
         runningBalanceKobo: string | null;
         openingBalanceKobo: string;
@@ -491,6 +492,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
         ranged AS (
           SELECT ale.id, ale.type::text AS type, ale."amountKobo"::text AS "amountKobo",
                  ale."occurredAt", ale.note, ale."reversesEntryId",
+                 reversal.id AS "reversedByEntryId",
                  CASE
                    WHEN ale."expenseId" IS NOT NULL THEN 'Expense: ' || e.description
                    WHEN ale."purchaseId" IS NOT NULL THEN 'Purchase: ' || COALESCE(p.reference, ale."purchaseId")
@@ -503,6 +505,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
                  END AS "sourceDescription",
                  SUM(ale."amountKobo") OVER (ORDER BY ale."occurredAt", ale.id)::text AS "rangeRunningKobo"
             FROM account_ledger_entries ale
+            LEFT JOIN account_ledger_entries reversal ON reversal."reversesEntryId" = ale.id
             LEFT JOIN expenses e ON e.id = ale."expenseId"
             LEFT JOIN purchases p ON p.id = ale."purchaseId"
            WHERE ale."accountId" = ${accountId}
@@ -521,7 +524,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
           LIMIT ${query.limit + 1}
         )
         SELECT page.id, page.type, page."amountKobo", page."occurredAt", page.note,
-               page."reversesEntryId", page."sourceDescription",
+               page."reversesEntryId", page."reversedByEntryId", page."sourceDescription",
                (totals.opening::bigint + page."rangeRunningKobo"::bigint)::text AS "runningBalanceKobo",
                totals.opening AS "openingBalanceKobo", totals.closing AS "closingBalanceKobo"
           FROM totals LEFT JOIN page ON TRUE
@@ -548,8 +551,9 @@ export function createAccountsService(options: AccountsServiceOptions) {
           occurredAt: entry.occurredAt?.toISOString() ?? null,
           note: entry.note,
           sourceDescription: entry.sourceDescription,
-          reversed: entry.reversesEntryId !== null,
+          isReversal: entry.reversesEntryId !== null,
           reversesEntryId: entry.reversesEntryId,
+          reversedByEntryId: entry.reversedByEntryId,
           runningBalanceKobo: entry.runningBalanceKobo,
         })),
         nextCursor,

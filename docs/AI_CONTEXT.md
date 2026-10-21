@@ -35,8 +35,9 @@ phone on slow networks, so the web app is mobile-first with a network status bar
     `lib/api/*.mock.ts` backed by `lib/api/mock-store.ts` (localStorage).
   - Pages: `app/(admin)/**`, login at `app/(auth)/login`.
 - `apps/api` (`@fabtyna/api`) — Prisma **7** + `@prisma/adapter-pg` (node-postgres),
-  PostgreSQL on Neon, vitest, **Fastify 5** HTTP server for sales, purchases,
-  expense categories, expenses, and accounts (see §6).
+  PostgreSQL on Neon, vitest, **Fastify 5** HTTP APIs for sales, purchases,
+  products, customers, suppliers, debtors/payables, stock, loans, transfers,
+  adjustments, expense categories, expenses, and accounts (see §6).
   - Schema: `apps/api/prisma/schema.prisma`; migrations:
     `apps/api/prisma/migrations/` (**30** migrations); generated client output:
     `apps/api/generated/prisma/` (git-ignored).
@@ -48,8 +49,8 @@ phone on slow networks, so the web app is mobile-first with a network status bar
   - `src/app.ts` (`buildApp`), `src/start.ts` (`startServer`), `src/server.ts`
     (entry), `src/auth/actor.ts` (temporary guard), `src/modules/sales/`
     (schemas, validation, repository, service, routes).
-  - `src/modules/stock/stock.service.ts`, `src/modules/expenses/`,
-    `src/modules/accounts/`; `src/scripts/`: `db-verify.ts`,
+  - `src/modules/products/`, `src/modules/parties/`, `src/modules/stock/`,
+    `src/modules/expenses/`, `src/modules/accounts/`; `src/scripts/`: `db-verify.ts`,
     `db-audit.ts`, `seed-admin.ts`, `hash-password.ts`.
   - Tests: `apps/api/tests/*.test.ts` + `global-setup.ts` + `test-db.ts` +
     `sales-fixtures.ts`.
@@ -387,6 +388,31 @@ must print "-- This is an empty migration." and exit 0.
   `buildAdjustment`/`voidAdjustment`. Positive adjustments update
   `products.averageCostKobo` from the shared domain result; voiding replays
   reversal movements and recomputes average cost through the same domain.
+- **5A catalogue and stock APIs.** `GET/POST /products`, `GET/PATCH
+  /products/:id`, and product deactivate/reactivate routes are implemented.
+  Active SKU uniqueness is enforced by the database partial unique index and
+  checked before writes; pack size is immutable after a stock movement.
+  `GET /customers` and `/suppliers` support text, active/inactive, balance and
+  cursor filters; create, patch, deactivate/reactivate, detail, and ledger
+  statement endpoints are available for both parties. `GET /debtors` reports
+  ledger-derived balances with unpaid-sale aging; `GET /payables` reports
+  supplier-ledger balances and overdue purchases. `GET /stock` and
+  `/stock/low` read current balances, pack splits and stock values. No schema
+  or migration change was needed.
+- **5A read statement counts** (one request, fixed statements; no N+1):
+  products list **1**, product detail **3**, stock list with totals **2**,
+  low-stock **1**, customer list **1**, supplier list **1**, customer detail
+  **4**, supplier detail **4**, customer statement **2**, supplier statement
+  **2**, debtors **1**, payables **1**. Product/party lists use keyset cursors;
+  stock and debt lists aggregate in SQL. Dates in customer aging are computed
+  using Lagos business dates.
+- **5A focused tests:** `apps/api/tests/parties-inventory.test.ts` covers
+  active SKU uniqueness/reactivation, pack-size immutability, product stock and
+  location-specific low-stock reads, loose-unit wholesale valuation,
+  customer/supplier ledger-backed statements, debtor/payable list balances
+  (including overdue purchase balances), and customer/supplier profile reads.
+  API tests use Vitest's default file parallelism against the direct test
+  database.
 - **Stock/loan lock order extensions.** Loans lock **loan row → account balances
   (sorted accountId)**. Transfers and adjustments lock **product rows (sorted
   id) → stock balances (sorted productId/location)** before checking balances.
@@ -400,18 +426,28 @@ must print "-- This is an empty migration." and exit 0.
 - **Measured statement counts (new endpoints):** loan create **6**, loan charge
   **4**, loan repayment **10**, transfer create **9**, adjustment create **8**,
   adjustment void **10** (test DB, no Idempotency-Key replay path).
-- Tests: `apps/api/tests` = 20 files (**186** tests, need the test DB);
-  `packages/shared/src/__tests__` = 9 files (**226** tests, no DB). New purchase
+- Tests: `apps/api/tests` = 24 files (**220** tests, need the test DB);
+  `packages/shared/src/__tests__` = 9 files (**227** tests, no DB). New purchase
   files: `purchases-receive`, `purchases-lifecycle`, `purchases-list`,
   `purchases-concurrency` (10 iterations each: two purchases of one product,
   two payments from an account that can afford one, two voids). The
   "audit-clean" tests in `sales-concurrency.test.ts` ignore `severity: known`
-  checks (paid supplier-less purchases are an intended exception).
-  Test files run in parallel against Neon; a network drop can still surface as
-  a spurious "Can't reach database server" failure, rerun the single test.
+  checks (paid supplier-less purchases are an intended exception). API test
+  files run with Vitest's default file parallelism against the direct Neon test
+  endpoint. The last `pnpm verify`
+  passed typecheck, lint, and shared tests (227/227), but the API suite lost
+  Neon DNS connectivity (`ENOTFOUND`) and failed with cascading connection
+  errors (3 failed, 142 passed, 74 skipped); the build stage did not run.
+  The focused 5A API test passed after the query fix (7/7). `db:verify` and
+  `db:audit` then passed for both `fabtyna_dev` and `fabtyna_test`, with zero
+  audit rows.
 - `apps/api` has no sign-in endpoint.
-  Loan repayment reversal is intentionally not implemented yet (design ready,
-  awaiting owner approval because it loosens expense immutability rules).
+  Loan repayment reversal remains unimplemented: a mistaken repayment cannot
+  yet be corrected through the UI. Until a reversal operation is built, payment
+  forms should require a clear confirmation of the repayment amount, account,
+  and date. Any future correction must append reversal ledger rows and adjust
+  the repayment/document state atomically; never edit an applied repayment or
+  its LOAN_INTEREST reporting expense in place.
   `@fastify/cookie`, `@fastify/cors`, `@fastify/jwt` and
   `@fastify/rate-limit` are installed but not used.
 - Auth: **no sign-in endpoint exists.** `AdminUser` + Argon2id hashing + the seed
@@ -428,6 +464,20 @@ must print "-- This is an empty migration." and exit 0.
   timeout without a timeout override by reducing lock contention in seeding.
 
 ## 6b. Known limitations
+
+### 4A / 4B backend coverage snapshot
+
+| Area | Implemented API surface | Focused integration coverage |
+|---|---|---|
+| 4A sales and customer debt | Sales create, later payments, void/amend, list/detail | `sales-post.test.ts`, `sales-lifecycle.test.ts`, `sales-http.test.ts`, `sales-concurrency.test.ts`, `sales-concurrency-writes.test.ts`, `payment-reversal.test.ts` |
+| 4A purchases and supplier payables | Purchase receive, later payments, void/amend, list/detail | `purchases-receive.test.ts`, `purchases-lifecycle.test.ts`, `purchases-list.test.ts`, `purchases-concurrency.test.ts`, `payment-reversal.test.ts` |
+| 4A accounts and expenses | Account management, statements, opening balance, reconciliation, transfers, expense create/void/amend | `accounts-gate.test.ts`, `accounts-expenses-api.test.ts`, `account-balances.test.ts`, `account-ledger-source-types.test.ts` |
+| 4B loans | Loan, charge, repayment, list/detail; interest is reporting-only and does not add another account outflow | `loans-api.test.ts`, `reversal-positive.test.ts` |
+| 4B transfers and adjustments | Transfer create/read; adjustment create/read/void with stock and average-cost reversal | `stock-operations.test.ts`, `stock-balances.test.ts` |
+
+This is test-file coverage, not a claim that every user-facing web surface is
+connected: the real web API remains stubbed. Loan repayment reversal is the
+known operation gap above.
 
 - **Quantity is a JSON number in the sale DTO** (`quantity: z.number()`), so a
   client could send a value with float noise. The domain rejects more than 4

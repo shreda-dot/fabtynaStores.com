@@ -253,8 +253,11 @@ export function stockWorthAtWholesale(
   product: Pick<Product, "id" | "unitsPerPack" | "wholesalePriceKobo">,
 ): bigint {
   const units = BigInt(totalUnitsForProduct(movements, product.id));
-  const fullPacks = units / BigInt(product.unitsPerPack);
-  return fullPacks * product.wholesalePriceKobo;
+  const unitsPerPack = BigInt(product.unitsPerPack);
+  const fullPacks = units / unitsPerPack;
+  const looseUnits = units % unitsPerPack;
+  return fullPacks * product.wholesalePriceKobo +
+    (looseUnits * product.wholesalePriceKobo) / unitsPerPack;
 }
 
 export function stockWorthByChannel(

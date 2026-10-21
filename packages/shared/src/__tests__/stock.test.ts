@@ -6,6 +6,7 @@ import {
   createTransferLegPair,
   formatStockUnits,
   splitStockIntoPacks,
+  stockWorthAtWholesale,
   validateAdjustmentLine,
 } from "../domain/stock.ts";
 
@@ -30,6 +31,32 @@ describe("stock levels from movements", () => {
     expect(formatStockUnits(24, 24, "crate")).toBe("1 crate");
     expect(formatStockUnits(5, 24, "crate")).toBe("5 units");
     expect(formatStockUnits(1, 24, "crate")).toBe("1 unit");
+  });
+
+  it("values loose wholesale units pro rata and rounds down", () => {
+    expect(
+      stockWorthAtWholesale(
+        [
+          {
+            id: "movement",
+            productId: "product",
+            location: "WAREHOUSE",
+            type: "PURCHASE",
+            quantityUnits: 5,
+            unitCostKobo: 0n,
+            purchaseLineId: null,
+            saleLineId: null,
+            transferLegId: null,
+            adjustmentLineId: null,
+            returnLineId: null,
+            reversesEntryId: null,
+            occurredAt: new Date(0),
+            createdAt: new Date(0),
+          },
+        ],
+        { id: "product", unitsPerPack: 3, wholesalePriceKobo: 100n },
+      ),
+    ).toBe(166n);
   });
 });
 

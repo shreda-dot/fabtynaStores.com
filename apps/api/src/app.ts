@@ -20,6 +20,11 @@ import { registerTransfersRoutes } from "./modules/stock/transfers.routes.js";
 import { createTransfersService } from "./modules/stock/transfers.service.js";
 import { registerAdjustmentsRoutes } from "./modules/stock/adjustments.routes.js";
 import { createAdjustmentsService } from "./modules/stock/adjustments.service.js";
+import { registerProductsRoutes } from "./modules/products/products.routes.js";
+import { createProductsService } from "./modules/products/products.service.js";
+import { registerInventoryRoutes } from "./modules/stock/inventory.routes.js";
+import { registerPartiesRoutes } from "./modules/parties/parties.routes.js";
+import { createPartiesService } from "./modules/parties/parties.service.js";
 
 export interface BuildAppOptions {
   prisma: PrismaClient;
@@ -53,6 +58,23 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     log,
   });
   registerSalesRoutes(app, { service, resolveActor: options.resolveActor });
+
+  const productsService = createProductsService({
+    prisma: options.prisma,
+    now: options.now,
+    txTimeouts: options.txTimeouts,
+    log,
+  });
+  registerProductsRoutes(app, { service: productsService, resolveActor: options.resolveActor });
+  registerInventoryRoutes(app, { prisma: options.prisma, resolveActor: options.resolveActor });
+  const partiesService = createPartiesService({
+    prisma: options.prisma,
+    now: options.now,
+    txTimeouts: options.txTimeouts,
+    maxDateRangeDays: options.maxDateRangeDays,
+    log,
+  });
+  registerPartiesRoutes(app, { service: partiesService, resolveActor: options.resolveActor });
 
   const purchasesService = createPurchasesService({
     prisma: options.prisma,

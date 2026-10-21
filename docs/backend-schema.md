@@ -519,3 +519,33 @@ trap worth remembering:
 Both migrations also re-backfill `stock_balances` from `stock_movements` and are
 proven by the API test suite (`stock-balances.test.ts`,
 `reversal-positive.test.ts`), not just by `db:verify`.
+
+## 9. 5A catalogue, parties and stock read APIs
+
+The 5A API additions do not change the database schema and therefore add no
+migration or `expected-schema.ts` object:
+
+- Products expose list/detail, create/patch, and deactivate/reactivate
+  operations. Active SKU uniqueness remains enforced by the existing partial
+  unique index; a product's pack size cannot change after a stock movement.
+- Customers and suppliers expose list/detail, create/patch,
+  deactivate/reactivate, and ledger-statement endpoints. Party balances are
+  calculated from the append-only customer/supplier ledger, not from typed-in
+  values or payment-table sums.
+- `/debtors` and `/payables` are SQL-aggregated read endpoints. Debtor balances
+  are ledger-derived and unpaid sales provide aging details. Payable balances
+  are supplier-ledger-derived, with overdue state from purchase `dueDate`;
+  `overdueTotalKobo` sums only balances on overdue purchases, while the overall
+  totals remain independent of the current search and cursor.
+- `/stock` and `/stock/low` read the trigger-maintained `stock_balances`
+  cache. Valuation uses the shared stock-domain helpers, including pro-rata
+  loose-unit valuation at wholesale price.
+
+These reads use fixed statement counts rather than per-row queries: products
+list 1/detail 3, stock list 2/low-stock 1, customer/supplier list 1 each,
+customer/supplier detail 4 each, statements 2 each, and debtors/payables 1 each.
+API tests use Vitest's default file parallelism against the shared remote test
+database.
+The focused `parties-inventory.test.ts` suite covers location-specific low-stock
+results and verifies that a supplier's non-overdue balance is excluded from
+`overdueTotalKobo`.

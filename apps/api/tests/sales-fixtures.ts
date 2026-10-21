@@ -324,7 +324,7 @@ export function purchaseBody(input: PurchaseBodyInput): Record<string, unknown> 
 /** Any JSON call against the app: returns status, parsed body and headers. */
 export async function call(
   app: FastifyInstance,
-  method: "GET" | "POST" | "PUT",
+  method: "GET" | "POST" | "PUT" | "PATCH",
   url: string,
   body?: unknown,
   headers: Record<string, string> = {},

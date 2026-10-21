@@ -284,8 +284,12 @@ export function stockWorthByChannel(
 
   if (product.saleChannel === "WHOLESALE") {
     const units = BigInt(totalUnitsForProduct(movements, product.id));
-    const fullPacks = units / BigInt(product.unitsPerPack);
-    const wholesale = fullPacks * product.wholesalePriceKobo;
+    const unitsPerPack = BigInt(product.unitsPerPack);
+    const fullPacks = units / unitsPerPack;
+    const looseUnits = units % unitsPerPack;
+    const wholesale =
+      fullPacks * product.wholesalePriceKobo +
+      (looseUnits * product.wholesalePriceKobo) / unitsPerPack;
     return { retailKobo: 0n, wholesaleKobo: wholesale, totalKobo: wholesale };
   }
 
@@ -294,8 +298,10 @@ export function stockWorthByChannel(
   );
   const warehouseUnits = BigInt(byLocation.get("WAREHOUSE") ?? 0);
   const retail = retailUnits * product.retailPriceKobo;
+  const unitsPerPack = BigInt(product.unitsPerPack);
   const wholesale =
-    (warehouseUnits / BigInt(product.unitsPerPack)) * product.wholesalePriceKobo;
+    (warehouseUnits / unitsPerPack) * product.wholesalePriceKobo +
+    ((warehouseUnits % unitsPerPack) * product.wholesalePriceKobo) / unitsPerPack;
   return { retailKobo: retail, wholesaleKobo: wholesale, totalKobo: retail + wholesale };
 }
 

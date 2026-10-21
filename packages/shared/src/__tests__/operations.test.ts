@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   Product,
   Expense,
+  Sale,
   StockAdjustmentLine,
   StockMovement,
   SupplierLedgerEntry,
@@ -688,6 +689,7 @@ describe("salesSummary", () => {
       [],
       [expense],
       [],
+      new Set(),
     );
 
     expect(result.totals.totalExpensesKobo).toBe(0n);
@@ -763,10 +765,91 @@ describe("salesSummary", () => {
       [stockedProduct],
       [],
       [],
+      new Set(),
     );
 
     expect(result.totals.totalSupposedRevenueKobo).toBe(20000n);
     expect(result.totals.totalStandardRevenueKobo).toBe(20000n);
+  });
+
+  it("excludes reversed payments and payments before the requested period", () => {
+    const sale: Sale = {
+      id: "sale-report",
+      customerId: null,
+      customerName: "Walk-in",
+      createdById: "admin",
+      channel: "RETAIL",
+      status: "COMPLETED",
+      reference: "S-REPORT",
+      notes: null,
+      totalKobo: 5000n,
+      paidKobo: 5000n,
+      soldAt: new Date("2026-10-02T12:00:00.000Z"),
+      createdAt: baseDate,
+      updatedAt: baseDate,
+    };
+    const result = salesSummary(
+      new Date("2026-10-02T00:00:00.000Z"),
+      new Date("2026-10-03T00:00:00.000Z"),
+      [sale],
+      [],
+      [],
+      [],
+      [
+        {
+          id: "reversed-payment",
+          saleId: sale.id,
+          accountId: TEST_ACCOUNT_ID,
+          amountKobo: 3000n,
+          paidAt: new Date("2026-10-02T13:00:00.000Z"),
+          createdAt: baseDate,
+        },
+        {
+          id: "payment-before-range",
+          saleId: sale.id,
+          accountId: TEST_ACCOUNT_ID,
+          amountKobo: 2000n,
+          paidAt: new Date("2026-10-01T13:00:00.000Z"),
+          createdAt: baseDate,
+        },
+      ],
+      new Set(["reversed-payment"]),
+    );
+
+    // No cash was received in this period: the in-range payment was reversed,
+    // and the other payment belongs to the preceding period.
+    expect(result.totals.totalRevenueGottenKobo).toBe(0n);
+  });
+
+  it("does not infer receipt timing from a sale's current paid balance", () => {
+    const sale: Sale = {
+      id: "sale-report-no-payment-history",
+      customerId: "customer-1",
+      customerName: "Customer",
+      createdById: "admin",
+      channel: "RETAIL",
+      status: "COMPLETED",
+      reference: "S-REPORT-NO-PAYMENT-HISTORY",
+      notes: null,
+      totalKobo: 5000n,
+      paidKobo: 3000n,
+      soldAt: new Date("2026-10-02T12:00:00.000Z"),
+      createdAt: baseDate,
+      updatedAt: baseDate,
+    };
+
+    const result = salesSummary(
+      new Date("2026-10-02T00:00:00.000Z"),
+      new Date("2026-10-03T00:00:00.000Z"),
+      [sale],
+      [],
+      [],
+      [],
+      [],
+      new Set(),
+    );
+
+    expect(result.totals.totalRevenueGottenKobo).toBe(0n);
   });
 });
 

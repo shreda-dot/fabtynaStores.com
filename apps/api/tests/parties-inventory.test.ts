@@ -225,9 +225,7 @@ describe("customer and supplier APIs", () => {
     }));
   });
 
-  it("totals only overdue purchase balances in the overdue payable total", async () => {
-    const before = await call(h.app, "GET", "/payables");
-    expect(before.status).toBe(200);
+  it("keeps overdue payable balances separate from current purchase balances", async () => {
     const supplierName = `5A mixed payable ${newId("party")}`;
     const created = await call(h.app, "POST", "/suppliers", { name: supplierName });
     expect(created.status).toBe(201);
@@ -254,9 +252,21 @@ describe("customer and supplier APIs", () => {
     expect(overduePurchase.status).toBe(201);
     expect(currentPurchase.status).toBe(201);
 
-    const payables = await call(h.app, "GET", "/payables");
+    const payables = await call(
+      h.app,
+      "GET",
+      `/payables?q=${encodeURIComponent(supplierName)}`,
+    );
     expect(payables.status).toBe(200);
-    expect(BigInt(payables.body.grandTotalKobo) - BigInt(before.body.grandTotalKobo)).toBe(17000n);
-    expect(BigInt(payables.body.overdueTotalKobo) - BigInt(before.body.overdueTotalKobo)).toBe(12000n);
+    expect(payables.body.items).toHaveLength(1);
+    expect(payables.body.items[0].id).toBe(supplierId);
+    expect(payables.body.items[0].balanceKobo).toBe("17000");
+    const purchases = payables.body.items[0].purchases as Array<{
+      balanceDueKobo: string;
+      overdue: boolean;
+    }>;
+    expect(purchases.filter((purchase) => purchase.overdue)).toHaveLength(1);
+    expect(purchases.find((purchase) => purchase.overdue)?.balanceDueKobo).toBe("12000");
+    expect(purchases.find((purchase) => !purchase.overdue)?.balanceDueKobo).toBe("5000");
   });
 });

@@ -549,3 +549,38 @@ database.
 The focused `parties-inventory.test.ts` suite covers location-specific low-stock
 results and verifies that a supplier's non-overdue balance is excluded from
 `overdueTotalKobo`.
+
+## 10. Read-only report APIs
+
+The reports slice adds no tables, columns, indexes, or migrations:
+
+- `GET /reports/sales-summary` and `/reports/dashboard` use the shared
+  `salesSummary` domain calculation. Supposed revenue is non-voided sale
+  totals on `soldAt`; gotten revenue is immutable `sale_payments` on `paidAt`.
+  Reversed payments are excluded, and a payment's amount is never inferred
+  from the current `sales.paidKobo` balance.
+- `GET /reports/product-sales` groups live sale lines by product. Its billed
+  revenue is line totals (not cash collected), and its COGS uses the sale-line
+  cost snapshot.
+- `GET /reports/money-flow` uses account ledger dates and cached
+  `account_balances`-consistent entries. Transfer totals are reported
+  separately; `SALE_PAYMENT` and `CUSTOMER_PAYMENT` entries are both included
+  in sales collections. Reversals are negative entries on their own date.
+- `GET /reports/financial-position` is a current-state view: account balances
+  provide cash, customer/supplier/loan ledgers provide receivables and
+  liabilities, and `stock_balances` provides current inventory. It does not
+  read `cash_snapshots`. MARKET stock is valued with retail/shelf units, and
+  loose warehouse units are valued pro rata by the shared accounting domain.
+
+Date-range endpoints default to the current Lagos business date and enforce the
+configured inclusive maximum (366 days by default). In a focused test-DB run,
+non-empty request statement counts were sales summary 6, dashboard 7, product
+sales 1, Money Flow 5 (6 if expense details are loaded), and financial position
+6. Row counts and elapsed time vary with accumulated data. The latest measured
+request returned 58 summary rows, 2,934 dashboard rows, 14 product-sales rows,
+10 Money Flow rows, and 3,607 financial-position rows, with approximate elapsed
+times of 1.1 s, 2.5 s, 0.3 s, 1.8 s, and 2.3 s. EXPLAIN ANALYZE aggregated
+2,845 current product rows; the product-sales, current-stock, financial-stock,
+and receivables queries took 0.59 ms, 5.87 ms, 3.31 ms, and 0.48 ms
+respectively. No index change was justified by those plans. Focused coverage is
+`apps/api/tests/reports.test.ts`. The web's real report client is not wired yet.

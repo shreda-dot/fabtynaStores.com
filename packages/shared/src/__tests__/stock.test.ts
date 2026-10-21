@@ -7,6 +7,7 @@ import {
   formatStockUnits,
   splitStockIntoPacks,
   stockWorthAtWholesale,
+  stockWorthByChannel,
   validateAdjustmentLine,
 } from "../domain/stock.ts";
 
@@ -57,6 +58,32 @@ describe("stock levels from movements", () => {
         { id: "product", unitsPerPack: 3, wholesalePriceKobo: 100n },
       ),
     ).toBe(166n);
+  });
+
+  it("values loose warehouse units pro rata in wholesale channel stock value", () => {
+    const movements = [{
+      id: "movement",
+      productId: "product",
+      location: "WAREHOUSE" as const,
+      type: "PURCHASE" as const,
+      quantityUnits: 5,
+      unitCostKobo: 0n,
+      purchaseLineId: null,
+      saleLineId: null,
+      transferLegId: null,
+      adjustmentLineId: null,
+      returnLineId: null,
+      reversesEntryId: null,
+      occurredAt: new Date(0),
+      createdAt: new Date(0),
+    }];
+    expect(stockWorthByChannel(movements, {
+      id: "product",
+      unitsPerPack: 3,
+      retailPriceKobo: 0n,
+      wholesalePriceKobo: 100n,
+      saleChannel: "BOTH",
+    })).toEqual({ retailKobo: 0n, wholesaleKobo: 166n, totalKobo: 166n });
   });
 });
 

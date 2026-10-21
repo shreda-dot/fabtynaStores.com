@@ -80,6 +80,14 @@ export const reportsMockApi: ReportsApi = {
       store.products,
       store.expenses,
       store.salePayments,
+      new Set(
+        store.accountLedgerEntries
+          .filter((entry) => entry.reversesEntryId !== null)
+          .map((reversal) => store.accountLedgerEntries.find(
+            (entry) => entry.id === reversal.reversesEntryId,
+          )?.salePaymentId)
+          .filter((paymentId): paymentId is string => paymentId !== null && paymentId !== undefined),
+      ),
     );
     return toDto(result);
   },

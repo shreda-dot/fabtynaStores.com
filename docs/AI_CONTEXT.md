@@ -196,8 +196,31 @@ must print "-- This is an empty migration." and exit 0.
 - A sale can be voided/amended after all later on-account payments are reversed;
   a purchase can be voided/amended after all supplier payments are reversed.
   Up-front sale payments are reversed as part of sale void/amend.
-- Tests: see the Sales API second-batch bullet below for the current counts
-  (earlier: 122 API tests in 11 files, 224 shared).
+- **Read-only reports API (5B initial slice).** The API exposes
+  `GET /reports/sales-summary`, `/dashboard`, `/product-sales`, `/money-flow`,
+  and `/financial-position`. Supposed revenue is the total on non-voided sales
+  by `soldAt`; gotten revenue is live `sale_payments` by `paidAt`, with
+  reversed payments excluded rather than reassigned to the reversal date.
+  Money Flow is ledger-dated, so a payment reversal appears as an outflow on
+  its own date. Current position uses account balances and ledger-derived
+  receivables/payables/loans plus current stock; cash snapshots are not read.
+  MARKET stock is included with retail/shelf units, and loose warehouse units
+  are valued pro rata. The dashboard compares today with yesterday and reports
+  stock worth as of now.
+- Report reads are covered by `apps/api/tests/reports.test.ts`. Measured
+  statement counts with non-empty test data: sales summary **6**, dashboard
+  **7**, product sales **1**, Money Flow **5** (or **6** when expense-category
+  details are fetched), and financial position **6**. In the latest focused
+  shared-test-DB run, representative returned-row totals were **58**, **2,934**,
+  **14**, **10**, and **3,607**; these include accumulated test data and are
+  not per-customer guarantees. The same run's request elapsed times were about
+  **1.1 s**, **2.5 s**, **0.3 s**, **1.8 s**, and **2.3 s**. EXPLAIN ANALYZE
+  scanned/aggregated **2,845** current products; product-sales, current-stock,
+  financial-position stock, and ledger-receivables query times were respectively
+  **0.59 ms**, **5.87 ms**, **3.31 ms**, and **0.48 ms**
+  (database plan time, not HTTP latency). No index was added.
+- Tests: the current API/shared test counts are listed in the second-batch
+  bullet below; the older 122 API / 224 shared counts are historical.
   `db:verify` also checks `sale_reference_seq`, `purchase_reference_seq`,
   `transfer_reference_seq`, and the `idempotency_keys`
   indexes (`EXPECTED_SEQUENCES`, `EXPECTED_INDEXES`).
@@ -426,21 +449,26 @@ must print "-- This is an empty migration." and exit 0.
 - **Measured statement counts (new endpoints):** loan create **6**, loan charge
   **4**, loan repayment **10**, transfer create **9**, adjustment create **8**,
   adjustment void **10** (test DB, no Idempotency-Key replay path).
-- Tests: `apps/api/tests` = 24 files (**220** tests, need the test DB);
-  `packages/shared/src/__tests__` = 9 files (**227** tests, no DB). New purchase
+- Tests: `apps/api/tests` = 25 files (**226** tests, need the test DB);
+  `packages/shared/src/__tests__` = 9 files (**231** tests, no DB). New purchase
   files: `purchases-receive`, `purchases-lifecycle`, `purchases-list`,
   `purchases-concurrency` (10 iterations each: two purchases of one product,
   two payments from an account that can afford one, two voids). The
   "audit-clean" tests in `sales-concurrency.test.ts` ignore `severity: known`
   checks (paid supplier-less purchases are an intended exception). API test
   files run with Vitest's default file parallelism against the direct Neon test
-  endpoint. The last `pnpm verify`
-  passed typecheck, lint, and shared tests (227/227), but the API suite lost
-  Neon DNS connectivity (`ENOTFOUND`) and failed with cascading connection
-  errors (3 failed, 142 passed, 74 skipped); the build stage did not run.
-  The focused 5A API test passed after the query fix (7/7). `db:verify` and
-  `db:audit` then passed for both `fabtyna_dev` and `fabtyna_test`, with zero
-  audit rows.
+  endpoint. The latest `pnpm verify` passed typecheck, lint, and shared tests
+  (231/231), but the API suite had 5 failures (221/226): remote-database
+  timeouts/503s under concurrent API test files. A financial-position
+  assertion that compared global cash across concurrent writes was also found
+  and changed to assert stable response shape plus local account/stock state;
+  the focused reports suite passes (6/6) after that correction. The payable
+  test's global-delta race was likewise scoped to its own supplier. The root
+  verification stopped before its build stage, but the API TypeScript build
+  and web production build passed separately. After the final focused tests,
+  `db:verify` matched `expected-schema.ts` on both `fabtyna_dev` and
+  `fabtyna_test` (31 migrations each), and `db:audit` returned zero rows on
+  both.
 - `apps/api` has no sign-in endpoint.
   Loan repayment reversal remains unimplemented: a mistaken repayment cannot
   yet be corrected through the UI. Until a reversal operation is built, payment
@@ -458,6 +486,8 @@ must print "-- This is an empty migration." and exit 0.
   `lib/api/index.ts` selects `*MockApi` unless `NEXT_PUBLIC_API_MODE=real`;
   every `*RealApi` stub throws `"not implemented"`. The mock store persists to
   localStorage key `fabtyna-mock-v1`; `resetDemoData` resets it.
+- The 5B report endpoints are API-only so far. The real web report client has
+  not been connected; the mock client currently implements sales summary only.
 - Latest focused checks in this session: `accounts-gate.test.ts`,
   `loans-api.test.ts`, `stock-operations.test.ts`, and the sales pagination
   case all pass on the test DB; pagination now passes under the default 30 s
@@ -522,6 +552,11 @@ known operation gap above.
   and DB trigger, while the approved accounts design treats it as source-less.
   Only `OTHER_INCOME` was changed to source-less in this pass; manual customer
   refunds remain unavailable until the owner resolves that mismatch.
+- `salesSummary` intentionally does not infer cash receipt dates from a
+  document's current `paidKobo`; it needs the immutable payment history. This
+  avoids assigning a later payment or a payment from outside the selected
+  period to the original sale date. Legacy mock records with a paid balance but
+  no `salePayments` history therefore contribute no dated cash receipt.
 
 ## 7. How to work with the owner
 

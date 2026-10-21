@@ -1834,9 +1834,9 @@ export function salesSummary(
   existingSales: readonly Sale[],
   existingSaleLines: readonly SaleLine[],
   existingProducts: readonly Product[],
-  existingExpenses: readonly Expense[] = [],
-  existingSalePayments: readonly SalePayment[] = [],
-  reversedSalePayments: ReadonlySet<string> = new Set(),
+  existingExpenses: readonly Expense[],
+  existingSalePayments: readonly SalePayment[],
+  reversedSalePayments: ReadonlySet<string>,
 ): SalesSummaryResult {
   if (from.getTime() > to.getTime()) {
     throw new RangeError("From date must be on or before to date.");
@@ -1931,9 +1931,7 @@ export function salesSummary(
     if (reversedSalePayments.has(payment.id)) {
       continue;
     }
-    if (
-      payment.paidAt.getTime() >= to.getTime()
-    ) {
+    if (payment.paidAt.getTime() < from.getTime() || payment.paidAt.getTime() >= to.getTime()) {
       continue;
     }
     const sale = salesById.get(payment.saleId);
@@ -1955,30 +1953,6 @@ export function salesSummary(
       day.wholesaleRevenueKobo += payment.amountKobo;
     }
     days.set(date, day);
-  }
-
-  const paymentsBySale = new Map<string, SalePayment[]>();
-  for (const payment of existingSalePayments) {
-    const list = paymentsBySale.get(payment.saleId) ?? [];
-    list.push(payment);
-    paymentsBySale.set(payment.saleId, list);
-  }
-  for (const sale of eligible) {
-    const payments = paymentsBySale.get(sale.id) ?? [];
-    if (payments.length === 0 && sale.paidKobo > 0n) {
-      const date = getLagosBusinessDate(sale.soldAt);
-      const day = days.get(date) ?? emptyDay(date);
-      day.totalRevenueGottenKobo += sale.paidKobo;
-      day.totalRevenueKobo += sale.paidKobo;
-      if (sale.channel === "RETAIL") {
-        day.retailRevenueGottenKobo += sale.paidKobo;
-        day.retailRevenueKobo += sale.paidKobo;
-      } else {
-        day.wholesaleRevenueGottenKobo += sale.paidKobo;
-        day.wholesaleRevenueKobo += sale.paidKobo;
-      }
-      days.set(date, day);
-    }
   }
 
   for (const expense of existingExpenses) {

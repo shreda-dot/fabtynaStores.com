@@ -25,6 +25,8 @@ import { createProductsService } from "./modules/products/products.service.js";
 import { registerInventoryRoutes } from "./modules/stock/inventory.routes.js";
 import { registerPartiesRoutes } from "./modules/parties/parties.routes.js";
 import { createPartiesService } from "./modules/parties/parties.service.js";
+import { registerReportsRoutes } from "./modules/reports/reports.routes.js";
+import { createReportsService } from "./modules/reports/reports.service.js";
 
 export interface BuildAppOptions {
   prisma: PrismaClient;
@@ -136,6 +138,13 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     log,
   });
   registerAdjustmentsRoutes(app, { service: adjustmentsService, resolveActor: options.resolveActor });
+
+  const reportsService = createReportsService({
+    prisma: options.prisma,
+    now: options.now,
+    maxDateRangeDays: options.maxDateRangeDays,
+  });
+  registerReportsRoutes(app, { service: reportsService, resolveActor: options.resolveActor });
 
   app.setNotFoundHandler((request, reply) => {
     const error = new AppError(404, "NOT_FOUND", "Route not found.", {

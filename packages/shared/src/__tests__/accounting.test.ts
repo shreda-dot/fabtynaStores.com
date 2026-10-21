@@ -787,6 +787,29 @@ describe("computeFinancialPosition", () => {
     expect(result.scenarios.FLOOR.stockValueKobo).toBe(300n);
   });
 
+  it("values loose warehouse units pro rata in EXPECTED", () => {
+    const result = computeFinancialPosition({
+      todayLagosDate: "2026-10-01",
+      products: [{
+        productId: "loose-warehouse-stock",
+        warehousePacks: 1,
+        warehouseLooseUnits: 2,
+        fridgeUnits: 0,
+        packSizeUnits: 3,
+        retailPriceKobo: 150n,
+        wholesalePriceKobo: 100n,
+        averageCostKobo: 50n,
+      }],
+      receivablesKobo: 0n,
+      cashKobo: 0n,
+      supplierPayablesKobo: 0n,
+      loansOutstandingKobo: 0n,
+    });
+
+    // One full pack is 100kobo; two loose units are floor(2*100/3)=66kobo.
+    expect(result.scenarios.EXPECTED.stockValueKobo).toBe(166n);
+  });
+
   it("classifies obligation urgency", () => {
     const result = computeFinancialPosition({
       ...baseInput,

@@ -233,10 +233,10 @@ function stockValueForScenario(
 
     if (scenario === "EXPECTED") {
       // Whole warehouse packs fetch the wholesale (per-crate) price; shelf
-      // units fetch retail. Loose warehouse units have no whole-pack price
-      // and are excluded from this scenario.
+      // units fetch retail. Loose warehouse units are valued pro rata.
       raw +=
         BigInt(packs) * product.wholesalePriceKobo +
+        (BigInt(loose) * product.wholesalePriceKobo) / BigInt(product.packSizeUnits) +
         BigInt(fridge) * product.retailPriceKobo;
     } else if (scenario === "BEST") {
       raw += BigInt(warehouseUnits + fridge) * product.retailPriceKobo;

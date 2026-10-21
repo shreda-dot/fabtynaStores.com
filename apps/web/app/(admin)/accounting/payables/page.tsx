@@ -1,7 +1,13 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   ChevronDown,
   FileText,
@@ -24,16 +30,22 @@ import { Card, CardBody } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { FormField } from "@/components/ui/form-field";
-import { Select, Textarea } from "@/components/ui/input";
+import { Input, Select, Textarea } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { accountingApi, payablesApi, purchasesApi } from "@/lib/api";
-import type { PayableLineDto } from "@/lib/api/payables.api";
+import { accountingApi, payablesApi } from "@/lib/api";
+import type {
+  PayableLineDto,
+  PayablesPage,
+  SupplierPayableDto,
+} from "@/lib/api/payables.api";
 import { toUserMessage } from "@/lib/api/client";
+import { createIdempotencyIntent, type IdempotencyIntent } from "@/lib/api/idempotency-intent";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 
@@ -56,16 +68,30 @@ export default function PayablesPage() {
   const queryClient = useQueryClient();
   const network = useNetworkStatus();
   const businessDate = useLagosBusinessDate();
+  const [search, setSearch] = useState("");
+  const [overdueOnly, setOverdueOnly] = useState(false);
+  const debouncedSearch = useDebouncedValue(search, 250);
 
-  const payablesQuery = useQuery({
-    queryKey: queryKeys.payables.outstanding,
-    queryFn: () => payablesApi.listOutstanding(),
+  const payablesQuery = useInfiniteQuery({
+    queryKey: queryKeys.payables.list(debouncedSearch, overdueOnly),
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }): Promise<PayablesPage> => {
+      const result = await payablesApi.listOutstanding({
+        search: debouncedSearch,
+        overdueOnly,
+        cursor: pageParam,
+      });
+      if (!Array.isArray(result)) return result;
+      return {
+        items: result,
+        grandTotalKobo: result.reduce((sum, group) => sum + BigInt(group.balanceKobo), 0n).toString(),
+        overdueTotalKobo: result.reduce((sum, group) => sum + BigInt(group.overdueKobo), 0n).toString(),
+        nextCursor: null,
+      };
+    },
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    placeholderData: keepPreviousData,
   });
-  const accountsQuery = useQuery({
-    queryKey: queryKeys.accounting.accounts,
-    queryFn: () => accountingApi.listAccounts(),
-  });
-
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [payingPurchaseId, setPayingPurchaseId] = useState<string | null>(null);
   const [paymentKobo, setPaymentKobo] = useState("");
@@ -75,6 +101,13 @@ export default function PayablesPage() {
   const [paymentNote, setPaymentNote] = useState("");
   const [paymentError, setPaymentError] = useState("");
   const submitting = useRef(false);
+  const paymentIntents = useRef(new Map<string, IdempotencyIntent>());
+
+  const accountsQuery = useQuery({
+    queryKey: queryKeys.accounting.accounts,
+    queryFn: () => accountingApi.listPaymentAccounts(),
+    enabled: payingPurchaseId !== null,
+  });
 
   const payMutation = useMutation({
     mutationFn: (input: {
@@ -84,16 +117,21 @@ export default function PayablesPage() {
       method: PaymentMethod;
       accountId: string;
       note: string | null;
+      key: string;
     }) =>
-      purchasesApi.recordPayment(
+      payablesApi.recordPayment(
         input.purchaseId,
         input.amountKobo,
         input.paidAt,
         input.method,
         input.accountId,
         input.note ?? undefined,
+        input.key,
       ),
-    onSuccess: () => {
+    onSuccess: (_data, input) => {
+      const intent = paymentIntents.current.get(input.purchaseId);
+      intent?.markSucceeded();
+      paymentIntents.current.delete(input.purchaseId);
       void queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
@@ -118,6 +156,7 @@ export default function PayablesPage() {
   }
 
   function startPayment(line: PayableLineDto) {
+    paymentIntents.current.set(line.purchaseId, createIdempotencyIntent());
     setPayingPurchaseId(line.purchaseId);
     setPaymentKobo(line.balanceKobo);
     setPaymentMethod("CASH");
@@ -128,6 +167,7 @@ export default function PayablesPage() {
   }
 
   function cancelPayment() {
+    if (payingPurchaseId) paymentIntents.current.delete(payingPurchaseId);
     setPayingPurchaseId(null);
     setPaymentError("");
   }
@@ -153,14 +193,14 @@ export default function PayablesPage() {
       );
       return;
     }
+    if (accountsQuery.isError) {
+      setPaymentError(`Accounts could not be loaded: ${toUserMessage(accountsQuery.error)}`);
+      return;
+    }
     const selectedAccountId =
       accountId || defaultAccountId(accountsQuery.data ?? [], paymentMethod);
     if (selectedAccountId === "") {
       setPaymentError("Add an active account before recording this payment.");
-      return;
-    }
-    if (accountsQuery.isError) {
-      setPaymentError(`Accounts could not be loaded: ${toUserMessage(accountsQuery.error)}`);
       return;
     }
     if (paymentDate === "") {
@@ -206,6 +246,12 @@ export default function PayablesPage() {
             method: paymentMethod,
             accountId: selectedAccountId,
             note: paymentNote.trim() === "" ? null : paymentNote.trim(),
+            key: paymentIntents.current.get(line.purchaseId)?.getKey() ??
+              (() => {
+                const intent = createIdempotencyIntent();
+                paymentIntents.current.set(line.purchaseId, intent);
+                return intent.getKey();
+              })(),
           }),
       });
     } finally {
@@ -213,11 +259,16 @@ export default function PayablesPage() {
     }
   }
 
-  const groups = payablesQuery.data ?? [];
-  const totalOwed = groups.reduce((sum, g) => sum + BigInt(g.balanceKobo), 0n);
-  const totalOverdue = groups.reduce(
-    (sum, g) => sum + BigInt(g.overdueKobo),
-    0n,
+  const groups: SupplierPayableDto[] =
+    payablesQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const pageTotals = payablesQuery.data?.pages[0];
+  const totalOwed = BigInt(
+    pageTotals?.grandTotalKobo ??
+      groups.reduce((sum, group) => sum + BigInt(group.balanceKobo), 0n),
+  );
+  const totalOverdue = BigInt(
+    pageTotals?.overdueTotalKobo ??
+      groups.reduce((sum, group) => sum + BigInt(group.overdueKobo), 0n),
   );
 
   return (
@@ -267,6 +318,27 @@ export default function PayablesPage() {
         />
       </div>
 
+      <Card>
+        <CardBody className="grid gap-3 sm:grid-cols-2">
+          <Input
+            type="search"
+            aria-label="Search suppliers"
+            placeholder="Search suppliers"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+          <label className="flex min-h-11 items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={overdueOnly}
+              onChange={(event) => setOverdueOnly(event.target.checked)}
+              className="h-4 w-4 rounded border-input accent-primary"
+            />
+            Overdue only
+          </label>
+        </CardBody>
+      </Card>
+
       {payablesQuery.isPending ? (
         <Skeleton variant="row" count={4} />
       ) : payablesQuery.isError ? (
@@ -278,8 +350,20 @@ export default function PayablesPage() {
       ) : groups.length === 0 ? (
         <EmptyState
           icon={HandCoins}
-          title="Nothing owed to suppliers"
-          description="Every purchase on record is fully paid."
+          title={
+            overdueOnly
+              ? "No overdue payables"
+              : search.trim()
+                ? "No matching payables"
+                : "Nothing owed to suppliers"
+          }
+          description={
+            overdueOnly
+              ? "No outstanding purchase is past its due date."
+              : search.trim()
+                ? "Try a different supplier name."
+                : "Every purchase on record is fully paid."
+          }
           action={
             <Link
               href="/purchases"
@@ -357,9 +441,16 @@ export default function PayablesPage() {
                                   ? ` · due ${formatLagosDate(line.dueDate)}`
                                   : ""}
                               </p>
-                              <p className="mt-1 text-sm text-muted-foreground">
-                                {line.itemsSummary}
-                              </p>
+                              {line.itemsSummary && (
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                  {line.itemsSummary}
+                                </p>
+                              )}
+                              {!line.itemsSummary && (
+                                <Link href={`/purchases/${line.purchaseId}`} className="mt-1 inline-block text-sm text-primary hover:underline">
+                                  View purchase details
+                                </Link>
+                              )}
                             </div>
                             <div className="text-right text-sm">
                               <p className="font-medium text-foreground">
@@ -383,7 +474,10 @@ export default function PayablesPage() {
                                 id={`pay-${line.purchaseId}`}
                                 label="Payment amount"
                                 defaultValueKobo={line.balanceKobo}
-                                onKoboChange={setPaymentKobo}
+                                onKoboChange={(value) => {
+                                  setPaymentKobo(value);
+                                  paymentIntents.current.get(line.purchaseId)?.reset();
+                                }}
                               />
                               <div className="grid gap-3 sm:grid-cols-2">
                                 <FormField
@@ -394,9 +488,10 @@ export default function PayablesPage() {
                                     id={`pay-method-${line.purchaseId}`}
                                     value={paymentMethod}
                                     onChange={(event) =>
-                                      setPaymentMethod(
-                                        event.target.value as PaymentMethod,
-                                      )
+                                      {
+                                        setPaymentMethod(event.target.value as PaymentMethod);
+                                        paymentIntents.current.get(line.purchaseId)?.reset();
+                                      }
                                     }
                                   >
                                     {PAYMENT_METHODS.map((method) => (
@@ -414,7 +509,10 @@ export default function PayablesPage() {
                                   label="Paid from"
                                   accounts={accountsQuery.data ?? []}
                                   accountId={accountId}
-                                  onChange={setAccountId}
+                                  onChange={(value) => {
+                                    setAccountId(value);
+                                    paymentIntents.current.get(line.purchaseId)?.reset();
+                                  }}
                                   method={paymentMethod}
                                   disabled={accountsQuery.isPending || accountsQuery.isError}
                                 />
@@ -422,7 +520,10 @@ export default function PayablesPage() {
                                   id={`pay-date-${line.purchaseId}`}
                                   label="Date paid"
                                   value={paymentDate}
-                                  onChange={setPaymentDate}
+                                  onChange={(value) => {
+                                    setPaymentDate(value);
+                                    paymentIntents.current.get(line.purchaseId)?.reset();
+                                  }}
                                   max={businessDate}
                                 />
                               </div>
@@ -435,11 +536,19 @@ export default function PayablesPage() {
                                   rows={2}
                                   value={paymentNote}
                                   onChange={(event) =>
-                                    setPaymentNote(event.target.value)
+                                    {
+                                      setPaymentNote(event.target.value);
+                                      paymentIntents.current.get(line.purchaseId)?.reset();
+                                    }
                                   }
                                 />
                               </FormField>
 
+                              {accountsQuery.isError && (
+                                <p role="alert" className="text-sm text-danger">
+                                  Accounts could not be loaded: {toUserMessage(accountsQuery.error)}
+                                </p>
+                              )}
                               {paymentError && (
                                 <p role="alert" className="text-sm text-danger">
                                   {paymentError}
@@ -463,7 +572,11 @@ export default function PayablesPage() {
                                     void submitPayment(line, group.supplierName)
                                   }
                                   loading={payMutation.isPending}
-                                  disabled={network.offline}
+                                  disabled={
+                                    network.offline ||
+                                    accountsQuery.isPending ||
+                                    accountsQuery.isError
+                                  }
                                 >
                                   <HandCoins
                                     aria-hidden="true"
@@ -497,6 +610,17 @@ export default function PayablesPage() {
               </Card>
             );
           })}
+          {payablesQuery.hasNextPage && (
+            <div className="flex justify-center">
+              <Button
+                variant="secondary"
+                disabled={payablesQuery.isFetchingNextPage}
+                onClick={() => void payablesQuery.fetchNextPage()}
+              >
+                {payablesQuery.isFetchingNextPage ? "Loading…" : "Load more"}
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>

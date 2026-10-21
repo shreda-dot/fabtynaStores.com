@@ -1,6 +1,7 @@
 import {
   createCustomerDtoSchema,
   fromAuditLogDto,
+  getLagosBusinessDate,
   toAuditLogDto,
   toCustomerDto,
   toCustomerLedgerEntryDto,
@@ -13,6 +14,7 @@ import type {
   CustomersApi,
   CustomerDetailDto,
   CustomerListOptions,
+  CustomerStatementOptions,
 } from "./customers.api";
 import { newId, readMockStore, transactMockStore } from "./mock-store";
 import { mockDelay } from "./mock-transport";
@@ -77,10 +79,17 @@ function audit(
 export const customersMockApi: CustomersApi = {
   async list(options: CustomerListOptions = {}) {
     await delay();
+    const store = readMockStore();
     const search = options.search?.trim().toLocaleLowerCase() ?? "";
-    const rows = readMockStore().customers.filter((customer) => {
+    const rows = store.customers.filter((customer) => {
       if (!options.includeDeleted && customer.deletedAt !== null) return false;
       if (options.includeDeleted && customer.deletedAt === null) return false;
+      const balance = store.customerLedgerEntries
+        .filter((entry) => entry.customerId === customer.id)
+        .reduce((sum, entry) => sum + entry.amountKobo, 0n);
+      if (options.withBalance === true && balance <= 0n) return false;
+      if (options.withBalance === false && balance > 0n) return false;
+      if (options.type && customer.type !== options.type) return false;
       if (!search) return true;
       return (
         customer.name.toLocaleLowerCase().includes(search) ||
@@ -88,7 +97,20 @@ export const customersMockApi: CustomersApi = {
         customer.email?.toLocaleLowerCase().includes(search) === true
       );
     });
-    return jsonClone(rows.map(toCustomerDto));
+    return jsonClone(
+      rows.map((customer) => ({
+        ...toCustomerDto(customer),
+        active: customer.deletedAt === null,
+        balanceKobo: store.customerLedgerEntries
+          .filter((entry) => entry.customerId === customer.id)
+          .reduce((sum, entry) => sum + entry.amountKobo, 0n)
+          .toString(),
+      })),
+    );
+  },
+  async listPage(options: CustomerListOptions = {}) {
+    const items = await customersMockApi.list(options);
+    return jsonClone({ items, nextCursor: null });
   },
 
   async getById(id) {
@@ -105,13 +127,87 @@ export const customersMockApi: CustomersApi = {
       (sum, entry) => sum + entry.amountKobo,
       0n,
     );
+    const today = getLagosBusinessDate();
+    const dayNumber = (value: string) => {
+      const [year, month, day] = value.split("-").map(Number);
+      return Date.UTC(year, month - 1, day);
+    };
     const detail: CustomerDetailDto = {
-      ...toCustomerDto(customer),
-      ledgerEntries: jsonClone(ledgerEntries.map(toCustomerLedgerEntryDto)),
-      sales: jsonClone(sales.map(toSaleDto)),
+      customer: {
+        ...toCustomerDto(customer),
+        active: customer.deletedAt === null,
+      },
       balanceOwedKobo: balanceOwedKobo.toString(),
+      unpaidSales: sales
+        .filter((sale) => sale.status !== "VOIDED" && sale.totalKobo > sale.paidKobo)
+        .map((sale) => ({
+          id: sale.id,
+          reference: sale.reference,
+          soldAt: sale.soldAt.toISOString(),
+          totalKobo: sale.totalKobo.toString(),
+          paidKobo: sale.paidKobo.toString(),
+          balanceDueKobo: (sale.totalKobo - sale.paidKobo).toString(),
+          daysOutstanding: Math.max(
+            0,
+            (dayNumber(today) - dayNumber(getLagosBusinessDate(sale.soldAt))) /
+              86_400_000,
+          ),
+          linesSummary: store.saleLines
+            .filter((line) => line.saleId === sale.id)
+            .map((line) => ({
+              productName:
+                store.products.find((product) => product.id === line.productId)?.name ??
+                line.productId,
+              quantity: String(line.quantity),
+              unit: line.unit,
+            })),
+        })),
+      recentSales: sales.slice(0, 10).map((sale) => {
+        const dto = toSaleDto(sale);
+        return {
+          id: dto.id,
+          reference: dto.reference,
+          status: dto.status,
+          totalKobo: dto.totalKobo,
+          paidKobo: dto.paidKobo,
+          soldAt: dto.soldAt,
+        };
+      }),
     };
     return jsonClone(detail);
+  },
+
+  async getStatement(id, options: CustomerStatementOptions = {}) {
+    await delay();
+    const store = readMockStore();
+    const customer = findCustomer(store.customers, id);
+    const entries = store.customerLedgerEntries
+      .filter((entry) => entry.customerId === id)
+      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+    let runningBalance = 0n;
+    const mapped = entries.map((entry) => {
+      runningBalance += entry.amountKobo;
+      const dto = toCustomerLedgerEntryDto(entry);
+      const reversedBy = entries.find((candidate) => candidate.reversesEntryId === entry.id);
+      return {
+        ...dto,
+        sourceDescription:
+          entry.saleId === null ? entry.note ?? entry.type : "Sale",
+        isReversal: entry.reversesEntryId !== null,
+        reversesEntryId: entry.reversesEntryId,
+        reversedByEntryId: reversedBy?.id ?? null,
+        runningBalanceKobo: runningBalance.toString(),
+      };
+    });
+    return jsonClone({
+      party: { id: customer.id, name: customer.name },
+      from: options.from ?? "",
+      to: options.to ?? getLagosBusinessDate(),
+      openingBalanceKobo: "0",
+      closingBalanceKobo: runningBalance.toString(),
+      entries: mapped,
+      nextCursor: null,
+    });
   },
 
   async create(input) {

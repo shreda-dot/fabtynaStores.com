@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   keepPreviousData,
+  useInfiniteQuery,
   useMutation,
-  useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
 import { Plus, Search, Truck } from "lucide-react";
-import type { CreateSupplierDto, SupplierDto } from "@fabtyna/shared";
+import Link from "next/link";
+import type { CreateSupplierDto } from "@fabtyna/shared";
 import { SupplierForm } from "@/components/suppliers/supplier-form";
 import {
   ResponsiveTable,
@@ -19,13 +20,23 @@ import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
-import { Input } from "@/components/ui/input";
+import { Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { suppliersApi } from "@/lib/api";
-import { toTechnicalDetail, toUserMessage } from "@/lib/api/client";
+import {
+  apiFieldErrors,
+  toTechnicalDetail,
+  toUserMessage,
+} from "@/lib/api/client";
+import { createIdempotencyIntent, type IdempotencyIntent } from "@/lib/api/idempotency-intent";
+import type {
+  SupplierFormDto,
+  SupplierListItemDto,
+} from "@/lib/api/suppliers.api";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
@@ -34,152 +45,184 @@ import { useUIStore } from "@/stores/ui-store";
 export default function SuppliersPage() {
   const queryClient = useQueryClient();
   const search = useUIStore((state) => state.filters.suppliersSearch);
-  const showDeleted = useUIStore((state) => state.filters.suppliersShowDeleted);
+  const showInactive = useUIStore((state) => state.filters.suppliersShowDeleted);
   const setFilter = useUIStore((state) => state.setFilter);
-
+  const [balanceFilter, setBalanceFilter] = useState<"all" | "with" | "without">("all");
   const [formOpen, setFormOpen] = useState(false);
-  const [editingSupplier, setEditingSupplier] = useState<SupplierDto>();
-
+  const [editingSupplier, setEditingSupplier] = useState<SupplierFormDto>();
+  const [loadingEdit, setLoadingEdit] = useState(false);
+  const saveIntent = useRef(createIdempotencyIntent());
+  const actionIntents = useRef(new Map<string, IdempotencyIntent>());
   const debouncedSearch = useDebouncedValue(search, 250);
 
-  const suppliers = useQuery({
-    queryKey: queryKeys.suppliers.list(debouncedSearch, showDeleted),
-    queryFn: () =>
-      suppliersApi.list({ search: debouncedSearch, includeDeleted: showDeleted }),
+  const suppliers = useInfiniteQuery({
+    queryKey: queryKeys.suppliers.list(debouncedSearch, showInactive, balanceFilter),
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
+      return suppliersApi.listPage({
+        search: debouncedSearch,
+        includeDeleted: showInactive,
+        withBalance: balanceFilter === "all" ? undefined : balanceFilter === "with",
+        cursor: pageParam,
+      });
+    },
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     placeholderData: keepPreviousData,
   });
+  const supplierRows = suppliers.data?.pages.flatMap((page) => page.items) ?? [];
 
   const saveMutation = useMutation({
-    mutationFn: ({ id, input }: { id?: string; input: CreateSupplierDto }) =>
-      id ? suppliersApi.update(id, input) : suppliersApi.create(input),
+    mutationFn: ({
+      id,
+      input,
+      key,
+    }: {
+      id?: string;
+      input: CreateSupplierDto;
+      key: string;
+    }) =>
+      id
+        ? suppliersApi.update(id, input, key)
+        : suppliersApi.create(input, key),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
+      saveIntent.current.markSucceeded();
       closeForm();
     },
   });
-
   const actionMutation = useMutation({
-    mutationFn: ({ action, id }: { action: "delete" | "restore"; id: string }) =>
-      action === "delete" ? suppliersApi.softDelete(id) : suppliersApi.restore(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all }),
+    mutationFn: ({
+      action,
+      id,
+      key,
+    }: {
+      action: "deactivate" | "reactivate";
+      id: string;
+      key: string;
+    }) =>
+      action === "deactivate"
+        ? suppliersApi.softDelete(id, key)
+        : suppliersApi.restore(id, key),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all }),
   });
 
   function closeForm() {
     setFormOpen(false);
     setEditingSupplier(undefined);
     saveMutation.reset();
+    saveIntent.current.reset();
   }
 
   function openCreate() {
     setEditingSupplier(undefined);
     saveMutation.reset();
+    saveIntent.current.reset();
     setFormOpen(true);
   }
 
-  function openEdit(supplier: SupplierDto) {
-    setEditingSupplier(supplier);
-    saveMutation.reset();
-    setFormOpen(true);
-  }
-
-  async function save(input: CreateSupplierDto) {
-    await saveMutation.mutateAsync({ id: editingSupplier?.id, input });
-  }
-
-  async function runAction(action: "delete" | "restore", supplier: SupplierDto) {
-    const isDelete = action === "delete";
-    const ok = await confirm({
-      title: isDelete ? `Delete ${supplier.name}?` : `Restore ${supplier.name}?`,
-      description: isDelete
-        ? "The supplier will be hidden from lists and can be restored later."
-        : "The supplier will appear in the supplier list again.",
-      confirmLabel: isDelete ? "Delete supplier" : "Restore",
-      tone: isDelete ? "danger" : "normal",
-    });
-    if (!ok) return;
+  async function openEdit(row: SupplierListItemDto) {
+    setLoadingEdit(true);
     try {
-      await actionMutation.mutateAsync({ action, id: supplier.id });
-      toast.success(
-        isDelete ? `${supplier.name} deleted` : `${supplier.name} restored`,
-      );
-    } catch (err) {
-      toast.error(toUserMessage(err));
+      const profile = await suppliersApi.getById(row.id);
+      setEditingSupplier({ ...profile.supplier, id: profile.supplier.id });
+      saveMutation.reset();
+      saveIntent.current.reset();
+      setFormOpen(true);
+    } catch (error) {
+      toast.error(toUserMessage(error));
+    } finally {
+      setLoadingEdit(false);
     }
   }
 
-  const columns: ResponsiveTableColumn<SupplierDto>[] = [
+  async function save(input: CreateSupplierDto) {
+    await saveMutation.mutateAsync({
+      id: editingSupplier?.id,
+      input,
+      key: saveIntent.current.getKey(),
+    });
+  }
+
+  async function setSupplierActive(row: SupplierListItemDto, active: boolean) {
+    const intentId = `${active ? "reactivate" : "deactivate"}:${row.id}`;
+    const intent =
+      actionIntents.current.get(intentId) ?? createIdempotencyIntent();
+    actionIntents.current.set(intentId, intent);
+    const confirmed = await confirm({
+      title: `${active ? "Reactivate" : "Deactivate"} ${row.name}?`,
+      description: active
+        ? "The supplier will appear in active supplier lists again."
+        : "The supplier will be hidden from active lists. Its history is retained.",
+      confirmLabel: active ? "Reactivate supplier" : "Deactivate supplier",
+      tone: active ? "normal" : "danger",
+    });
+    if (!confirmed) return;
+    try {
+      await actionMutation.mutateAsync({
+        action: active ? "reactivate" : "deactivate",
+        id: row.id,
+        key: intent.getKey(),
+      });
+      intent.markSucceeded();
+      actionIntents.current.delete(intentId);
+      toast.success(`${row.name} ${active ? "reactivated" : "deactivated"}`);
+    } catch (error) {
+      toast.error(toUserMessage(error));
+    }
+  }
+
+  const columns: ResponsiveTableColumn<SupplierListItemDto>[] = [
     {
       header: "Supplier",
-      render: (supplier) => (
-        <div className="space-y-0.5">
-          <p className="font-medium text-foreground">{supplier.name}</p>
-          <p className="text-xs text-muted-foreground">
-            {supplier.address ?? "No address"}
-          </p>
-        </div>
+      render: (row) => (
+        <Link href={`/suppliers/${row.id}`} className="font-medium text-primary hover:underline">
+          {row.name}
+        </Link>
       ),
     },
+    { header: "Phone", render: (row) => row.phone ?? "—" },
+    { header: "Email", render: (row) => row.email ?? "—" },
     {
-      header: "Phone",
-      render: (supplier) => (
-        <span className="text-sm text-muted-foreground">
-          {supplier.phone ?? "—"}
-        </span>
-      ),
-    },
-    {
-      header: "Email",
-      render: (supplier) => (
-        <span className="block max-w-[220px] truncate text-sm text-muted-foreground">
-          {supplier.email ?? "—"}
-        </span>
-      ),
-    },
-    {
-      header: "Notes",
-      render: (supplier) => (
-        <span className="line-clamp-2 max-w-[250px] text-sm text-muted-foreground">
-          {supplier.notes ?? "—"}
-        </span>
-      ),
+      header: "Balance owed",
+      align: "right",
+      render: (row) => <Money kobo={row.balanceKobo ?? "0"} tone="auto" />,
     },
     {
       header: "Status",
       align: "center",
-      render: (supplier) => (
-        <StatusBadge status={supplier.deletedAt ? "Deleted" : "Active"} />
+      render: (row) => (
+        <StatusBadge status={row.active === false || row.deletedAt ? "Inactive" : "Active"} />
       ),
     },
     {
       header: "Actions",
       align: "right",
-      render: (supplier) =>
-        supplier.deletedAt ? (
-          <div className="flex justify-end">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={actionMutation.isPending}
-              onClick={() => void runAction("restore", supplier)}
-            >
-              Restore
-            </Button>
-          </div>
-        ) : (
+      render: (row) => {
+        const active = row.active ?? !row.deletedAt;
+        return (
           <div className="flex items-center justify-end gap-1.5">
-            <Button variant="secondary" size="sm" onClick={() => openEdit(supplier)}>
-              Edit
-            </Button>
+            {active && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={loadingEdit}
+                onClick={() => void openEdit(row)}
+              >
+                Edit
+              </Button>
+            )}
             <Button
-              variant="danger"
+              variant={active ? "danger" : "secondary"}
               size="sm"
               disabled={actionMutation.isPending}
-              onClick={() => void runAction("delete", supplier)}
+              onClick={() => void setSupplierActive(row, !active)}
             >
-              Delete
+              {active ? "Deactivate" : "Reactivate"}
             </Button>
           </div>
-        ),
+        );
+      },
     },
   ];
 
@@ -187,7 +230,7 @@ export default function SuppliersPage() {
     <div className="space-y-6">
       <PageHeader
         title="Suppliers"
-        description="Keep supplier contact details in one place."
+        description="Keep supplier contact details and outstanding balances in one place."
         actions={
           <Button onClick={openCreate}>
             <Plus aria-hidden="true" className="h-4 w-4" />
@@ -195,11 +238,10 @@ export default function SuppliersPage() {
           </Button>
         }
       />
-
       <Card>
         <CardBody className="space-y-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <label className="relative min-w-0 flex-1 sm:max-w-md">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="relative min-w-0">
               <span className="sr-only">Search suppliers</span>
               <Search
                 aria-hidden="true"
@@ -209,23 +251,31 @@ export default function SuppliersPage() {
                 type="search"
                 value={search}
                 onChange={(event) => setFilter("suppliersSearch", event.target.value)}
-                placeholder="Search by name, phone or email..."
+                placeholder="Search by name or phone"
                 className="pl-9"
               />
             </label>
-            <label className="inline-flex min-h-11 cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
+            <label className="flex min-h-11 items-center gap-2 text-sm text-muted-foreground">
               <input
                 type="checkbox"
-                checked={showDeleted}
-                onChange={(event) =>
-                  setFilter("suppliersShowDeleted", event.target.checked)
-                }
+                checked={showInactive}
+                onChange={(event) => setFilter("suppliersShowDeleted", event.target.checked)}
                 className="h-4 w-4 rounded border-input accent-primary"
               />
-              Show deleted
+              Show inactive suppliers
             </label>
+            <Select
+              aria-label="Filter suppliers by balance"
+              value={balanceFilter}
+              onChange={(event) =>
+                setBalanceFilter(event.target.value as "all" | "with" | "without")
+              }
+            >
+              <option value="all">All balances</option>
+              <option value="with">With balance</option>
+              <option value="without">No balance</option>
+            </Select>
           </div>
-
           {suppliers.isPending ? (
             <Skeleton variant="row" count={5} />
           ) : suppliers.isError ? (
@@ -238,17 +288,17 @@ export default function SuppliersPage() {
               }
               onRetry={() => void suppliers.refetch()}
             />
-          ) : suppliers.data.length === 0 ? (
+          ) : supplierRows.length === 0 ? (
             <EmptyState
               icon={Truck}
-              title={showDeleted ? "No deleted suppliers" : "No suppliers yet"}
+              title={showInactive ? "No inactive suppliers" : "No suppliers yet"}
               description={
-                showDeleted
-                  ? "No deleted suppliers match this search."
+                showInactive
+                  ? "No inactive suppliers match these filters."
                   : "Add a supplier to keep their details readily available."
               }
               action={
-                showDeleted ? undefined : (
+                showInactive ? undefined : (
                   <Button onClick={openCreate}>
                     <Plus aria-hidden="true" className="h-4 w-4" />
                     Add supplier
@@ -257,15 +307,27 @@ export default function SuppliersPage() {
               }
             />
           ) : (
-            <ResponsiveTable
-              rows={suppliers.data}
-              columns={columns}
-              getKey={(supplier) => supplier.id}
-            />
+            <>
+              <ResponsiveTable
+                rows={supplierRows}
+                columns={columns}
+                getKey={(row) => row.id}
+              />
+              {suppliers.hasNextPage && (
+                <div className="flex justify-center">
+                  <Button
+                    variant="secondary"
+                    disabled={suppliers.isFetchingNextPage}
+                    onClick={() => void suppliers.fetchNextPage()}
+                  >
+                    {suppliers.isFetchingNextPage ? "Loading…" : "Load more"}
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </CardBody>
       </Card>
-
       <Modal
         open={formOpen}
         onClose={closeForm}
@@ -276,9 +338,14 @@ export default function SuppliersPage() {
         <SupplierForm
           key={editingSupplier?.id ?? "new-supplier"}
           supplier={editingSupplier}
+          fieldErrors={apiFieldErrors(saveMutation.error)}
           error={saveMutation.error ? toUserMessage(saveMutation.error) : undefined}
           pending={saveMutation.isPending}
           onCancel={closeForm}
+          onEdit={() => {
+            saveIntent.current.reset();
+            saveMutation.reset();
+          }}
           onSubmit={save}
         />
       </Modal>

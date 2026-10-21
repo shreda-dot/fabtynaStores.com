@@ -3,7 +3,12 @@ export interface AuthUser {
   email: string;
 }
 
-export type AuthFailureKind = "invalid-credentials" | "rate-limited" | "network" | "server";
+export type AuthFailureKind =
+  | "invalid-credentials"
+  | "rate-limited"
+  | "network"
+  | "timeout"
+  | "server";
 
 export class AuthApiError extends Error {
   constructor(

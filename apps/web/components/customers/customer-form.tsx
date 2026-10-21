@@ -1,14 +1,14 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   createCustomerDtoSchema,
   type CreateCustomerDto,
-  type CustomerDto,
   type CustomerType,
 } from "@fabtyna/shared";
+import type { CustomerFormDto } from "@/lib/api/customers.api";
 import { MoneyInput } from "@/components/money-input";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
@@ -16,7 +16,7 @@ import { Input, Select, Textarea } from "@/components/ui/input";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 
 function initialValues(
-  customer: CustomerDto | undefined,
+  customer: CustomerFormDto | undefined,
   defaultType: CustomerType,
 ): CreateCustomerDto {
   return {
@@ -32,18 +32,22 @@ function initialValues(
 
 export function CustomerForm({
   customer,
+  fieldErrors,
   defaultType = "RETAIL",
   error,
   pending,
   onCancel,
+  onEdit,
   onSubmit,
 }: {
-  customer?: CustomerDto;
+  customer?: CustomerFormDto;
+  fieldErrors?: Record<string, string>;
   /** Type pre-selected when adding a brand-new customer. */
   defaultType?: CustomerType;
   error?: string;
   pending: boolean;
   onCancel: () => void;
+  onEdit?: () => void;
   onSubmit: (value: CreateCustomerDto) => Promise<void>;
 }) {
   const network = useNetworkStatus();
@@ -57,6 +61,17 @@ export function CustomerForm({
   });
 
   const errors = form.formState.errors;
+
+  useEffect(() => {
+    for (const [name, message] of Object.entries(fieldErrors ?? {})) {
+      if (name in form.getValues()) {
+        form.setError(name as keyof CreateCustomerDto, {
+          type: "server",
+          message,
+        });
+      }
+    }
+  }, [fieldErrors, form]);
 
   async function handleValid(input: CreateCustomerDto) {
     if (submitting.current) return;
@@ -84,7 +99,15 @@ export function CustomerForm({
   }
 
   return (
-    <form onSubmit={submitForm} className="space-y-5" noValidate>
+    <form
+      onSubmit={submitForm}
+      onChange={() => {
+        form.clearErrors();
+        onEdit?.();
+      }}
+      className="space-y-5"
+      noValidate
+    >
       {summary.length > 0 && (
         <div
           role="alert"

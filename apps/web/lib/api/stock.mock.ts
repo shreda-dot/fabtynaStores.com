@@ -6,7 +6,12 @@ import {
   isLowStock,
   toStockMovementDto,
 } from "@fabtyna/shared";
-import type { StockApi, StockViewDto } from "./stock.api";
+import type {
+  LowStockPage,
+  StockApi,
+  StockListOptions,
+  StockViewDto,
+} from "./stock.api";
 import { readMockStore } from "./mock-store";
 import { mockDelay } from "./mock-transport";
 
@@ -19,7 +24,7 @@ function jsonClone<T>(value: T): T {
 }
 
 export const stockMockApi: StockApi = {
-  async list() {
+  async list(_options?: StockListOptions) {
     await delay();
     const store = readMockStore();
     const byProductLocation = stockByProductAndLocation(store.stockMovements);
@@ -53,6 +58,38 @@ export const stockMockApi: StockApi = {
       })
       .sort((a, b) => a.productName.localeCompare(b.productName));
     return jsonClone(views);
+  },
+  async listPage(options?: StockListOptions) {
+    const items = await stockMockApi.list(options);
+    return jsonClone({
+      items,
+      nextCursor: null,
+      totals: {
+        units: items.reduce((sum, row) => sum + row.totalUnits, 0).toString(),
+        worthAtCostKobo: items.reduce((sum, row) => sum + BigInt(row.worthAtCostKobo), 0n).toString(),
+        worthAtRetailKobo: items.reduce((sum, row) => sum + BigInt(row.worthAtRetailKobo ?? row.retailWorthKobo ?? "0"), 0n).toString(),
+        worthAtWholesaleKobo: items.reduce((sum, row) => sum + BigInt(row.wholesaleWorthKobo), 0n).toString(),
+        includeInactiveProducts: false,
+      },
+    });
+  },
+
+  async lowStock(options = {}) {
+    const result = await stockMockApi.list(options);
+    const page: LowStockPage = {
+      items: result
+        .filter((row) => row.lowStock)
+        .map((row) => ({
+          id: row.productId,
+          name: row.productName,
+          sku: row.sku,
+          reorderLevelUnits: row.reorderLevelUnits,
+          units: row.totalUnits,
+          shortfallUnits: Math.max(0, row.reorderLevelUnits - row.totalUnits),
+        })),
+      nextCursor: null,
+    };
+    return jsonClone(page);
   },
 
   async movements(filter) {

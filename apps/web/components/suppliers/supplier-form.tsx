@@ -1,19 +1,19 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   createSupplierDtoSchema,
   type CreateSupplierDto,
-  type SupplierDto,
 } from "@fabtyna/shared";
+import type { SupplierFormDto } from "@/lib/api/suppliers.api";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { Input, Textarea } from "@/components/ui/input";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 
-function initialValues(supplier?: SupplierDto): CreateSupplierDto {
+function initialValues(supplier?: SupplierFormDto): CreateSupplierDto {
   return {
     name: supplier?.name ?? "",
     phone: supplier?.phone ?? null,
@@ -25,15 +25,19 @@ function initialValues(supplier?: SupplierDto): CreateSupplierDto {
 
 export function SupplierForm({
   supplier,
+  fieldErrors,
   error,
   pending,
   onCancel,
+  onEdit,
   onSubmit,
 }: {
-  supplier?: SupplierDto;
+  supplier?: SupplierFormDto;
+  fieldErrors?: Record<string, string>;
   error?: string;
   pending: boolean;
   onCancel: () => void;
+  onEdit?: () => void;
   onSubmit: (value: CreateSupplierDto) => Promise<void>;
 }) {
   const network = useNetworkStatus();
@@ -47,6 +51,17 @@ export function SupplierForm({
   });
 
   const errors = form.formState.errors;
+
+  useEffect(() => {
+    for (const [name, message] of Object.entries(fieldErrors ?? {})) {
+      if (name in form.getValues()) {
+        form.setError(name as keyof CreateSupplierDto, {
+          type: "server",
+          message,
+        });
+      }
+    }
+  }, [fieldErrors, form]);
 
   async function handleValid(input: CreateSupplierDto) {
     if (submitting.current) return;
@@ -74,7 +89,15 @@ export function SupplierForm({
   }
 
   return (
-    <form onSubmit={submitForm} className="space-y-5" noValidate>
+    <form
+      onSubmit={submitForm}
+      onChange={() => {
+        form.clearErrors();
+        onEdit?.();
+      }}
+      className="space-y-5"
+      noValidate
+    >
       {summary.length > 0 && (
         <div
           role="alert"

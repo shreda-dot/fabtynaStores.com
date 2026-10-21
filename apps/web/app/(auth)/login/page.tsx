@@ -77,8 +77,12 @@ function LoginForm() {
         setError(cause.message);
       } else if (cause instanceof AuthApiError && cause.kind === "network") {
         setError("Could not reach the sign-in service. Check your connection and try again.");
+      } else if (cause instanceof AuthApiError && cause.kind === "timeout") {
+        setError("The sign-in request timed out. Check your connection and try again.");
+      } else if (cause instanceof AuthApiError && cause.kind === "server") {
+        setError("The sign-in service is unavailable. Please try again shortly.");
       } else {
-        setError(cause instanceof Error ? cause.message : "Unable to sign in.");
+        setError("Unable to sign in. Please try again.");
       }
       submitting.current = false;
       setPending(false);

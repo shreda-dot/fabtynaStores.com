@@ -1,19 +1,19 @@
 "use client";
 
-import { useState } from "react";
 import {
   keepPreviousData,
+  useInfiniteQuery,
   useMutation,
-  useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { useRef, useState } from "react";
 import { Plus, Search, Users } from "lucide-react";
 import Link from "next/link";
 import {
   formatNaira,
   type CreateCustomerDto,
-  type CustomerDto,
 } from "@fabtyna/shared";
+import type { CustomerFormDto, CustomerListItemDto } from "@/lib/api/customers.api";
 import { CustomerForm } from "@/components/customers/customer-form";
 import {
   ResponsiveTable,
@@ -24,14 +24,19 @@ import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
-import { Input } from "@/components/ui/input";
+import { Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { customersApi } from "@/lib/api";
-import { toTechnicalDetail, toUserMessage } from "@/lib/api/client";
+import {
+  apiFieldErrors,
+  toTechnicalDetail,
+  toUserMessage,
+} from "@/lib/api/client";
+import { createIdempotencyIntent, type IdempotencyIntent } from "@/lib/api/idempotency-intent";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
@@ -42,29 +47,48 @@ export default function CustomersPage() {
   const search = useUIStore((state) => state.filters.customersSearch);
   const showDeleted = useUIStore((state) => state.filters.customersShowDeleted);
   const setFilter = useUIStore((state) => state.setFilter);
+  const [balanceFilter, setBalanceFilter] = useState<"all" | "with" | "without">("all");
 
   const [formOpen, setFormOpen] = useState(false);
-  const [editingCustomer, setEditingCustomer] = useState<CustomerDto>();
+  const [editingCustomer, setEditingCustomer] = useState<CustomerFormDto>();
+  const [loadingEdit, setLoadingEdit] = useState(false);
+  const saveIntent = useRef(createIdempotencyIntent());
+  const actionIntents = useRef(new Map<string, IdempotencyIntent>());
 
   const debouncedSearch = useDebouncedValue(search, 250);
 
-  const customers = useQuery({
-    queryKey: queryKeys.customers.list(debouncedSearch, showDeleted),
-    queryFn: () =>
-      customersApi.list({
+  const customers = useInfiniteQuery({
+    queryKey: queryKeys.customers.list(debouncedSearch, showDeleted, balanceFilter),
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
+      return customersApi.listPage({
         search: debouncedSearch,
         includeDeleted: showDeleted,
-      }),
+        withBalance:
+          balanceFilter === "all" ? undefined : balanceFilter === "with",
+        cursor: pageParam,
+      });
+    },
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     placeholderData: keepPreviousData,
   });
+  const customerRows = (customers.data?.pages ?? []).flatMap((page) => page.items);
 
   const saveMutation = useMutation({
-    mutationFn: ({ id, input }: { id?: string; input: CreateCustomerDto }) =>
-      id ? customersApi.update(id, input) : customersApi.create(input),
+    mutationFn: ({
+      id,
+      input,
+      key,
+    }: {
+      id?: string;
+      input: CreateCustomerDto;
+      key: string;
+    }) => (id ? customersApi.update(id, input, key) : customersApi.create(input, key)),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
         queryKey: queryKeys.customers.all,
       });
+      saveIntent.current.markSucceeded();
       closeForm();
     },
   });
@@ -73,13 +97,15 @@ export default function CustomersPage() {
     mutationFn: ({
       action,
       id,
+      key,
     }: {
       action: "delete" | "restore";
       id: string;
+      key: string;
     }) =>
       action === "delete"
-        ? customersApi.softDelete(id)
-        : customersApi.restore(id),
+        ? customersApi.softDelete(id, key)
+        : customersApi.restore(id, key),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: queryKeys.customers.all }),
   });
@@ -88,25 +114,40 @@ export default function CustomersPage() {
     setFormOpen(false);
     setEditingCustomer(undefined);
     saveMutation.reset();
+    saveIntent.current.reset();
   }
 
   function openCreate() {
     setEditingCustomer(undefined);
     saveMutation.reset();
+    saveIntent.current.reset();
     setFormOpen(true);
   }
 
-  function openEdit(customer: CustomerDto) {
-    setEditingCustomer(customer);
-    saveMutation.reset();
-    setFormOpen(true);
+  async function openEdit(customer: CustomerListItemDto) {
+    setLoadingEdit(true);
+    try {
+      const detail = await customersApi.getById(customer.id);
+      setEditingCustomer({ ...detail.customer, id: detail.customer.id });
+      saveMutation.reset();
+      saveIntent.current.reset();
+      setFormOpen(true);
+    } catch (error) {
+      toast.error(toUserMessage(error));
+    } finally {
+      setLoadingEdit(false);
+    }
   }
 
   async function save(input: CreateCustomerDto) {
-    await saveMutation.mutateAsync({ id: editingCustomer?.id, input });
+    await saveMutation.mutateAsync({
+      id: editingCustomer?.id,
+      input,
+      key: saveIntent.current.getKey(),
+    });
   }
 
-  async function deleteCustomer(customer: CustomerDto) {
+  async function deleteCustomer(customer: CustomerListItemDto) {
     // Business guard: a customer with an outstanding balance cannot be deleted.
     let balanceOwedKobo: string;
     try {
@@ -126,38 +167,62 @@ export default function CustomersPage() {
     }
 
     const ok = await confirm({
-      title: `Delete ${customer.name}?`,
-      description: "The customer will be hidden from lists and can be restored later.",
-      confirmLabel: "Delete customer",
+      title: `Deactivate ${customer.name}?`,
+      description: "The customer will be hidden from active lists and can be reactivated later.",
+      confirmLabel: "Deactivate customer",
       tone: "danger",
     });
     if (!ok) return;
 
+    const intentId = `delete:${customer.id}`;
+    let intent = actionIntents.current.get(intentId);
+    if (!intent) {
+      intent = createIdempotencyIntent();
+      actionIntents.current.set(intentId, intent);
+    }
     try {
-      await actionMutation.mutateAsync({ action: "delete", id: customer.id });
-      toast.success(`${customer.name} deleted`);
+      await actionMutation.mutateAsync({
+        action: "delete",
+        id: customer.id,
+        key: intent.getKey(),
+      });
+      intent.markSucceeded();
+      actionIntents.current.delete(intentId);
+      toast.success(`${customer.name} deactivated`);
     } catch (err) {
       toast.error(toUserMessage(err));
     }
   }
 
-  async function restoreCustomer(customer: CustomerDto) {
+  async function restoreCustomer(customer: CustomerListItemDto) {
     const ok = await confirm({
-      title: `Restore ${customer.name}?`,
-      description: "The customer will appear in the customer list again.",
-      confirmLabel: "Restore",
+      title: `Reactivate ${customer.name}?`,
+      description: "The customer will appear in active customer lists again.",
+      confirmLabel: "Reactivate",
     });
     if (!ok) return;
 
+    const intentId = `restore:${customer.id}`;
+    let intent = actionIntents.current.get(intentId);
+    if (!intent) {
+      intent = createIdempotencyIntent();
+      actionIntents.current.set(intentId, intent);
+    }
     try {
-      await actionMutation.mutateAsync({ action: "restore", id: customer.id });
-      toast.success(`${customer.name} restored`);
+      await actionMutation.mutateAsync({
+        action: "restore",
+        id: customer.id,
+        key: intent.getKey(),
+      });
+      intent.markSucceeded();
+      actionIntents.current.delete(intentId);
+      toast.success(`${customer.name} reactivated`);
     } catch (err) {
       toast.error(toUserMessage(err));
     }
   }
 
-  const columns: ResponsiveTableColumn<CustomerDto>[] = [
+  const columns: ResponsiveTableColumn<CustomerListItemDto>[] = [
     {
       header: "Customer",
       render: (customer) => (
@@ -179,6 +244,13 @@ export default function CustomersPage() {
       render: (customer) => <Money kobo={customer.creditLimitKobo} />,
     },
     {
+      header: "Balance owed",
+      align: "right",
+      render: (customer) => (
+        <Money kobo={customer.balanceKobo ?? "0"} tone="auto" />
+      ),
+    },
+    {
       header: "Phone",
       render: (customer) => customer.phone ?? "—",
     },
@@ -186,14 +258,16 @@ export default function CustomersPage() {
       header: "Status",
       align: "center",
       render: (customer) => (
-        <StatusBadge status={customer.deletedAt ? "Deleted" : "Active"} />
+        <StatusBadge
+          status={customer.active === false || customer.deletedAt ? "Inactive" : "Active"}
+        />
       ),
     },
     {
       header: "Actions",
       align: "right",
       render: (customer) =>
-        customer.deletedAt ? (
+        customer.active === false || customer.deletedAt ? (
           <div className="flex justify-end">
             <Button
               variant="secondary"
@@ -201,12 +275,17 @@ export default function CustomersPage() {
               disabled={actionMutation.isPending}
               onClick={() => void restoreCustomer(customer)}
             >
-              Restore
+              Reactivate
             </Button>
           </div>
         ) : (
           <div className="flex items-center justify-end gap-1.5">
-            <Button variant="secondary" size="sm" onClick={() => openEdit(customer)}>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={loadingEdit}
+              onClick={() => void openEdit(customer)}
+            >
               Edit
             </Button>
             <Button
@@ -215,7 +294,7 @@ export default function CustomersPage() {
               disabled={actionMutation.isPending}
               onClick={() => void deleteCustomer(customer)}
             >
-              Delete
+              Deactivate
             </Button>
           </div>
         ),
@@ -250,9 +329,23 @@ export default function CustomersPage() {
                 onChange={(event) =>
                   setFilter("customersSearch", event.target.value)
                 }
-                placeholder="Search by name, phone or email..."
+                placeholder="Search by name or phone..."
                 className="pl-9"
               />
+            </label>
+            <label className="min-w-40 text-sm">
+              <span className="sr-only">Filter by balance</span>
+              <Select
+                value={balanceFilter}
+                onChange={(event) =>
+                  setBalanceFilter(event.target.value as typeof balanceFilter)
+                }
+                aria-label="Filter customers by balance"
+              >
+                <option value="all">All balances</option>
+                <option value="with">With balance</option>
+                <option value="without">No balance</option>
+              </Select>
             </label>
             <label className="inline-flex min-h-11 cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
               <input
@@ -263,7 +356,7 @@ export default function CustomersPage() {
                 }
                 className="h-4 w-4 rounded border-input accent-primary"
               />
-              Show deleted
+              Show inactive customers
             </label>
           </div>
 
@@ -279,13 +372,13 @@ export default function CustomersPage() {
               }
               onRetry={() => void customers.refetch()}
             />
-          ) : customers.data.length === 0 ? (
+          ) : customerRows.length === 0 ? (
             <EmptyState
               icon={Users}
-              title={showDeleted ? "No deleted customers" : "No customers yet"}
+              title={showDeleted ? "No inactive customers" : "No customers yet"}
               description={
                 showDeleted
-                  ? "No deleted customers match this search."
+                  ? "No inactive customers match this search."
                   : "Add a customer to track credit and sales."
               }
               action={
@@ -299,10 +392,21 @@ export default function CustomersPage() {
             />
           ) : (
             <ResponsiveTable
-              rows={customers.data}
+              rows={customerRows}
               columns={columns}
               getKey={(customer) => customer.id}
             />
+          )}
+          {customers.hasNextPage && (
+            <div className="flex justify-center pt-3">
+              <Button
+                variant="secondary"
+                disabled={customers.isFetchingNextPage}
+                onClick={() => void customers.fetchNextPage()}
+              >
+                {customers.isFetchingNextPage ? "Loading…" : "Load more"}
+              </Button>
+            </div>
           )}
         </CardBody>
       </Card>
@@ -317,9 +421,15 @@ export default function CustomersPage() {
         <CustomerForm
           key={editingCustomer?.id ?? "new-customer"}
           customer={editingCustomer}
-          error={saveMutation.error ? toUserMessage(saveMutation.error) : undefined}
+          fieldErrors={apiFieldErrors(saveMutation.error)}
+          error={
+            saveMutation.error && Object.keys(apiFieldErrors(saveMutation.error)).length === 0
+              ? toUserMessage(saveMutation.error)
+              : undefined
+          }
           pending={saveMutation.isPending}
           onCancel={closeForm}
+          onEdit={() => saveIntent.current.reset()}
           onSubmit={save}
         />
       </Modal>

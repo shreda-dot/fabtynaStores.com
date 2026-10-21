@@ -6,9 +6,11 @@ import {
 } from "@fabtyna/shared";
 import type {
   PayableLineDto,
+  PayablesListOptions,
   PayablesApi,
   SupplierPayableDto,
 } from "./payables.api";
+import { purchasesMockApi } from "./purchases.mock";
 import { readMockStore } from "./mock-store";
 import { mockDelay } from "./mock-transport";
 
@@ -21,7 +23,7 @@ function jsonClone<T>(value: T): T {
 }
 
 export const payablesMockApi: PayablesApi = {
-  async listOutstanding() {
+  async listOutstanding(options: PayablesListOptions = {}) {
     await delay();
     const store = readMockStore();
     const today = getLagosBusinessDate();
@@ -88,22 +90,40 @@ export const payablesMockApi: PayablesApi = {
       }
     }
 
-    const result = Array.from(groups.values()).sort((a, b) => {
+    const all = Array.from(groups.values()).sort((a, b) => {
       const diff = BigInt(b.balanceKobo) - BigInt(a.balanceKobo);
       if (diff === 0n) return a.supplierName.localeCompare(b.supplierName);
       return diff > 0n ? 1 : -1;
     });
-    for (const group of result) {
+    for (const group of all) {
       group.purchases.sort(
         (a, b) =>
           new Date(a.purchasedAt).getTime() - new Date(b.purchasedAt).getTime(),
       );
     }
+    const search = options.search?.trim().toLocaleLowerCase();
+    const result = all.filter(
+      (group) =>
+        (!search || group.supplierName.toLocaleLowerCase().includes(search)) &&
+        (!options.overdueOnly || BigInt(group.overdueKobo) > 0n),
+    );
     return jsonClone(result);
   },
 
   async getSupplierBreakdown(supplierId) {
-    const all = await this.listOutstanding();
+    const result = await payablesMockApi.listOutstanding();
+    const all = Array.isArray(result) ? result : result.items;
     return all.find((entry) => entry.supplierId === supplierId) ?? null;
+  },
+
+  async recordPayment(purchaseId, amountKobo, paidAt, method, accountId, note) {
+    await purchasesMockApi.recordPayment(
+      purchaseId,
+      amountKobo,
+      paidAt,
+      method,
+      accountId,
+      note,
+    );
   },
 };

@@ -1,86 +1,102 @@
+const apiMode = process.env.NEXT_PUBLIC_API_MODE ?? "mock";
+
+function key<const T extends readonly unknown[]>(
+  ...parts: T
+): readonly [string, ...T] {
+  return [apiMode, ...parts];
+}
+
 export const queryKeys = {
   products: {
-    all: ["products"] as const,
+    all: key("products"),
     list: (search: string, includeDeleted: boolean) =>
-      ["products", "list", search, includeDeleted] as const,
+      key("products", "list", search, includeDeleted),
+    detail: (id: string) => key("products", "detail", id),
   },
   suppliers: {
-    all: ["suppliers"] as const,
-    list: (search: string, includeDeleted: boolean) =>
-      ["suppliers", "list", search, includeDeleted] as const,
-    detail: (id: string) => ["suppliers", "detail", id] as const,
+    all: key("suppliers"),
+    list: (search: string, includeDeleted: boolean, balanceFilter = "all") =>
+      key("suppliers", "list", search, includeDeleted, balanceFilter),
+    detail: (id: string) => key("suppliers", "detail", id),
   },
   purchases: {
-    all: ["purchases"] as const,
-    list: ["purchases", "list"] as const,
-    detail: (id: string) => ["purchases", "detail", id] as const,
+    all: key("purchases"),
+    list: key("purchases", "list"),
+    detail: (id: string) => key("purchases", "detail", id),
   },
   sales: {
-    all: ["sales"] as const,
-    list: ["sales", "list"] as const,
-    detail: (id: string) => ["sales", "detail", id] as const,
+    all: key("sales"),
+    list: key("sales", "list"),
+    detail: (id: string) => key("sales", "detail", id),
   },
   customers: {
-    all: ["customers"] as const,
-    list: (search: string, includeDeleted: boolean) =>
-      ["customers", "list", search, includeDeleted] as const,
-    detail: (id: string) => ["customers", "detail", id] as const,
+    all: key("customers"),
+    list: (search: string, includeDeleted: boolean, balanceFilter = "all") =>
+      key("customers", "list", search, includeDeleted, balanceFilter),
+    detail: (id: string) => key("customers", "detail", id),
   },
   reports: {
-    all: ["reports"] as const,
+    all: key("reports"),
     salesSummary: (from: string, to: string) =>
-      ["reports", "sales-summary", from, to] as const,
+      key("reports", "sales-summary", from, to),
   },
   expenses: {
-    all: ["expenses"] as const,
+    all: key("expenses"),
     list: (from?: string, to?: string) =>
-      ["expenses", "list", from ?? "", to ?? ""] as const,
-    detail: (id: string) => ["expenses", "detail", id] as const,
+      key("expenses", "list", from ?? "", to ?? ""),
+    detail: (id: string) => key("expenses", "detail", id),
   },
   stock: {
-    all: ["stock"] as const,
-    list: ["stock", "list"] as const,
+    all: key("stock"),
+    list: key("stock", "list"),
     movements: (filter: {
       productId?: string;
       location?: string;
       type?: string;
-    }) => ["stock", "movements", filter] as const,
+    }) => key("stock", "movements", filter),
   },
   transfers: {
-    all: ["transfers"] as const,
-    list: ["transfers", "list"] as const,
-    detail: (id: string) => ["transfers", "detail", id] as const,
+    all: key("transfers"),
+    list: key("transfers", "list"),
+    detail: (id: string) => key("transfers", "detail", id),
   },
   adjustments: {
-    all: ["adjustments"] as const,
-    list: ["adjustments", "list"] as const,
-    detail: (id: string) => ["adjustments", "detail", id] as const,
+    all: key("adjustments"),
+    list: key("adjustments", "list"),
+    detail: (id: string) => key("adjustments", "detail", id),
   },
   dashboard: {
-    all: ["dashboard"] as const,
+    all: key("dashboard"),
   },
   payables: {
-    all: ["payables"] as const,
-    outstanding: ["payables", "outstanding"] as const,
+    all: key("payables"),
+    outstanding: key("payables", "outstanding"),
+    list: (search: string, overdueOnly: boolean) =>
+      key("payables", "list", search, overdueOnly),
+  },
+  debtors: {
+    all: key("debtors"),
+    list: (search: string, minBalanceKobo?: string) =>
+      key("debtors", "list", search, minBalanceKobo ?? ""),
   },
   loans: {
-    all: ["loans"] as const,
-    list: ["loans", "list"] as const,
-    detail: (id: string) => ["loans", "detail", id] as const,
+    all: key("loans"),
+    list: key("loans", "list"),
+    detail: (id: string) => key("loans", "detail", id),
   },
   cash: {
-    all: ["cash"] as const,
-    latest: ["cash", "latest"] as const,
+    all: key("cash"),
+    latest: key("cash", "latest"),
   },
   accounting: {
-    all: ["accounting"] as const,
-    position: (options: unknown) => ["accounting", "position", options] as const,
-    accounts: ["accounting", "accounts"] as const,
-    migrationNotice: ["accounting", "migration-notice"] as const,
+    all: key("accounting"),
+    position: (options: unknown) => key("accounting", "position", options),
+    accounts: key("accounting", "accounts"),
+    migrationNotice: key("accounting", "migration-notice"),
     accountLedger: (id: string, from?: string, to?: string) =>
-      ["accounting", "account-ledger", id, from ?? "", to ?? ""] as const,
+      key("accounting", "account-ledger", id, from ?? "", to ?? ""),
     moneyFlow: (from: string, to: string, accountId: string) =>
-      ["accounting", "money-flow", from, to, accountId] as const,
-    accountBalances: ["accounting", "account-balances"] as const,
+      key("accounting", "money-flow", from, to, accountId),
+    accountBalances: key("accounting", "account-balances"),
   },
 };

@@ -1,13 +1,13 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   createProductDtoSchema,
   type CreateProductDto,
-  type ProductDto,
 } from "@fabtyna/shared";
+import type { ProductFormDto } from "@/lib/api/products.api";
 import { MoneyInput } from "@/components/money-input";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
@@ -26,7 +26,7 @@ const blankProduct: CreateProductDto = {
   reorderLevelUnits: 0,
 };
 
-function initialValues(product?: ProductDto): CreateProductDto {
+function initialValues(product?: ProductFormDto): CreateProductDto {
   if (!product) return blankProduct;
   return {
     name: product.name,
@@ -43,15 +43,19 @@ function initialValues(product?: ProductDto): CreateProductDto {
 
 export function ProductForm({
   product,
+  fieldErrors,
   error,
   pending,
   onCancel,
+  onEdit,
   onSubmit,
 }: {
-  product?: ProductDto;
+  product?: ProductFormDto & { hasStockMovement?: boolean };
+  fieldErrors?: Record<string, string>;
   error?: string;
   pending: boolean;
   onCancel: () => void;
+  onEdit?: () => void;
   onSubmit: (value: CreateProductDto) => Promise<void>;
 }) {
   const network = useNetworkStatus();
@@ -66,6 +70,17 @@ export function ProductForm({
 
   const values = initialValues(product);
   const errors = form.formState.errors;
+
+  useEffect(() => {
+    for (const [name, message] of Object.entries(fieldErrors ?? {})) {
+      if (name in form.getValues()) {
+        form.setError(name as keyof CreateProductDto, {
+          type: "server",
+          message,
+        });
+      }
+    }
+  }, [fieldErrors, form]);
 
   async function handleValid(input: CreateProductDto) {
     if (submitting.current) return;
@@ -93,7 +108,15 @@ export function ProductForm({
   }
 
   return (
-    <form onSubmit={submitForm} className="space-y-5" noValidate>
+    <form
+      onSubmit={submitForm}
+      onChange={() => {
+        form.clearErrors();
+        onEdit?.();
+      }}
+      className="space-y-5"
+      noValidate
+    >
       {summary.length > 0 && (
         <div
           role="alert"
@@ -195,10 +218,17 @@ export function ProductForm({
             inputMode="numeric"
             min={1}
             step={1}
+            disabled={product?.hasStockMovement === true}
             aria-invalid={errors.unitsPerPack !== undefined}
             {...form.register("unitsPerPack", { valueAsNumber: true })}
           />
         </FormField>
+        <p className="text-xs text-muted-foreground sm:col-span-2">
+          Pack size cannot change after this product has a stock movement.
+          {product?.hasStockMovement
+            ? " This product already has a movement, so its pack size is locked."
+            : ""}
+        </p>
 
         <div className="space-y-1.5">
           <MoneyInput

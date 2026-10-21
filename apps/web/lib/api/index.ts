@@ -1,16 +1,3 @@
-import type { ProductsApi } from "./products.api";
-import type { SuppliersApi } from "./suppliers.api";
-import type { CustomersApi } from "./customers.api";
-import type { PurchasesApi } from "./purchases.api";
-import type { SalesApi } from "./sales.api";
-import type { StockApi } from "./stock.api";
-import type { TransfersApi } from "./transfers.api";
-import type { AdjustmentsApi } from "./adjustments.api";
-import type { ReportsApi } from "./reports.api";
-import type { ExpensesApi } from "./expenses.api";
-import type { PayablesApi } from "./payables.api";
-import type { LoansApi } from "./loans.api";
-import type { CashApi } from "./cash.api";
 import type { AccountingApi } from "./accounting.api";
 import { productsMockApi } from "./products.mock";
 import { suppliersMockApi } from "./suppliers.mock";
@@ -26,41 +13,33 @@ import { payablesMockApi } from "./payables.mock";
 import { loansMockApi } from "./loans.mock";
 import { cashMockApi } from "./cash.mock";
 import { accountingMockApi } from "./accounting.mock";
-import { instrumentApi } from "./client";
+import { createNotConnectedError, instrumentApi, requestJson } from "./client";
 import { resetDemoData } from "./mock-store";
 import { authMockApi } from "./auth.mock";
 import { authRealApi } from "./auth.real";
 import type { AuthApi } from "./auth.api";
+import { productsRealApi } from "./products.real";
+import { suppliersRealApi } from "./suppliers.real";
+import { customersRealApi } from "./customers.real";
+import { stockRealApi } from "./stock.real";
+import { payablesRealApi } from "./payables.real";
+import { debtorsMockApi } from "./debtors.mock";
+import { debtorsRealApi } from "./debtors.real";
+import type { DebtorsApi } from "./debtors.api";
+import type { PurchasesApi } from "./purchases.api";
+import type { SalesApi } from "./sales.api";
+import type { StockApi } from "./stock.api";
+import type { TransfersApi } from "./transfers.api";
+import type { AdjustmentsApi } from "./adjustments.api";
+import type { ReportsApi } from "./reports.api";
+import type { ExpensesApi } from "./expenses.api";
+import type { PayablesApi } from "./payables.api";
+import type { LoansApi } from "./loans.api";
+import type { CashApi } from "./cash.api";
 
 function notImplemented(): never {
-  throw new Error("not implemented");
+  throw createNotConnectedError();
 }
-
-const productsRealApi: ProductsApi = {
-  list: async () => notImplemented(),
-  create: async () => notImplemented(),
-  update: async () => notImplemented(),
-  softDelete: async () => notImplemented(),
-  restore: async () => notImplemented(),
-};
-
-const suppliersRealApi: SuppliersApi = {
-  list: async () => notImplemented(),
-  getById: async () => notImplemented(),
-  create: async () => notImplemented(),
-  update: async () => notImplemented(),
-  softDelete: async () => notImplemented(),
-  restore: async () => notImplemented(),
-};
-
-const customersRealApi: CustomersApi = {
-  list: async () => notImplemented(),
-  getById: async () => notImplemented(),
-  create: async () => notImplemented(),
-  update: async () => notImplemented(),
-  softDelete: async () => notImplemented(),
-  restore: async () => notImplemented(),
-};
 
 const purchasesRealApi: PurchasesApi = {
   list: async () => notImplemented(),
@@ -78,11 +57,6 @@ const salesRealApi: SalesApi = {
   update: async () => notImplemented(),
   void: async () => notImplemented(),
   recordPayment: async () => notImplemented(),
-};
-
-const stockRealApi: StockApi = {
-  list: async () => notImplemented(),
-  movements: async () => notImplemented(),
 };
 
 const transfersRealApi: TransfersApi = {
@@ -109,11 +83,6 @@ const expensesRealApi: ExpensesApi = {
   void: async () => notImplemented(),
 };
 
-const payablesRealApi: PayablesApi = {
-  listOutstanding: async () => notImplemented(),
-  getSupplierBreakdown: async () => notImplemented(),
-};
-
 const loansRealApi: LoansApi = {
   list: async () => notImplemented(),
   getById: async () => notImplemented(),
@@ -132,6 +101,10 @@ const accountingRealApi: AccountingApi = {
   position: async () => notImplemented(),
   moneyFlow: async () => notImplemented(),
   listAccounts: async () => notImplemented(),
+  listPaymentAccounts: async () =>
+    requestJson<Awaited<ReturnType<AccountingApi["listPaymentAccounts"]>>>(
+      "/accounts?includeInactive=false",
+    ),
   createAccount: async () => notImplemented(),
   updateAccount: async () => notImplemented(),
   deactivateAccount: async () => notImplemented(),
@@ -150,25 +123,27 @@ if (apiMode !== "mock" && apiMode !== "real") {
   throw new Error(`Unsupported NEXT_PUBLIC_API_MODE '${apiMode}'.`);
 }
 
-export const productsApi = instrumentApi(apiMode === "mock" ? productsMockApi : productsRealApi);
-export const suppliersApi = instrumentApi(apiMode === "mock" ? suppliersMockApi : suppliersRealApi);
-export const customersApi = instrumentApi(apiMode === "mock" ? customersMockApi : customersRealApi);
-export const purchasesApi = instrumentApi(apiMode === "mock" ? purchasesMockApi : purchasesRealApi);
-export const salesApi = instrumentApi(apiMode === "mock" ? salesMockApi : salesRealApi);
-export const stockApi = instrumentApi(apiMode === "mock" ? stockMockApi : stockRealApi);
-export const transfersApi = instrumentApi(apiMode === "mock" ? transfersMockApi : transfersRealApi);
-export const adjustmentsApi = instrumentApi(apiMode === "mock" ? adjustmentsMockApi : adjustmentsRealApi);
-export const reportsApi = instrumentApi(apiMode === "mock" ? reportsMockApi : reportsRealApi);
-export const expensesApi = instrumentApi(apiMode === "mock" ? expensesMockApi : expensesRealApi);
-export const payablesApi = instrumentApi(apiMode === "mock" ? payablesMockApi : payablesRealApi);
-export const loansApi = instrumentApi(apiMode === "mock" ? loansMockApi : loansRealApi);
-export const cashApi = instrumentApi(apiMode === "mock" ? cashMockApi : cashRealApi);
-export const accountingApi = instrumentApi(apiMode === "mock" ? accountingMockApi : accountingRealApi);
+export const productsApi = apiMode === "mock" ? instrumentApi(productsMockApi) : productsRealApi;
+export const suppliersApi = apiMode === "mock" ? instrumentApi(suppliersMockApi) : suppliersRealApi;
+export const customersApi = apiMode === "mock" ? instrumentApi(customersMockApi) : customersRealApi;
+export const purchasesApi = apiMode === "mock" ? instrumentApi(purchasesMockApi) : purchasesRealApi;
+export const salesApi = apiMode === "mock" ? instrumentApi(salesMockApi) : salesRealApi;
+export const stockApi = apiMode === "mock" ? instrumentApi(stockMockApi) : stockRealApi;
+export const transfersApi = apiMode === "mock" ? instrumentApi(transfersMockApi) : transfersRealApi;
+export const adjustmentsApi = apiMode === "mock" ? instrumentApi(adjustmentsMockApi) : adjustmentsRealApi;
+export const reportsApi = apiMode === "mock" ? instrumentApi(reportsMockApi) : reportsRealApi;
+export const expensesApi = apiMode === "mock" ? instrumentApi(expensesMockApi) : expensesRealApi;
+export const payablesApi = apiMode === "mock" ? instrumentApi(payablesMockApi) : payablesRealApi;
+export const debtorsApi: DebtorsApi = apiMode === "mock" ? instrumentApi(debtorsMockApi) : debtorsRealApi;
+export const loansApi = apiMode === "mock" ? instrumentApi(loansMockApi) : loansRealApi;
+export const cashApi = apiMode === "mock" ? instrumentApi(cashMockApi) : cashRealApi;
+export const accountingApi = apiMode === "mock" ? instrumentApi(accountingMockApi) : accountingRealApi;
 export const authApi: AuthApi = apiMode === "mock" ? authMockApi : authRealApi;
 export const isMockApiMode = apiMode === "mock";
 
 export { resetDemoData };
 export { AuthApiError } from "./auth.api";
+export type { DebtorsApi } from "./debtors.api";
 export type { ProductsApi } from "./products.api";
 export type { SuppliersApi } from "./suppliers.api";
 export type { CustomersApi } from "./customers.api";

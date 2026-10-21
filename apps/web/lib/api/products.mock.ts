@@ -1,13 +1,19 @@
 import {
   createProductDtoSchema,
   fromAuditLogDto,
+  stockByProductAndLocation,
   toAuditLogDto,
   toProductDto,
+  toStockMovementDto,
   type CreateProductDto,
   type Product,
   type ProductDto,
 } from "@fabtyna/shared";
-import type { ProductsApi, ProductListOptions } from "./products.api";
+import type {
+  ProductDetailDto,
+  ProductsApi,
+  ProductListOptions,
+} from "./products.api";
 import { newId, readMockStore, transactMockStore } from "./mock-store";
 import { mockDelay } from "./mock-transport";
 
@@ -86,6 +92,39 @@ export const productsMockApi: ProductsApi = {
       );
     });
     return jsonClone(rows.map(toProductDto));
+  },
+  async listPage(options: ProductListOptions = {}) {
+    const rows = await productsMockApi.list(options);
+    return jsonClone({ items: rows, nextCursor: null });
+  },
+
+  async getById(id) {
+    await delay();
+    const store = readMockStore();
+    const product = findProduct(store.products, id);
+    const productMovements = store.stockMovements
+      .filter((movement) => movement.productId === id)
+      .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
+      .slice(0, 20);
+    const byLocation = stockByProductAndLocation(store.stockMovements).get(id);
+    const detail: ProductDetailDto = {
+      ...toProductDto(product),
+      hasStockMovement: store.stockMovements.some((movement) => movement.productId === id),
+      stock: ["WAREHOUSE", "RETAIL_SHELF", "MARKET"].map((location) => {
+        const units = byLocation?.get(location as "WAREHOUSE" | "RETAIL_SHELF" | "MARKET") ?? 0;
+        return {
+          location,
+          units,
+          packs: Math.floor(units / product.unitsPerPack),
+          remainingUnits: units % product.unitsPerPack,
+        };
+      }),
+      movements: productMovements.map((movement) => ({
+        ...toStockMovementDto(movement),
+        reference: null,
+      })),
+    };
+    return jsonClone(detail);
   },
 
   async create(input) {

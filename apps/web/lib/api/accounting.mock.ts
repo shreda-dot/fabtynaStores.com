@@ -257,6 +257,10 @@ export const accountingMockApi: AccountingApi = {
     return jsonClone(accounts);
   },
 
+  async listPaymentAccounts() {
+    return (await accountingMockApi.listAccounts()).filter((account) => account.isActive);
+  },
+
   async createAccount(input) {
     await delay();
     const data = createAccountDtoSchema.parse(input);

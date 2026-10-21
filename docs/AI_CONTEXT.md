@@ -102,8 +102,13 @@ Variable NAMES (never values):
 - `PORT` (API, default 3001); `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH` (admin seed).
 - Web (`apps/web`, names only): `NEXT_PUBLIC_API_MODE` (default `"mock"`),
   `NEXT_PUBLIC_API_BASE_URL` (real API origin),
-  `NEXT_PUBLIC_API_TIMEOUT_MS`, `NEXT_PUBLIC_MOCK_LATENCY_MS`,
-  `NEXT_PUBLIC_MOCK_FAILURE_RATE`.
+  `NEXT_PUBLIC_API_READ_TIMEOUT_MS`, `NEXT_PUBLIC_API_TX_TIMEOUT_MS`,
+  `NEXT_PUBLIC_API_TX_MAX_WAIT_MS`, `NEXT_PUBLIC_API_LOCK_TIMEOUT_MS`,
+  `NEXT_PUBLIC_API_TIMEOUT_MS` (legacy mock-wrapper timeout),
+  `NEXT_PUBLIC_MOCK_LATENCY_MS`, `NEXT_PUBLIC_MOCK_FAILURE_RATE`.
+- Set the API process timezone to `TZ=UTC` in production for consistent
+  handling of timestamp-without-time-zone database columns. Business dates
+  remain explicit Lagos `YYYY-MM-DD` values.
 
 Rules: NEVER read out, print or commit `.env` values (not even connection
 strings). API scripts load `apps/api/.env` themselves via `dotenv`; Prisma 7 and
@@ -235,6 +240,14 @@ must print "-- This is an empty migration." and exit 0.
   `db:verify` also checks `sale_reference_seq`, `purchase_reference_seq`,
   `transfer_reference_seq`, and the `idempotency_keys`
   indexes (`EXPECTED_SEQUENCES`, `EXPECTED_INDEXES`).
+- Latest `pnpm verify` attempt: workspace typecheck passed; web lint completed
+  with 0 errors and 5 warnings; shared tests passed **231/231** and web tests
+  passed **10/10**. The API suite did not pass (**54 passed, 5 failed, 176
+  skipped** across 27 files); the run encountered test-database DNS and
+  connection errors, and the legal sale-amend test returned 500 instead of
+  200 during that run. The command stopped at API tests before its build step;
+  a separate `pnpm --filter @fabtyna/web build` completed successfully.
+  Do not treat this as a verified full-suite pass.
 - **Sales API (first real operation).** `POST /sales` records a sale as ONE
   interactive transaction (timeout 20 s, maxWait 10 s, `SET LOCAL lock_timeout
   = '15s'`, retry up to 3× on 40P01/40001, then 503): idempotency claim →
@@ -510,15 +523,27 @@ must print "-- This is an empty migration." and exit 0.
   its LOAN_INTEREST reporting expense in place.
 - `@fastify/cookie`, `@fastify/cors`, and `@fastify/rate-limit` are used;
   `@fastify/jwt` remains installed but unused.
-- Web business APIs still run on the **typed MOCK API** by default:
-  `lib/api/index.ts` selects `*MockApi` unless `NEXT_PUBLIC_API_MODE=real`;
-  every `*RealApi` stub throws `"not implemented"`. The mock store persists to
-  localStorage key `fabtyna-mock-v1`; `resetDemoData` resets it. Authentication
-  has its own mock/real API switch: mock mode retains demo login, while real
-  mode uses `NEXT_PUBLIC_API_BASE_URL` and cookie credentials.
+- The web API mode defaults to the typed MOCK API and preserves the demo flow.
+  In `NEXT_PUBLIC_API_MODE=real`, products, customers, suppliers, stock
+  inventory/low-stock, debtors, payables, and authentication use the real API.
+  The shared HTTP client uses credentials, typed API errors and idempotency
+  keys; remaining real business API modules still report that they are not
+  connected and do not fall back to mocks. The mock store persists to
+  localStorage key `fabtyna-mock-v1`; `resetDemoData` resets it.
+- The real stock page explicitly reports that movement history is unavailable
+  in the current API; mock mode retains its existing movement history. Product
+  detail uses the API's recent product-movement data.
+- The real HTTP client uses a 10-second default read timeout and a
+  121,240-millisecond default write timeout: four API attempt budgets
+  (transaction max-wait plus transaction/lock duration), three maximum retry
+  backoffs, and a 1-second margin. Writes are not auto-retried; an uncertain
+  write retains its idempotency key for a deliberate retry. GETs retry once on
+  a network error.
 - Authentication pages and boundaries are connected: real login, logout,
-  current-session checks, and change-password are available. Middleware only
-  checks cookie presence as a UX shortcut; the API is the security boundary.
+  current-session checks, and change-password are available. The admin
+  `AuthGuard` checks `GET /auth/me`; there is no web middleware. The API is the
+  security boundary. Unauthorized API responses clear the query cache and send
+  the browser to login.
 - The 5B report endpoints are API-only so far. The real web report client has
   not been connected; the mock client currently implements sales summary only.
 - Auth sessions are covered in `auth-sessions.test.ts`; the verified outcomes
@@ -537,8 +562,9 @@ must print "-- This is an empty migration." and exit 0.
 | 4B transfers and adjustments | Transfer create/read; adjustment create/read/void with stock and average-cost reversal | `stock-operations.test.ts`, `stock-balances.test.ts` |
 
 This is test-file coverage, not a claim that every business-facing web API is
-connected: non-auth real API stubs remain unimplemented. Loan repayment
-reversal is the known operation gap above. Login throttling is in-memory and
+connected: only the web modules listed in §6 are wired to real endpoints.
+Real stock movement history is not available yet. Loan repayment reversal is
+the known operation gap above. Login throttling is in-memory and
 process-local; use a shared rate-limit store before scaling the API horizontally.
 Actor-scoped idempotency is deployed to dev and test. Pre-migration NULL-actor
 claims intentionally conflict (without response replay) until they expire.

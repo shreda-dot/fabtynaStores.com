@@ -1,465 +1,345 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { HandCoins, Plus, Users } from "lucide-react";
-import Link from "next/link";
+import { useRef, useState } from "react";
 import {
-  formatLagosDate,
-  formatNaira,
-  getLagosBusinessDate,
-  type PaymentMethod,
-} from "@fabtyna/shared";
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { HandCoins, Plus, Search, Users } from "lucide-react";
+import Link from "next/link";
+import { formatLagosDate, formatNaira } from "@fabtyna/shared";
 import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
-import { DateFilter } from "@/components/date-filter";
 import { MoneyInput } from "@/components/money-input";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { FormField } from "@/components/ui/form-field";
+import { Input, Select } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
-import { Select } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
-import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
-import { accountingApi, salesApi } from "@/lib/api";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { accountingApi, debtorsApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
+import { createIdempotencyIntent, type IdempotencyIntent } from "@/lib/api/idempotency-intent";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
-import type { SaleDetailDto, SaleListItemDto } from "@/lib/api/sales.api";
+import type { PaymentMethod } from "@fabtyna/shared";
+import type { DebtorDto, DebtorSaleDto } from "@/lib/api/debtors.api";
 
-type DebtorSale = SaleDetailDto & {
-  amountOwedKobo: bigint;
-};
-
-type DebtorGroup = {
-  customerId: string;
-  customerName: string;
-  totalOwedKobo: bigint;
-  latestSoldAt: number;
-  sales: DebtorSale[];
-};
-
-function amountOwed(
-  sale: Pick<SaleListItemDto, "totalKobo" | "paidKobo">,
-): bigint {
-  return BigInt(sale.totalKobo) - BigInt(sale.paidKobo);
-}
-
-function compareAmountDesc(a: bigint, b: bigint): number {
-  if (a === b) return 0;
-  return a > b ? -1 : 1;
-}
+const PAYMENT_METHODS: PaymentMethod[] = ["CASH", "TRANSFER", "OTHER"];
 
 export default function DebtorsPage() {
   const queryClient = useQueryClient();
-
-  const [filterDate, setFilterDate] = useState("");
-  const businessDate = useLagosBusinessDate();
-
-  const salesQuery = useQuery({
-    queryKey: queryKeys.sales.list,
-    queryFn: () => salesApi.list(),
-  });
-
-  const unpaidSales = useMemo(() => {
-    return (salesQuery.data ?? []).filter(
-      (s) =>
-        s.status !== "VOIDED" &&
-        amountOwed(s) > 0n &&
-        (filterDate === "" ||
-          getLagosBusinessDate(new Date(s.soldAt)) === filterDate),
-    );
-  }, [salesQuery.data, filterDate]);
-
-  const unpaidIds = unpaidSales.map((s) => s.id).join(",");
-
-  const detailsQuery = useQuery({
-    queryKey: ["sales", "debtor-details", unpaidIds],
-    queryFn: async () => {
-      const details = await Promise.all(
-        unpaidSales.map((s) => salesApi.getById(s.id)),
-      );
-      return details;
-    },
-    enabled: unpaidSales.length > 0,
-  });
-
-  const debtorGroups = useMemo<DebtorGroup[]>(() => {
-    const details = detailsQuery.data ?? [];
-    const map = new Map<string, DebtorGroup>();
-    for (const detail of details) {
-      const owed = BigInt(detail.totalKobo) - BigInt(detail.paidKobo);
-      if (owed <= 0n) continue;
-      const groupKey =
-        detail.customer?.id ?? `adhoc:${detail.customerName ?? detail.id}`;
-      const displayName =
-        detail.customer?.name ?? detail.customerName ?? "Walk-in";
-      const soldAtMs = new Date(detail.soldAt).getTime();
-      const existing = map.get(groupKey);
-      const debtorSale: DebtorSale = { ...detail, amountOwedKobo: owed };
-      if (existing) {
-        existing.totalOwedKobo += owed;
-        existing.latestSoldAt = Math.max(existing.latestSoldAt, soldAtMs);
-        existing.sales.push(debtorSale);
-      } else {
-        map.set(groupKey, {
-          customerId: groupKey,
-          customerName: displayName,
-          totalOwedKobo: owed,
-          latestSoldAt: soldAtMs,
-          sales: [debtorSale],
-        });
-      }
-    }
-    const groups = [...map.values()];
-    for (const group of groups) {
-      group.sales.sort(
-        (a, b) => new Date(b.soldAt).getTime() - new Date(a.soldAt).getTime(),
-      );
-    }
-    // Largest debt first so the biggest exposure is always on top.
-    return groups.sort((a, b) =>
-      compareAmountDesc(a.totalOwedKobo, b.totalOwedKobo),
-    );
-  }, [detailsQuery.data]);
-
+  const [search, setSearch] = useState("");
+  const [debtorFilter, setDebtorFilter] = useState<"all" | "minimum">("all");
   const [payingSaleId, setPayingSaleId] = useState<string | null>(null);
   const [paymentKobo, setPaymentKobo] = useState("");
-  const [paymentError, setPaymentError] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
   const [accountId, setAccountId] = useState("");
-  const submitting = useRef(false);
+  const [paymentError, setPaymentError] = useState("");
+  const paymentIntent = useRef<IdempotencyIntent>(createIdempotencyIntent());
+  const debouncedSearch = useDebouncedValue(search, 250);
 
-  const accountsQuery = useQuery({
+  const debtors = useInfiniteQuery({
+    queryKey: queryKeys.debtors.list(
+      debouncedSearch,
+      debtorFilter === "minimum" ? "100000" : undefined,
+    ),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      debtorsApi.list({
+        search: debouncedSearch,
+        minBalanceKobo: debtorFilter === "minimum" ? "100000" : undefined,
+        cursor: pageParam,
+      }),
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    placeholderData: keepPreviousData,
+  });
+  const accounts = useQuery({
     queryKey: queryKeys.accounting.accounts,
-    queryFn: () => accountingApi.listAccounts(),
+    queryFn: () => accountingApi.listPaymentAccounts(),
     enabled: payingSaleId !== null,
   });
-
+  const rows = debtors.data?.pages.flatMap((page) => page.items) ?? [];
+  const grandTotal = debtors.data?.pages[0]?.grandTotalKobo ?? "0";
+  const totalSales = rows.reduce((sum, debtor) => sum + debtor.sales.length, 0);
   const payMutation = useMutation({
     mutationFn: ({
       saleId,
       amountKobo,
-      accountId,
+      accountId: selectedAccountId,
+      key,
     }: {
       saleId: string;
       amountKobo: string;
       accountId: string;
+      key: string;
     }) =>
-      salesApi.recordPayment(
+      debtorsApi.recordPayment(
         saleId,
         amountKobo,
         new Date().toISOString(),
-        accountId,
+        selectedAccountId,
+        key,
       ),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.customers.all,
-      });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.debtors.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.customers.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.reports.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all }),
+      ]);
+      paymentIntent.current.markSucceeded();
       setPayingSaleId(null);
       setPaymentKobo("");
+      setAccountId("");
       setPaymentError("");
     },
   });
 
-  function startPayment(saleId: string, owed: bigint) {
-    setPayingSaleId(saleId);
-    setPaymentKobo(owed.toString());
-    setPaymentError("");
+  function beginPayment(sale: DebtorSaleDto) {
+    paymentIntent.current.reset();
+    setPayingSaleId(sale.id);
+    setPaymentKobo(sale.balanceDueKobo);
     setPaymentMethod("CASH");
     setAccountId("");
+    setPaymentError("");
   }
 
-  async function submitPayment(sale: DebtorSale, groupName: string) {
-    if (submitting.current || payMutation.isPending) return;
+  async function submitPayment(debtor: DebtorDto, sale: DebtorSaleDto) {
     setPaymentError("");
-
-    if (paymentKobo.trim() === "" || !/^[0-9]+$/.test(paymentKobo)) {
+    if (!/^[0-9]+$/.test(paymentKobo.trim())) {
       setPaymentError("Enter a valid amount.");
       return;
     }
     const amount = BigInt(paymentKobo);
-    const owed = sale.amountOwedKobo;
-    if (amount <= 0n) {
-      setPaymentError("Enter an amount greater than zero.");
-      return;
-    }
-    if (amount > owed) {
+    const balance = BigInt(sale.balanceDueKobo);
+    if (amount <= 0n || amount > balance) {
       setPaymentError(
-        `Payment cannot be more than the outstanding balance of ${formatNaira(owed)}.`,
+        amount <= 0n
+          ? "Enter an amount greater than zero."
+          : `Payment cannot exceed the outstanding balance of ${formatNaira(balance)}.`,
       );
       return;
     }
+    if (accounts.isError) {
+      setPaymentError(`Accounts could not be loaded: ${toUserMessage(accounts.error)}`);
+      return;
+    }
     const selectedAccountId =
-      accountId || defaultAccountId(accountsQuery.data ?? [], paymentMethod);
-    if (selectedAccountId === "") {
+      accountId || defaultAccountId(accounts.data ?? [], paymentMethod);
+    if (!selectedAccountId) {
       setPaymentError("Add an active account before recording this payment.");
       return;
     }
-
-    const remaining = owed - amount;
-    const clearsDebt = remaining === 0n;
-
-    submitting.current = true;
-    try {
-      await confirm({
-        title: "Record this payment?",
-        description: "Confirm before the payment is saved.",
-        confirmLabel: "Record payment",
-        successMessage: `Payment of ${formatNaira(amount)} recorded for ${groupName}.`,
-        details: (
-          <dl className="space-y-1.5 text-sm">
-            <div className="flex items-center justify-between gap-4">
-              <dt className="text-muted-foreground">Customer</dt>
-              <dd className="font-medium text-foreground">{groupName}</dd>
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <dt className="text-muted-foreground">Amount</dt>
-              <dd className="font-medium text-foreground">
-                <Money kobo={amount} tone="neutral" />
-              </dd>
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <dt className="text-muted-foreground">Remaining balance</dt>
-              <dd className="font-medium text-foreground">
-                <Money kobo={remaining} />
-              </dd>
-            </div>
-            {clearsDebt && (
-              <p className="rounded-sm border border-success/30 bg-success-surface px-2 py-1 text-xs text-success">
-                This will clear the debt.
-              </p>
-            )}
-          </dl>
-        ),
-        onConfirm: () =>
-          payMutation.mutateAsync({
+    await confirm({
+      title: "Record this payment?",
+      description: `Record ${formatNaira(amount)} received from ${debtor.name}?`,
+      confirmLabel: "Record payment",
+      onConfirm: async () => {
+        try {
+          await payMutation.mutateAsync({
             saleId: sale.id,
-            amountKobo: paymentKobo,
+            amountKobo: amount.toString(),
             accountId: selectedAccountId,
-          }),
-      });
-    } finally {
-      submitting.current = false;
-    }
+            key: paymentIntent.current.getKey(),
+          });
+        } catch (error) {
+          setPaymentError(toUserMessage(error));
+        }
+      },
+    });
   }
-
-  const totalOwed = debtorGroups.reduce((sum, g) => sum + g.totalOwedKobo, 0n);
-  const unpaidCount = debtorGroups.reduce((sum, g) => sum + g.sales.length, 0);
-
-  const isLoading = salesQuery.isLoading || detailsQuery.isLoading;
-  const isError = salesQuery.isError || detailsQuery.isError;
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Debtors"
-        description="Customers and walk-ins who owe money from unpaid sales."
+        description="Customers with unpaid sales, across all periods."
         actions={
-          <Link
-            href="/sales"
-            className={buttonClasses({ variant: "secondary" })}
-          >
+          <Link href="/sales" className={buttonClasses({ variant: "secondary" })}>
             <Plus aria-hidden="true" className="h-4 w-4" />
             New sale
           </Link>
         }
       />
-
       <div className="grid gap-3 sm:grid-cols-3">
         <StatCard
           label="Total outstanding"
-          value={<Money kobo={totalOwed} tone="auto" />}
-          tone={totalOwed > 0n ? "danger" : "default"}
+          value={<Money kobo={grandTotal} tone="auto" />}
+          tone={BigInt(grandTotal) > 0n ? "danger" : "default"}
           icon={HandCoins}
         />
-        <StatCard
-          label="Customers owing"
-          value={debtorGroups.length}
-          icon={Users}
-        />
-        <StatCard label="Unpaid sales" value={unpaidCount} />
+        <StatCard label="Customers owing" value={rows.length} icon={Users} />
+        <StatCard label="Unpaid sales on screen" value={totalSales} />
       </div>
-
       <Card>
-        <CardBody className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <DateFilter
-            id="f-date"
-            value={filterDate}
-            onChange={setFilterDate}
-            max={businessDate}
-          />
+        <CardBody className="grid gap-3 sm:grid-cols-2">
+          <label className="relative block">
+            <span className="sr-only">Search debtors</span>
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search customers by name or phone"
+              className="pl-9"
+            />
+          </label>
+          <Select
+            aria-label="Filter by outstanding amount"
+            value={debtorFilter}
+            onChange={(event) => setDebtorFilter(event.target.value as "all" | "minimum")}
+          >
+            <option value="all">Any outstanding balance</option>
+            <option value="minimum">At least ₦1,000</option>
+          </Select>
         </CardBody>
       </Card>
-
-      {isLoading ? (
-        <Skeleton variant="row" count={4} />
-      ) : isError ? (
+      {debtors.isPending ? (
+        <Skeleton variant="row" count={5} />
+      ) : debtors.isError ? (
         <ErrorState
-          message={toUserMessage(salesQuery.error ?? detailsQuery.error)}
-          onRetry={() => {
-            void salesQuery.refetch();
-            void detailsQuery.refetch();
-          }}
+          message={toUserMessage(debtors.error)}
+          onRetry={() => void debtors.refetch()}
         />
-      ) : debtorGroups.length === 0 ? (
+      ) : rows.length === 0 ? (
         <EmptyState
           icon={HandCoins}
           title="No outstanding debts"
-          description="Every sale on record is fully paid."
+          description="No customer has an unpaid sale matching these filters."
           action={
-            <Link
-              href="/sales"
-              className={buttonClasses({ variant: "secondary" })}
-            >
+            <Link href="/sales" className={buttonClasses({ variant: "secondary" })}>
               View sales
             </Link>
           }
         />
       ) : (
         <div className="space-y-4">
-          {debtorGroups.map((group) => (
-            <Card key={group.customerId}>
+          {rows.map((debtor) => (
+            <Card key={debtor.id}>
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-                <div className="min-w-0">
-                  <h2 className="text-section font-semibold text-card-foreground">
-                    {group.customerName}
-                  </h2>
+                <div>
+                  <Link
+                    href={`/customers/${debtor.id}`}
+                    className="font-semibold text-primary hover:underline"
+                  >
+                    {debtor.name}
+                  </Link>
                   <p className="text-xs text-muted-foreground">
-                    {group.sales.length === 1
-                      ? "1 unpaid sale"
-                      : `${group.sales.length} unpaid sales`}
+                    {debtor.phone ?? "No phone"} · {debtor.sales.length} unpaid sale{debtor.sales.length === 1 ? "" : "s"}
                   </p>
                 </div>
                 <div className="text-right">
                   <p className="text-xs text-muted-foreground">Total owed</p>
-                  <p className="text-lg font-bold text-danger">
-                    <Money kobo={group.totalOwedKobo} />
-                  </p>
+                  <Money kobo={debtor.balanceKobo} tone="auto" />
                 </div>
               </div>
-
               <CardBody className="space-y-3">
-                {group.sales.map((sale) => {
-                  const channelLabel =
-                    sale.channel === "RETAIL" ? "Retail" : "Wholesale";
+                {debtor.sales.map((sale) => {
                   const isPaying = payingSaleId === sale.id;
                   return (
-                    <div
-                      key={sale.id}
-                      className="rounded-md border border-border bg-background/50 p-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="text-sm">
-                          <span className="font-medium text-foreground">
-                            {channelLabel}
-                          </span>
-                          <span className="text-muted-foreground">
-                            {" · "}
-                            {formatLagosDate(sale.soldAt)}
-                          </span>
+                    <div key={sale.id} className="rounded-md border border-border p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <Link href={`/sales/${sale.id}`} className="font-medium text-primary hover:underline">
+                            {sale.reference ?? sale.id.slice(0, 8)}
+                          </Link>
+                          <p className="text-xs text-muted-foreground">
+                            {formatLagosDate(sale.soldAt)} · {sale.daysOutstanding} days outstanding
+                          </p>
                         </div>
-                        <div className="text-sm">
-                          <Money
-                            kobo={sale.amountOwedKobo}
-                            className="font-medium"
-                          />
-                          <span className="text-muted-foreground">
-                            {" of "}
-                            <Money kobo={sale.totalKobo} tone="neutral" />
-                          </span>
+                        <div className="text-right">
+                          <Money kobo={sale.balanceDueKobo} tone="auto" />
+                          <p className="text-xs text-muted-foreground">
+                            of <Money kobo={sale.totalKobo} tone="neutral" />
+                          </p>
                         </div>
                       </div>
-
-                      <p className="mt-2 text-sm text-muted-foreground">
-                        {sale.lines
-                          .map((l) => `${l.productName} ×${l.quantity}`)
-                          .join(", ")}
-                      </p>
-
+                      {sale.lines.length > 0 && (
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {sale.lines.map((line) => `${line.productName} ×${line.quantity} ${line.unit}`).join(", ")}
+                        </p>
+                      )}
                       {isPaying ? (
-                        <div className="mt-3 space-y-3">
+                        <div className="mt-3 space-y-3 border-t border-border pt-3">
                           <MoneyInput
                             id={`pay-${sale.id}`}
                             label="Payment amount"
-                            defaultValueKobo={sale.amountOwedKobo.toString()}
-                            onKoboChange={setPaymentKobo}
+                            defaultValueKobo={sale.balanceDueKobo}
+                            onKoboChange={(value) => {
+                              setPaymentKobo(value);
+                              paymentIntent.current.reset();
+                            }}
                           />
                           <div className="grid gap-3 sm:grid-cols-2">
                             <FormField id={`method-${sale.id}`} label="Payment method">
                               <Select
                                 id={`method-${sale.id}`}
                                 value={paymentMethod}
-                                onChange={(event) =>
-                                  setPaymentMethod(event.target.value as PaymentMethod)
-                                }
+                                onChange={(event) => {
+                                  setPaymentMethod(event.target.value as PaymentMethod);
+                                  setAccountId("");
+                                  paymentIntent.current.reset();
+                                }}
                               >
-                                <option value="CASH">Cash</option>
-                                <option value="TRANSFER">Transfer</option>
-                                <option value="OTHER">Other</option>
+                                {PAYMENT_METHODS.map((method) => (
+                                  <option key={method} value={method}>{method}</option>
+                                ))}
                               </Select>
                             </FormField>
                             <AccountSelect
                               id={`account-${sale.id}`}
                               label="Received into"
-                              accounts={accountsQuery.data ?? []}
+                              accounts={accounts.data ?? []}
                               accountId={accountId}
-                              onChange={setAccountId}
+                              onChange={(value) => {
+                                setAccountId(value);
+                                paymentIntent.current.reset();
+                              }}
                               method={paymentMethod}
-                              disabled={accountsQuery.isPending || accountsQuery.isError}
+                              disabled={accounts.isPending || accounts.isError}
                             />
                           </div>
-                          {accountsQuery.isError && (
+                          {accounts.isError && (
                             <p role="alert" className="text-sm text-danger">
-                              Accounts could not be loaded: {toUserMessage(accountsQuery.error)}
+                              Accounts could not be loaded: {toUserMessage(accounts.error)}
                             </p>
                           )}
-                          {paymentError && (
-                            <p role="alert" className="text-sm text-danger">
-                              {paymentError}
-                            </p>
-                          )}
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              onClick={() =>
-                                void submitPayment(sale, group.customerName)
-                              }
-                              loading={payMutation.isPending}
-                            >
-                              <HandCoins
-                                aria-hidden="true"
-                                className="h-4 w-4"
-                              />
-                              Confirm payment
-                            </Button>
+                          {paymentError && <p role="alert" className="text-sm text-danger">{paymentError}</p>}
+                          <div className="flex flex-wrap justify-end gap-2">
                             <Button
                               variant="secondary"
                               onClick={() => {
+                                paymentIntent.current.reset();
                                 setPayingSaleId(null);
-                                setPaymentError("");
                               }}
                             >
                               Cancel
                             </Button>
+                            <Button
+                              disabled={payMutation.isPending || accounts.isPending || accounts.isError}
+                              onClick={() => void submitPayment(debtor, sale)}
+                            >
+                              {payMutation.isPending ? "Saving…" : "Record payment"}
+                            </Button>
                           </div>
                         </div>
                       ) : (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          className="mt-3 border-primary text-primary hover:bg-primary/10"
-                          onClick={() =>
-                            startPayment(sale.id, sale.amountOwedKobo)
-                          }
-                        >
-                          Record payment
-                        </Button>
+                        <div className="mt-3 flex justify-end">
+                          <Button size="sm" onClick={() => beginPayment(sale)}>
+                            Record payment
+                          </Button>
+                        </div>
                       )}
                     </div>
                   );
@@ -467,6 +347,17 @@ export default function DebtorsPage() {
               </CardBody>
             </Card>
           ))}
+          {debtors.hasNextPage && (
+            <div className="flex justify-center">
+              <Button
+                variant="secondary"
+                disabled={debtors.isFetchingNextPage}
+                onClick={() => void debtors.fetchNextPage()}
+              >
+                {debtors.isFetchingNextPage ? "Loading…" : "Load more"}
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>

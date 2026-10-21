@@ -73,6 +73,9 @@ export interface AccountingApi {
   /** All accounts, active first, then by name. */
   listAccounts(): Promise<AccountDto[]>;
 
+  /** Active accounts used to receive or fund a payment. */
+  listPaymentAccounts(): Promise<AccountDto[]>;
+
   createAccount(input: CreateAccountDto): Promise<AccountDto>;
 
   updateAccount(id: string, input: UpdateAccountDto): Promise<AccountDto>;

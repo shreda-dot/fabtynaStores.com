@@ -610,3 +610,21 @@ times of 1.1 s, 2.5 s, 0.3 s, 1.8 s, and 2.3 s. EXPLAIN ANALYZE aggregated
 and receivables queries took 0.59 ms, 5.87 ms, 3.31 ms, and 0.48 ms
 respectively. No index change was justified by those plans. Focused coverage is
 `apps/api/tests/reports.test.ts`. The web's real report client is not wired yet.
+
+## 11. Web consumption of the sales and purchases API (7B)
+
+No API or schema change was made for 7B. The web relies on these contract
+facts (see `docs/AI_CONTEXT.md` section 6a for the full mapping notes):
+
+- Create sale / purchase take one paid amount plus `accountId`; a generated-looking
+  client `reference` is rejected, and amend ignores any reference.
+- Sale quantity is a JSON number (max 4 decimals); PACK lines must resolve to a
+  whole number of base units. Money is integer strings.
+- Account overdraw is a 409 BUSINESS_RULE with `accountId`, `accountName`,
+  `balanceKobo`, `amountKobo` in details. `GET /accounts` returns `balanceKobo`.
+- Purchase void is blocked while any supplier payment is live; sale void is
+  blocked while a later on-account payment is live.
+- Writes accept an Idempotency-Key (8-128 chars); the web reuses the same key
+  after a timeout/network error and renews it after success or a form edit.
+- Connection-level errors that are not Prisma/PG-coded fall to the 500 handler
+  (see `errors.ts`); the web treats every 5xx as UNKNOWN.

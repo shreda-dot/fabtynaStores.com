@@ -1,6 +1,7 @@
 import {
   createPurchaseDtoSchema,
   fromAuditLogDto,
+  getLagosBusinessDate,
   receivePurchase,
   recordPurchasePayment,
   toAuditLogDto,
@@ -109,6 +110,39 @@ export const purchasesMockApi: PurchasesApi = {
         };
       });
     return jsonClone(items);
+  },
+
+  async listPage(options) {
+    const all = await purchasesMockApi.list();
+    const search = options.search?.trim().toLowerCase() ?? "";
+    const wide =
+      options.unpaid === true ||
+      options.overdue === true ||
+      search !== "" ||
+      options.supplierId !== undefined;
+    const today = getLagosBusinessDate(new Date());
+    const items = all.filter((purchase) => {
+      const day = getLagosBusinessDate(new Date(purchase.purchasedAt));
+      if (!wide && options.from && day < options.from) return false;
+      if (!wide && options.to && day > options.to) return false;
+      if (options.status && purchase.status !== options.status) return false;
+      if (options.supplierId && purchase.supplierId !== options.supplierId) return false;
+      const owed =
+        purchase.status !== "VOIDED" && BigInt(purchase.totalKobo) > BigInt(purchase.paidKobo);
+      if (options.unpaid && !owed) return false;
+      if (options.overdue && !(owed && purchase.dueDate !== null && purchase.dueDate < today)) {
+        return false;
+      }
+      if (
+        search !== "" &&
+        !(purchase.reference ?? "").toLowerCase().includes(search) &&
+        !(purchase.supplierName ?? "").toLowerCase().includes(search)
+      ) {
+        return false;
+      }
+      return true;
+    });
+    return { items, nextCursor: null, from: options.from ?? null, to: options.to ?? null };
   },
 
   async getById(id) {
@@ -290,7 +324,7 @@ export const purchasesMockApi: PurchasesApi = {
 
     const store = readMockStore();
     const purchase = store.purchases.find((p) => p.id === result.id)!;
-    return buildPurchaseDetail(store, purchase);
+    return { ...buildPurchaseDetail(store, purchase), voidedPurchaseId: id };
   },
 
   async void(id) {
@@ -378,5 +412,10 @@ export const purchasesMockApi: PurchasesApi = {
 
     const store = readMockStore();
     return buildPurchaseDetail(store, result);
+  },
+
+  async reversePayment() {
+    await delay();
+    throw new Error("Reversing a payment is only available when connected to the real API.");
   },
 };

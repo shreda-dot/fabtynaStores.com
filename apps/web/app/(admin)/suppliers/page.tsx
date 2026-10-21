@@ -56,7 +56,7 @@ export default function SuppliersPage() {
   const debouncedSearch = useDebouncedValue(search, 250);
 
   const suppliers = useInfiniteQuery({
-    queryKey: queryKeys.suppliers.list(debouncedSearch, showInactive, balanceFilter),
+    queryKey: queryKeys.suppliers.pages(debouncedSearch, showInactive, balanceFilter),
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       return suppliersApi.listPage({

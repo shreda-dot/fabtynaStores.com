@@ -1,6 +1,6 @@
 "use client";
 
-import type { AccountDto, PaymentMethod } from "@fabtyna/shared";
+import { formatNaira, type AccountDto, type PaymentMethod } from "@fabtyna/shared";
 import { FormField } from "@/components/ui/form-field";
 import { Select } from "@/components/ui/input";
 
@@ -46,11 +46,16 @@ export function AccountSelect({
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
         >
-          {activeAccounts.map((account) => (
-            <option key={account.id} value={account.id}>
-              {account.name} ({account.type})
-            </option>
-          ))}
+          {activeAccounts.map((account) => {
+            // The real API includes the current balance; the mock does not.
+            const balance = (account as { balanceKobo?: string }).balanceKobo;
+            return (
+              <option key={account.id} value={account.id}>
+                {account.name} ({account.type})
+                {balance !== undefined ? ` — ${formatNaira(BigInt(balance))}` : ""}
+              </option>
+            );
+          })}
         </Select>
       ) : (
         <p className="rounded-md border border-warning/40 bg-warning-surface p-3 text-sm text-warning">

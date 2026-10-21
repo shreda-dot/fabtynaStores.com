@@ -80,7 +80,7 @@ export default function ProductsPage() {
   const debouncedSearch = useDebouncedValue(search, 250);
 
   const products = useInfiniteQuery({
-    queryKey: queryKeys.products.list(debouncedSearch, showDeleted),
+    queryKey: queryKeys.products.pages(debouncedSearch, showDeleted),
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       return productsApi.listPage({

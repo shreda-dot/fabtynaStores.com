@@ -1,14 +1,17 @@
 "use client";
 
-import { useId, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  computeSaleLineTotalKobo,
   createLagosDateTime,
   formatNaira,
   getLagosBusinessDate,
+  parseQuantityText,
+  quantityToWholeUnits,
   type CreatePurchaseDto,
   type PaymentMethod,
   type ProductDto,
@@ -24,6 +27,8 @@ import { FormField } from "@/components/ui/form-field";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
+import { WriteFlowStatus } from "@/components/write-flow-status";
+import { useWriteFlow } from "@/hooks/use-write-flow";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { accountingApi, productsApi, purchasesApi, suppliersApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
@@ -41,6 +46,8 @@ type PurchaseLineDraft = {
 };
 
 const LOCATIONS: StockLocation[] = ["WAREHOUSE", "RETAIL_SHELF", "MARKET"];
+
+const GENERATED_REFERENCE = /^[SP]-\d{8}-\d{6,}$/;
 
 const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: "CASH", label: "Cash" },
@@ -82,6 +89,8 @@ export default function NewPurchasePage() {
 
   const lineSeq = useRef(1);
   const submitting = useRef(false);
+  const flow = useWriteFlow();
+  const retrySubmit = useRef<(() => Promise<void>) | null>(null);
 
   const network = useNetworkStatus();
   const businessDate = useLagosBusinessDate();
@@ -96,7 +105,7 @@ export default function NewPurchasePage() {
   });
   const accountsQuery = useQuery({
     queryKey: queryKeys.accounting.accounts,
-    queryFn: () => accountingApi.listAccounts(),
+    queryFn: () => accountingApi.listPaymentAccounts(),
   });
 
   const productById = useMemo(() => {
@@ -108,23 +117,14 @@ export default function NewPurchasePage() {
   }, [productsQuery.data]);
 
   /**
-   * Mirrors `receivePurchase` in the domain so the preview matches the saved
-   * line total: lineTotalKobo = quantity × price per unit (pack or unit).
+   * Exact line total from the shared domain helper (scale-4 quantity, half-up),
+   * the same arithmetic the sale side uses: quantity × price per pack/unit.
    */
   function lineTotalKobo(line: PurchaseLineDraft): bigint {
-    const qty = Number(line.quantity);
-    const price = line.pricePerUnitKobo;
-    if (!Number.isFinite(qty) || qty <= 0 || !/^[0-9]+$/.test(price)) {
-      return 0n;
-    }
-    const priceKobo = BigInt(price);
-    // A UNIT line is always whole units. A PACK line may be fractional (half a
-    // crate), so the money is rounded once, half-up, the way the domain does.
-    if (line.unit === "UNIT") {
-      if (!Number.isInteger(qty)) return 0n;
-      return BigInt(qty) * priceKobo;
-    }
-    return BigInt(Math.round(qty * Number(priceKobo)));
+    const parsed = parseQuantityText(line.quantity);
+    if (!parsed.ok || !/^[0-9]+$/.test(line.pricePerUnitKobo)) return 0n;
+    if (line.unit === "UNIT" && parsed.scaledQuantity % 10000n !== 0n) return 0n;
+    return computeSaleLineTotalKobo(parsed.scaledQuantity, BigInt(line.pricePerUnitKobo));
   }
 
   const totalKobo = lines.reduce((sum, line) => sum + lineTotalKobo(line), 0n);
@@ -138,24 +138,59 @@ export default function NewPurchasePage() {
     suppliersQuery.isError ||
     (paidKobo > 0n && accountsQuery.isError);
 
-  const createMutation = useMutation({
-    mutationFn: (input: CreatePurchaseDto) => purchasesApi.create(input),
-    onSuccess: (purchase) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.accounting.all,
-      });
-      toast.success(
-        `Purchase ${purchase.reference ?? purchase.id.slice(0, 8)} received — ${formatNaira(totalKobo)}.`,
+  const selectedAccount = (accountsQuery.data ?? []).find(
+    (a) =>
+      a.id ===
+      (accountId || defaultAccountId(accountsQuery.data ?? [], paymentMethod)),
+  ) as { name: string; balanceKobo?: string } | undefined;
+  const selectedAccountName = selectedAccount?.name ?? "The account";
+  const accountBalance =
+    selectedAccount?.balanceKobo !== undefined
+      ? BigInt(selectedAccount.balanceKobo)
+      : null;
+
+  // Any form change is a new intent: it must get a new idempotency key.
+  const formSnapshot = JSON.stringify([
+    supplierId,
+    location,
+    purchasedAt,
+    reference,
+    notes,
+    amountPaidNow,
+    paymentMethod,
+    accountId,
+    dueDate,
+    lines,
+  ]);
+  const { edit: renewKey } = flow;
+  useEffect(() => {
+    renewKey();
+  }, [formSnapshot, renewKey]);
+
+  function afterCreated(
+    purchase: { id: string; reference?: string | null; totalKobo: string },
+    previewTotal: bigint,
+  ) {
+    if (
+      process.env.NODE_ENV !== "production" &&
+      purchase.totalKobo !== previewTotal.toString()
+    ) {
+      console.warn(
+        `Purchase preview total ${previewTotal} differs from server total ${purchase.totalKobo}.`,
       );
-      router.push(`/purchases/${purchase.id}`);
-    },
-  });
+    }
+    void queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+    toast.success(
+      `Purchase ${purchase.reference ?? purchase.id.slice(0, 8)} received — ${formatNaira(BigInt(purchase.totalKobo))}.`,
+    );
+    router.push(`/purchases/${purchase.id}`);
+  }
 
   function updateLine(id: string, patch: Partial<PurchaseLineDraft>) {
     setLines((prev) =>
@@ -212,21 +247,17 @@ export default function NewPurchasePage() {
       return found;
     }
 
-    const qty = Number(line.quantity);
-    if (line.quantity.trim() === "" || !Number.isFinite(qty) || qty <= 0) {
+    const parsedQty = parseQuantityText(line.quantity);
+    if (!parsedQty.ok) {
+      found[`line-${line.id}-qty`] = parsedQty.message;
+    } else if (
+      quantityToWholeUnits(parsedQty.scaledQuantity, line.unit, product.unitsPerPack) ===
+      null
+    ) {
       found[`line-${line.id}-qty`] =
-        line.unit === "PACK"
-          ? "Enter a quantity of packs greater than 0."
-          : "Enter a quantity of units greater than 0.";
-    } else if (line.unit === "UNIT" && !Number.isInteger(qty)) {
-      found[`line-${line.id}-qty`] =
-        "Unit quantities must be whole numbers.";
-    } else if (line.unit === "PACK") {
-      const totalUnits = qty * product.unitsPerPack;
-      if (!Number.isSafeInteger(totalUnits) || totalUnits <= 0) {
-        found[`line-${line.id}-qty`] =
-          `Quantity must add up to whole units (1 pack = ${product.unitsPerPack} units).`;
-      }
+        line.unit === "UNIT"
+          ? "Unit quantities must be whole numbers."
+          : `Quantity must add up to whole units (1 pack = ${product.unitsPerPack} units).`;
     }
 
     if (!/^[0-9]+$/.test(line.pricePerUnitKobo)) {
@@ -257,6 +288,11 @@ export default function NewPurchasePage() {
     ) {
       found["purchase-account"] =
         "Add an active account before recording this payment.";
+    }
+
+    if (reference.trim() !== "" && GENERATED_REFERENCE.test(reference.trim())) {
+      found["purchase-reference"] =
+        "That reference looks system-generated. Leave it blank or type your own.";
     }
 
     if (balanceKobo > 0n && supplierId === "") {
@@ -304,9 +340,7 @@ export default function NewPurchasePage() {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (submitting.current || createMutation.isPending) return;
-    createMutation.reset();
-
+    if (submitting.current || flow.pending) return;
     const found = validateAll();
     setErrors(found);
     if (Object.keys(found).length > 0) {
@@ -331,7 +365,11 @@ export default function NewPurchasePage() {
       lines: lines.map((line) => ({
         productId: line.productId,
         unit: line.unit,
-        quantity: Number(line.quantity),
+        quantity: (() => {
+          const parsed = parseQuantityText(line.quantity);
+          if (!parsed.ok) throw new Error(parsed.message);
+          return parsed.jsonNumber;
+        })(),
         lineTotalKobo: lineTotalKobo(line).toString(),
       })),
     };
@@ -342,7 +380,7 @@ export default function NewPurchasePage() {
 
     submitting.current = true;
     try {
-      await confirm({
+      const ok = await confirm({
         title: "Save this purchase?",
         description: "Confirm the details before receiving goods into stock.",
         confirmLabel: "Receive purchase",
@@ -388,8 +426,15 @@ export default function NewPurchasePage() {
             </div>
           </dl>
         ),
-        onConfirm: () => createMutation.mutateAsync(input),
       });
+      if (!ok) return;
+      const previewTotal = totalKobo;
+      const run = async () => {
+        const purchase = await flow.run((key) => purchasesApi.create(input, key));
+        if (purchase) afterCreated(purchase, previewTotal);
+      };
+      retrySubmit.current = run;
+      await run();
     } finally {
       submitting.current = false;
     }
@@ -571,6 +616,13 @@ export default function NewPurchasePage() {
                   disabled={accountsQuery.isPending || accountsQuery.isError}
                 />
               )}
+              {paidKobo > 0n && accountBalance !== null && paidKobo > accountBalance && (
+                <p role="status" className="text-sm text-warning sm:col-span-2">
+                  {selectedAccountName} holds {formatNaira(accountBalance)}, less
+                  than this payment of {formatNaira(paidKobo)}. The server will
+                  refuse it unless you record income or reconcile first.
+                </p>
+              )}
               {errors["purchase-account"] && (
                 <p role="alert" className="text-sm text-danger sm:col-span-2">
                   {errors["purchase-account"]}
@@ -623,11 +675,11 @@ export default function NewPurchasePage() {
             {lines.map((line, index) => {
               const product = productById.get(line.productId);
               const unitsPerPack = product?.unitsPerPack ?? 24;
-              const qty = Number(line.quantity);
-              const quantityUnits =
-                line.unit === "PACK" && Number.isFinite(qty) && qty > 0
-                  ? qty * unitsPerPack
-                  : qty;
+              const parsedQty = parseQuantityText(line.quantity);
+              const wholeUnits = parsedQty.ok
+                ? quantityToWholeUnits(parsedQty.scaledQuantity, line.unit, unitsPerPack)
+                : null;
+              const quantityUnits = wholeUnits === null ? Number.NaN : Number(wholeUnits);
               const total = lineTotalKobo(line);
               return (
                 <div
@@ -701,10 +753,9 @@ export default function NewPurchasePage() {
                     >
                       <Input
                         id={`line-${line.id}-qty`}
-                        type="number"
+                        type="text"
                         inputMode="decimal"
-                        min={line.unit === "PACK" ? 0.01 : 1}
-                        step={line.unit === "PACK" ? "any" : 1}
+                        autoComplete="off"
                         value={line.quantity}
                         aria-invalid={
                           errors[`line-${line.id}-qty`] !== undefined
@@ -782,10 +833,15 @@ export default function NewPurchasePage() {
             </dl>
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-              {createMutation.isError && (
-                <p role="alert" className="text-sm text-danger sm:mr-auto">
-                  {toUserMessage(createMutation.error)}
-                </p>
+              {flow.status !== "idle" && (
+                <div className="sm:mr-auto">
+                  <WriteFlowStatus
+                    flow={flow}
+                    onRetry={() => void retrySubmit.current?.()}
+                    checkHref={`/purchases?date=${purchasedAt}`}
+                    checkLabel="Check recent purchases"
+                  />
+                </div>
               )}
               {network.offline && (
                 <p className="text-sm text-warning sm:mr-auto">
@@ -797,8 +853,8 @@ export default function NewPurchasePage() {
                 type="submit"
                 size="lg"
                 className="w-full sm:w-auto"
-                loading={createMutation.isPending}
-                disabled={network.offline}
+                loading={flow.pending}
+                disabled={network.offline || flow.status === "unknown"}
               >
                 Receive purchase
               </Button>

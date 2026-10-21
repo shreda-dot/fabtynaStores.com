@@ -58,7 +58,7 @@ export default function CustomersPage() {
   const debouncedSearch = useDebouncedValue(search, 250);
 
   const customers = useInfiniteQuery({
-    queryKey: queryKeys.customers.list(debouncedSearch, showDeleted, balanceFilter),
+    queryKey: queryKeys.customers.pages(debouncedSearch, showDeleted, balanceFilter),
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       return customersApi.listPage({

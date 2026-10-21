@@ -1,13 +1,16 @@
 "use client";
 
-import { useId, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  computeSaleLineTotalKobo,
   createLagosDateTime,
   getLagosBusinessDate,
+  parseQuantityText,
+  quantityToWholeUnits,
   type CreateSaleDto,
   type PaymentMethod,
   type ProductDto,
@@ -24,6 +27,8 @@ import { FormField } from "@/components/ui/form-field";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
+import { WriteFlowStatus } from "@/components/write-flow-status";
+import { useWriteFlow } from "@/hooks/use-write-flow";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { accountingApi, customersApi, productsApi, salesApi, stockApi } from "@/lib/api";
@@ -53,6 +58,10 @@ export default function NewSalePage() {
   const [reference, setReference] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
   const [paidKobo, setPaidKobo] = useState<string>("0");
+  const [paidInFull, setPaidInFull] = useState(false);
+  const [retailLocation, setRetailLocation] =
+    useState<"RETAIL_SHELF" | "MARKET">("RETAIL_SHELF");
+  const [productFilter, setProductFilter] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
   const [accountId, setAccountId] = useState("");
   const [lines, setLines] = useState<SaleLineDraft[]>([
@@ -62,6 +71,8 @@ export default function NewSalePage() {
 
   const lineSeq = useRef(1);
   const submitting = useRef(false);
+  const flow = useWriteFlow();
+  const retrySubmit = useRef<(() => Promise<void>) | null>(null);
 
   const network = useNetworkStatus();
   const businessDate = useLagosBusinessDate();
@@ -80,7 +91,7 @@ export default function NewSalePage() {
   });
   const accountsQuery = useQuery({
     queryKey: queryKeys.accounting.accounts,
-    queryFn: () => accountingApi.listAccounts(),
+    queryFn: () => accountingApi.listPaymentAccounts(),
   });
 
   const productById = useMemo(() => {
@@ -104,8 +115,18 @@ export default function NewSalePage() {
   }, [stockQuery.data]);
 
   const location: StockLocation =
-    channel === "RETAIL" ? "RETAIL_SHELF" : "WAREHOUSE";
+    channel === "RETAIL" ? retailLocation : "WAREHOUSE";
   const defaultUnit: Unit = channel === "RETAIL" ? "UNIT" : "PACK";
+
+  // Only products sold on this channel are offered, filtered by the search box.
+  const offeredProducts = useMemo(() => {
+    const needle = productFilter.trim().toLowerCase();
+    return (productsQuery.data ?? []).filter(
+      (p) =>
+        (p.saleChannel === "BOTH" || p.saleChannel === channel) &&
+        (needle === "" || p.name.toLowerCase().includes(needle)),
+    );
+  }, [productsQuery.data, channel, productFilter]);
 
   const channelCustomers = useMemo(() => {
     return (customersQuery.data ?? []).filter((c) => c.type === channel);
@@ -116,32 +137,49 @@ export default function NewSalePage() {
   }
 
   function lineUnits(line: SaleLineDraft): number {
-    const qty = Number(line.quantity);
-    if (!Number.isFinite(qty) || qty <= 0) return 0;
-    if (defaultUnit === "UNIT") return qty;
+    const parsed = parseQuantityText(line.quantity);
+    if (!parsed.ok) return 0;
     const product = productById.get(line.productId);
-    return qty * (product?.unitsPerPack ?? 1);
+    const units = quantityToWholeUnits(
+      parsed.scaledQuantity,
+      defaultUnit,
+      product?.unitsPerPack ?? 1,
+    );
+    return units === null ? 0 : Number(units);
   }
 
-  /**
-   * Mirrors `recordSale` in the domain so the preview matches the saved total:
-   * UNIT → quantity × unit price; PACK → round(quantity × unit price).
-   */
+  /** Exact total from the shared domain helper, identical to what `recordSale` stores. */
   function lineTotalKobo(line: SaleLineDraft): bigint {
-    const qty = Number(line.quantity);
-    const price = line.unitPriceKobo;
-    if (!Number.isFinite(qty) || qty <= 0 || !/^[0-9]+$/.test(price)) return 0n;
-    const priceKobo = BigInt(price);
-    if (defaultUnit === "UNIT") {
-      if (!Number.isInteger(qty)) return 0n;
-      return BigInt(qty) * priceKobo;
-    }
-    return BigInt(Math.round(qty * Number(priceKobo)));
+    const parsed = parseQuantityText(line.quantity);
+    if (!parsed.ok || !/^[0-9]+$/.test(line.unitPriceKobo)) return 0n;
+    return computeSaleLineTotalKobo(parsed.scaledQuantity, BigInt(line.unitPriceKobo));
   }
 
   const totalKobo = lines.reduce((sum, line) => sum + lineTotalKobo(line), 0n);
-  const paid = /^[0-9]+$/.test(paidKobo) ? BigInt(paidKobo) : 0n;
+  const paid = paidInFull
+    ? totalKobo
+    : /^[0-9]+$/.test(paidKobo)
+      ? BigInt(paidKobo)
+      : 0n;
   const balanceOwed = totalKobo - paid;
+
+  // Any change to the form is a new intent: it must get a new idempotency key.
+  const formSnapshot = JSON.stringify([
+    channel,
+    customerId,
+    soldAt,
+    reference,
+    notes,
+    paid.toString(),
+    paymentMethod,
+    accountId,
+    retailLocation,
+    lines,
+  ]);
+  const { edit: renewKey } = flow;
+  useEffect(() => {
+    renewKey();
+  }, [formSnapshot, renewKey]);
 
   const customersQueryFailed =
     productsQuery.isError ||
@@ -149,20 +187,21 @@ export default function NewSalePage() {
     stockQuery.isError ||
     (paid > 0n && accountsQuery.isError);
 
-  const createMutation = useMutation({
-    mutationFn: (input: CreateSaleDto) => salesApi.create(input),
-    onSuccess: (sale) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
-      toast.success(
-        `Sale recorded — ${sale.reference ?? sale.id.slice(0, 8)}.`,
+  function afterCreated(sale: { id: string; reference?: string | null; totalKobo: string }, previewTotal: bigint) {
+    if (process.env.NODE_ENV !== "production" && sale.totalKobo !== previewTotal.toString()) {
+      console.warn(
+        `Sale preview total ${previewTotal} differs from server total ${sale.totalKobo}.`,
       );
-      router.push(`/sales/${sale.id}`);
-    },
-  });
+    }
+    void queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.debtors.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+    toast.success(`Sale recorded — ${sale.reference ?? sale.id.slice(0, 8)}.`);
+    router.push(`/sales/${sale.id}`);
+  }
 
   function updateLine(id: string, patch: Partial<SaleLineDraft>) {
     setLines((prev) =>
@@ -222,20 +261,22 @@ export default function NewSalePage() {
       found[`line-${line.id}-product`] = "This product no longer exists.";
       return found;
     }
-    const qty = Number(line.quantity);
-    if (!Number.isFinite(qty) || qty <= 0) {
+    const parsedQty = parseQuantityText(line.quantity);
+    if (product.saleChannel !== "BOTH" && product.saleChannel !== channel) {
+      found[`line-${line.id}-product`] =
+        `${product.name} is not sold on the ${channel.toLowerCase()} channel.`;
+      return found;
+    }
+    if (!parsedQty.ok) {
+      found[`line-${line.id}-qty`] = parsedQty.message;
+    } else if (
+      quantityToWholeUnits(parsedQty.scaledQuantity, defaultUnit, product.unitsPerPack) ===
+      null
+    ) {
       found[`line-${line.id}-qty`] =
         defaultUnit === "UNIT"
-          ? "Enter a quantity of 1 or more."
-          : "Enter a quantity greater than 0.";
-    } else if (defaultUnit === "UNIT" && !Number.isInteger(qty)) {
-      found[`line-${line.id}-qty`] = "Retail quantities must be whole units.";
-    } else if (defaultUnit === "PACK") {
-      const totalUnits = qty * product.unitsPerPack;
-      if (!Number.isSafeInteger(totalUnits) || totalUnits <= 0) {
-        found[`line-${line.id}-qty`] =
-          `Quantity must add up to whole units (1 pack = ${product.unitsPerPack} units).`;
-      }
+          ? "Retail quantities must be whole units."
+          : `Quantity must add up to whole units (1 pack = ${product.unitsPerPack} units).`;
     }
 
     if (
@@ -310,9 +351,7 @@ export default function NewSalePage() {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (submitting.current || createMutation.isPending) return;
-    createMutation.reset();
-
+    if (submitting.current || flow.pending) return;
     const found = validateAll();
     setErrors(found);
     if (Object.keys(found).length > 0) {
@@ -324,7 +363,11 @@ export default function NewSalePage() {
     const validLines = lines.map((line) => ({
       productId: line.productId,
       unit: defaultUnit,
-      quantity: Number(line.quantity),
+      quantity: (() => {
+        const parsed = parseQuantityText(line.quantity);
+        if (!parsed.ok) throw new Error(parsed.message);
+        return parsed.jsonNumber;
+      })(),
       unitPriceKobo: line.unitPriceKobo,
     }));
 
@@ -349,7 +392,7 @@ export default function NewSalePage() {
 
     submitting.current = true;
     try {
-      await confirm({
+      const ok = await confirm({
         title: "Record this sale?",
         description: "Confirm the details before saving.",
         confirmLabel: "Record sale",
@@ -357,6 +400,9 @@ export default function NewSalePage() {
           <dl className="space-y-1.5 text-sm">
             <SummaryRow label="Channel">
               {channel === "RETAIL" ? "Retail (fridge)" : "Wholesale"}
+            </SummaryRow>
+            <SummaryRow label="Stock from">
+              {location.replace(/_/g, " ")}
             </SummaryRow>
             <SummaryRow label="Customer">{customerLabel}</SummaryRow>
             <SummaryRow label="Date">{soldAt}</SummaryRow>
@@ -371,8 +417,15 @@ export default function NewSalePage() {
             </SummaryRow>
           </dl>
         ),
-        onConfirm: () => createMutation.mutateAsync(input),
       });
+      if (!ok) return;
+      const previewTotal = totalKobo;
+      const run = async () => {
+        const sale = await flow.run((key) => salesApi.create(input, key));
+        if (sale) afterCreated(sale, previewTotal);
+      };
+      retrySubmit.current = run;
+      await run();
     } finally {
       submitting.current = false;
     }
@@ -461,11 +514,26 @@ export default function NewSalePage() {
               </FormField>
 
               <FormField id="sale-location" label="Stock location">
-                <Input
-                  id="sale-location"
-                  value={location.replace(/_/g, " ")}
-                  disabled
-                />
+                {channel === "RETAIL" ? (
+                  <Select
+                    id="sale-location"
+                    value={retailLocation}
+                    onChange={(event) =>
+                      setRetailLocation(
+                        event.target.value as "RETAIL_SHELF" | "MARKET",
+                      )
+                    }
+                  >
+                    <option value="RETAIL_SHELF">Retail shelf (fridge)</option>
+                    <option value="MARKET">Market</option>
+                  </Select>
+                ) : (
+                  <Input
+                    id="sale-location"
+                    value={location.replace(/_/g, " ")}
+                    disabled
+                  />
+                )}
               </FormField>
 
               <FormField
@@ -558,6 +626,19 @@ export default function NewSalePage() {
             }
           />
           <CardBody className="space-y-3">
+            <FormField
+              id="product-filter"
+              label="Find a product"
+              hint="Type to narrow the product lists below."
+            >
+              <Input
+                id="product-filter"
+                type="search"
+                value={productFilter}
+                onChange={(event) => setProductFilter(event.target.value)}
+                placeholder="Product name"
+              />
+            </FormField>
             {errors["lines"] && (
               <p role="alert" className="text-sm text-danger">
                 {errors["lines"]}
@@ -607,9 +688,10 @@ export default function NewSalePage() {
                         }
                       >
                         <option value="">Select product</option>
-                        {productsQuery.data?.map((option) => (
+                        {offeredProducts.map((option) => (
                           <option key={option.id} value={option.id}>
-                            {option.name}
+                            {option.name} — {availableUnits(option.id, location)}{" "}
+                            in stock
                           </option>
                         ))}
                       </Select>
@@ -627,10 +709,9 @@ export default function NewSalePage() {
                     >
                       <Input
                         id={`line-${line.id}-qty`}
-                        type="number"
+                        type="text"
                         inputMode="decimal"
-                        min={defaultUnit === "UNIT" ? 1 : 0.01}
-                        step={defaultUnit === "UNIT" ? 1 : "any"}
+                        autoComplete="off"
                         value={line.quantity}
                         aria-invalid={
                           errors[`line-${line.id}-qty`] !== undefined
@@ -668,7 +749,7 @@ export default function NewSalePage() {
                         ? `${product.packName} — ${product.unitsPerPack} units/pack${
                             Number.isInteger(lineUnits(line)) &&
                             lineUnits(line) > 0
-                              ? ` · ${lineUnits(line)} units`
+                              ? ` · = ${lineUnits(line)} units`
                               : ""
                           }`
                         : "—"}
@@ -684,93 +765,123 @@ export default function NewSalePage() {
         </Card>
 
         <Card>
-          <CardBody className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-              <div>
-                <MoneyInput
-                  id="paid"
-                  label="Amount received"
-                  defaultValueKobo={paidKobo}
-                  onKoboChange={(value) => setPaidKobo(value)}
-                />
-                {errors["paid"] && (
-                  <p role="alert" className="mt-1 text-sm text-danger">
-                    {errors["paid"]}
-                  </p>
-                )}
-              </div>
-              {paid > 0n && (
-                <>
-                  <FormField id="sale-payment-method" label="Payment method">
-                    <Select
-                      id="sale-payment-method"
-                      value={paymentMethod}
-                      onChange={(event) =>
-                        setPaymentMethod(event.target.value as PaymentMethod)
-                      }
-                    >
-                      <option value="CASH">Cash</option>
-                      <option value="TRANSFER">Transfer</option>
-                      <option value="OTHER">Other</option>
-                    </Select>
-                  </FormField>
-                  <AccountSelect
-                    id="sale-account"
-                    label="Received into"
-                    accounts={accountsQuery.data ?? []}
-                    accountId={accountId}
-                    onChange={setAccountId}
-                    method={paymentMethod}
-                    disabled={accountsQuery.isPending || accountsQuery.isError}
-                  />
-                  {errors["sale-account"] && (
-                    <p role="alert" className="text-sm text-danger sm:col-span-2">
-                      {errors["sale-account"]}
-                    </p>
-                  )}
-                  {accountsQuery.isError && (
-                    <p role="alert" className="text-sm text-danger sm:col-span-2">
-                      Accounts could not be loaded: {toUserMessage(accountsQuery.error)}
-                    </p>
-                  )}
-                </>
-              )}
-              <div className="text-left sm:text-right">
-                <p className="text-xs text-muted-foreground">Total</p>
-                <p className="text-lg font-semibold text-foreground">
-                  <Money kobo={totalKobo} tone="neutral" />
-                </p>
-                {balanceOwed > 0n && (
-                  <p className="text-xs text-danger">
-                    Balance owed: <Money kobo={balanceOwed} />
-                  </p>
-                )}
-              </div>
-            </div>
-            <div className="flex flex-col gap-2">
-              {createMutation.isError && (
-                <p role="alert" className="text-sm text-danger">
-                  {toUserMessage(createMutation.error)}
-                </p>
-              )}
-              {network.offline && (
-                <p className="text-sm text-warning">
-                  You&rsquo;re offline. Changes can&rsquo;t be saved until you
-                  reconnect.
-                </p>
-              )}
-              <Button
-                type="submit"
-                size="lg"
-                className="w-full sm:w-auto"
-                loading={createMutation.isPending}
-                disabled={network.offline}
-              >
-                Record sale
-              </Button>
-            </div>
-          </CardBody>
-        </Card>
+  <CardBody className="space-y-6 p-6">
+    {/* Top section: Payment toggle & input */}
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 border-b border-border pb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-6">
+        <label className="flex items-center gap-3 text-sm font-medium cursor-pointer select-none">
+          <input
+            type="checkbox"
+            className="h-5 w-5 rounded border-input text-primary focus:ring-primary"
+            checked={paidInFull}
+            onChange={(event) => setPaidInFull(event.target.checked)}
+          />
+          <span className="text-base">Paid in full</span>
+        </label>
+
+        {paidInFull ? (
+          <div className="text-sm text-muted-foreground">
+            Amount received: <span className="text-base font-semibold text-foreground ml-1"><Money kobo={totalKobo} tone="neutral" /></span>
+          </div>
+        ) : (
+          <div className="w-full sm:w-72">
+            <MoneyInput
+              id="paid"
+              label="Amount received"
+              defaultValueKobo={paidKobo}
+              onKoboChange={(value) => setPaidKobo(value)}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Total amount preview */}
+      <div className="text-left sm:text-right">
+        <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Amount</p>
+        <p className="text-2xl font-bold text-foreground">
+          <Money kobo={totalKobo} tone="neutral" />
+        </p>
+        {balanceOwed > 0n && (
+          <p className="text-xs font-medium text-danger mt-0.5">
+            Balance owed: <Money kobo={balanceOwed} />
+          </p>
+        )}
+      </div>
+    </div>
+
+    {/* Middle section: Conditional Payment Method & Account Selectors */}
+    {/* Middle section: Conditional Payment Method & Account Selectors */}
+    {paid > 0n && (
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 bg-muted/30 p-4 rounded-lg border border-border/50">
+        <FormField id="sale-payment-method" label="Payment method">
+          <Select
+            id="sale-payment-method"
+            className="w-full"
+            value={paymentMethod}
+            onChange={(event) =>
+              setPaymentMethod(event.target.value as PaymentMethod)
+            }
+          >
+            <option value="CASH">Cash</option>
+            <option value="TRANSFER">Transfer</option>
+            <option value="OTHER">Other</option>
+          </Select>
+        </FormField>
+
+        {/* Removed className prop to satisfy TypeScript */}
+        <AccountSelect
+          id="sale-account"
+          label="Received into"
+          accounts={accountsQuery.data ?? []}
+          accountId={accountId}
+          onChange={setAccountId}
+          method={paymentMethod}
+          disabled={accountsQuery.isPending || accountsQuery.isError}
+        />
+      </div>
+    )}
+
+    {/* Error messaging */}
+    {(errors["paid"] || errors["sale-account"] || accountsQuery.isError) && (
+      <div className="flex flex-col gap-1 text-sm text-danger">
+        {errors["paid"] && <p role="alert">{errors["paid"]}</p>}
+        {errors["sale-account"] && <p role="alert">{errors["sale-account"]}</p>}
+        {accountsQuery.isError && (
+          <p role="alert">Accounts could not be loaded: {toUserMessage(accountsQuery.error)}</p>
+        )}
+      </div>
+    )}
+
+    {/* Bottom action bar */}
+    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2">
+      <div>
+        {flow.status !== "idle" && (
+          <WriteFlowStatus
+            flow={flow}
+            onRetry={() => void retrySubmit.current?.()}
+            checkHref={`/sales?date=${soldAt}`}
+            checkLabel="Check recent sales"
+          />
+        )}
+        {network.offline && (
+          <p className="text-sm text-warning">
+            You&rsquo;re offline. Changes can&rsquo;t be saved until you reconnect.
+          </p>
+        )}
+      </div>
+
+      <Button
+        type="submit"
+        size="lg"
+        className="w-full sm:w-auto min-w-[200px]"
+        loading={flow.pending}
+        disabled={network.offline || flow.status === "unknown"}
+      >
+        Record sale
+      </Button>
+    </div>
+  </CardBody>
+</Card>
       </form>
 
       <QuickAddCustomerDialog

@@ -549,7 +549,69 @@ must print "-- This is an empty migration." and exit 0.
 - Auth sessions are covered in `auth-sessions.test.ts`; the verified outcomes
   are recorded above.
 
+## 6a. Web integration status (7A and 7B)
+
+Switch: `NEXT_PUBLIC_API_MODE` (`mock` default, or `real`) and
+`NEXT_PUBLIC_API_BASE_URL`. In real mode a module without a real adapter shows
+"Not connected to the real API yet" and never falls back to mock. Query keys
+include the mode.
+
+| Module | Real mode |
+|---|---|
+| Auth, products, customers, suppliers, stock, debtors, payables (7A) | Connected |
+| Sales: list, detail, new, add/reverse payment, void, amend (7B) | Connected |
+| Purchases: list, detail, new, supplier payment/reverse, void, amend (7B) | Connected |
+| Accounts, statements, expenses, transfers, adjustments, loans (7C) | Not connected |
+| Reports, money flow, dashboard (7D) | Not connected |
+
+Mapping notes (7A and 7B):
+- `lib/api/client.ts` is the only HTTP module. Read timeout 10 s; write timeout
+  121,240 ms (longer than the API transaction timeout plus lock waits and
+  retries). GETs retry once on network error; writes are never auto-retried.
+  A timed-out or network-failed write is UNKNOWN, not failed. 401 emits
+  `fabtyna:unauthorized`; 429 surfaces Retry-After; 5xx text is never shown.
+- Writes use `lib/write-flow.ts` and `hooks/use-write-flow.ts`
+  (idle -> pending -> success | failed | unknown) on top of
+  `idempotency-intent.ts`. The same key is kept after unknown ("Retry safely");
+  a new key follows success or a form edit. Used by sales, purchases and the
+  payables payment.
+- Create bodies carry a single paid amount plus `accountId`
+  (sales `paidKobo`, purchases `amountPaidNowKobo`). Client references that look
+  generated (`^[SP]-\d{8}-\d{6,}$`) are rejected; the amend body ignores a
+  reference and the server issues a new one (result has `voidedSaleId` /
+  voided purchase id; the web redirects with `?replaced=`).
+- Quantity is a JSON number with at most 4 decimals; PACK lines must resolve to
+  whole base units. The web keeps the user's text and converts after exact
+  validation.
+- Previews use shared exports `parseQuantityText`, `computeSaleLineTotalKobo`,
+  `quantityToWholeUnits` (scaled-bigint half-up), so they match the server.
+  Earlier float previews differed by 1 kobo in some cases and were removed.
+- Overdraw arrives as 409 BUSINESS_RULE with details
+  `{accountId, accountName, balanceKobo, amountKobo}`. Void of a purchase is
+  blocked while any supplier payment is live (including one paid at receipt).
+  Any purchase payment can be reversed; sale payment reversal applies only to
+  later on-account payments on a sale with a customer.
+- `GET /accounts?includeInactive=false` returns `balanceKobo`, which the shared
+  `AccountDto` type lacks (cast in the pages). `accountingApi.listAccounts` is
+  not real yet; screens use `listPaymentAccounts`.
+- Query keys: an `useInfiniteQuery` must never share a key with a `useQuery`
+  (data shapes differ; TypeScript cannot detect it). Infinite lists for
+  products, customers and suppliers use `queryKeys.X.pages(...)`.
+
+Web checks last run: tsc clean, eslint 0 errors / 4 warnings (unused vars),
+web vitest 27/27, shared vitest 241/241, `pnpm build` OK. The API suite was
+not run for 7B (no API changes).
+
 ## 6b. Known limitations
+
+- Web 7B: kobo-to-text conversions still use `Number` in a few display-only
+  places (sale detail unpaid input prefill, accounting overview percentage
+  bars, purchase edit unit-cost prefill). They never reach the API.
+- Real mode: accounting, expenses, transfers, adjustments, loans, reports and
+  the dashboard are not connected (7C/7D).
+- Raw connection errors (ENOTFOUND, ECONNRESET) reach the API's 500 handler;
+  only Prisma/PG codes P2028, P1001, P1017, 55P03, 40P01, 40001 map to 503.
+- Dev records are immutable and cannot be deleted; use clearly named test data.
 
 ### 4A / 4B backend coverage snapshot
 

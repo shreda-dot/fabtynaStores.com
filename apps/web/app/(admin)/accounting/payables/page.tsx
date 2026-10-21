@@ -4,7 +4,6 @@ import { useRef, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
-  useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -45,7 +44,9 @@ import type {
   SupplierPayableDto,
 } from "@/lib/api/payables.api";
 import { toUserMessage } from "@/lib/api/client";
-import { createIdempotencyIntent, type IdempotencyIntent } from "@/lib/api/idempotency-intent";
+import { WriteFlowStatus } from "@/components/write-flow-status";
+import { useWriteFlow } from "@/hooks/use-write-flow";
+import { toast } from "@/stores/toast-store";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 
@@ -101,49 +102,13 @@ export default function PayablesPage() {
   const [paymentNote, setPaymentNote] = useState("");
   const [paymentError, setPaymentError] = useState("");
   const submitting = useRef(false);
-  const paymentIntents = useRef(new Map<string, IdempotencyIntent>());
+  const flow = useWriteFlow();
+  const retryPay = useRef<(() => Promise<void>) | null>(null);
 
   const accountsQuery = useQuery({
     queryKey: queryKeys.accounting.accounts,
     queryFn: () => accountingApi.listPaymentAccounts(),
     enabled: payingPurchaseId !== null,
-  });
-
-  const payMutation = useMutation({
-    mutationFn: (input: {
-      purchaseId: string;
-      amountKobo: string;
-      paidAt: string;
-      method: PaymentMethod;
-      accountId: string;
-      note: string | null;
-      key: string;
-    }) =>
-      payablesApi.recordPayment(
-        input.purchaseId,
-        input.amountKobo,
-        input.paidAt,
-        input.method,
-        input.accountId,
-        input.note ?? undefined,
-        input.key,
-      ),
-    onSuccess: (_data, input) => {
-      const intent = paymentIntents.current.get(input.purchaseId);
-      intent?.markSucceeded();
-      paymentIntents.current.delete(input.purchaseId);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.accounting.all,
-      });
-      setPayingPurchaseId(null);
-      setPaymentKobo("");
-      setAccountId("");
-      setPaymentNote("");
-      setPaymentError("");
-    },
   });
 
   function toggle(supplierId: string) {
@@ -156,7 +121,7 @@ export default function PayablesPage() {
   }
 
   function startPayment(line: PayableLineDto) {
-    paymentIntents.current.set(line.purchaseId, createIdempotencyIntent());
+    flow.edit();
     setPayingPurchaseId(line.purchaseId);
     setPaymentKobo(line.balanceKobo);
     setPaymentMethod("CASH");
@@ -167,14 +132,13 @@ export default function PayablesPage() {
   }
 
   function cancelPayment() {
-    if (payingPurchaseId) paymentIntents.current.delete(payingPurchaseId);
+    flow.edit();
     setPayingPurchaseId(null);
     setPaymentError("");
   }
 
   async function submitPayment(line: PayableLineDto, supplierName: string) {
-    if (submitting.current || payMutation.isPending) return;
-    payMutation.reset();
+    if (submitting.current || flow.pending) return;
     setPaymentError("");
 
     if (paymentKobo.trim() === "" || !/^[0-9]+$/.test(paymentKobo)) {
@@ -217,11 +181,10 @@ export default function PayablesPage() {
 
     submitting.current = true;
     try {
-      await confirm({
+      const ok = await confirm({
         title: "Record this supplier payment?",
         description: "Confirm before the payment is saved.",
         confirmLabel: "Record payment",
-        successMessage: `Payment of ${formatNaira(amount)} recorded for ${supplierName}.`,
         details: (
           <dl className="space-y-1.5 text-sm">
             <SummaryRow label="Supplier">{supplierName}</SummaryRow>
@@ -238,22 +201,39 @@ export default function PayablesPage() {
             )}
           </dl>
         ),
-        onConfirm: () =>
-          payMutation.mutateAsync({
-            purchaseId: line.purchaseId,
-            amountKobo: paymentKobo,
-            paidAt: createLagosDateTime(paymentDate).toISOString(),
-            method: paymentMethod,
-            accountId: selectedAccountId,
-            note: paymentNote.trim() === "" ? null : paymentNote.trim(),
-            key: paymentIntents.current.get(line.purchaseId)?.getKey() ??
-              (() => {
-                const intent = createIdempotencyIntent();
-                paymentIntents.current.set(line.purchaseId, intent);
-                return intent.getKey();
-              })(),
-          }),
       });
+      if (!ok) return;
+      const paidAt = createLagosDateTime(paymentDate).toISOString();
+      const note = paymentNote.trim() === "" ? undefined : paymentNote.trim();
+      const method = paymentMethod;
+      const run = async () => {
+        const result = await flow.run(async (key) => {
+          await payablesApi.recordPayment(
+            line.purchaseId,
+            amount.toString(),
+            paidAt,
+            method,
+            selectedAccountId,
+            note,
+            key,
+          );
+          return true as const;
+        });
+        if (result === undefined) return;
+        toast.success(`Payment of ${formatNaira(amount)} recorded for ${supplierName}.`);
+        void queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+        setPayingPurchaseId(null);
+        setPaymentKobo("");
+        setAccountId("");
+        setPaymentNote("");
+        setPaymentError("");
+        flow.reset();
+      };
+      retryPay.current = run;
+      await run();
     } finally {
       submitting.current = false;
     }
@@ -476,7 +456,7 @@ export default function PayablesPage() {
                                 defaultValueKobo={line.balanceKobo}
                                 onKoboChange={(value) => {
                                   setPaymentKobo(value);
-                                  paymentIntents.current.get(line.purchaseId)?.reset();
+                                  flow.edit();
                                 }}
                               />
                               <div className="grid gap-3 sm:grid-cols-2">
@@ -487,12 +467,10 @@ export default function PayablesPage() {
                                   <Select
                                     id={`pay-method-${line.purchaseId}`}
                                     value={paymentMethod}
-                                    onChange={(event) =>
-                                      {
-                                        setPaymentMethod(event.target.value as PaymentMethod);
-                                        paymentIntents.current.get(line.purchaseId)?.reset();
-                                      }
-                                    }
+                                    onChange={(event) => {
+                                      setPaymentMethod(event.target.value as PaymentMethod);
+                                      flow.edit();
+                                    }}
                                   >
                                     {PAYMENT_METHODS.map((method) => (
                                       <option
@@ -511,7 +489,7 @@ export default function PayablesPage() {
                                   accountId={accountId}
                                   onChange={(value) => {
                                     setAccountId(value);
-                                    paymentIntents.current.get(line.purchaseId)?.reset();
+                                    flow.edit();
                                   }}
                                   method={paymentMethod}
                                   disabled={accountsQuery.isPending || accountsQuery.isError}
@@ -522,7 +500,7 @@ export default function PayablesPage() {
                                   value={paymentDate}
                                   onChange={(value) => {
                                     setPaymentDate(value);
-                                    paymentIntents.current.get(line.purchaseId)?.reset();
+                                    flow.edit();
                                   }}
                                   max={businessDate}
                                 />
@@ -535,12 +513,10 @@ export default function PayablesPage() {
                                   id={`pay-note-${line.purchaseId}`}
                                   rows={2}
                                   value={paymentNote}
-                                  onChange={(event) =>
-                                    {
-                                      setPaymentNote(event.target.value);
-                                      paymentIntents.current.get(line.purchaseId)?.reset();
-                                    }
-                                  }
+                                  onChange={(event) => {
+                                    setPaymentNote(event.target.value);
+                                    flow.edit();
+                                  }}
                                 />
                               </FormField>
 
@@ -554,10 +530,13 @@ export default function PayablesPage() {
                                   {paymentError}
                                 </p>
                               )}
-                              {payMutation.isError && (
-                                <p role="alert" className="text-sm text-danger">
-                                  {toUserMessage(payMutation.error)}
-                                </p>
+                              {flow.status !== "idle" && (
+                                <WriteFlowStatus
+                                  flow={flow}
+                                  onRetry={() => void retryPay.current?.()}
+                                  checkHref="/purchases"
+                                  checkLabel="Check recent purchases"
+                                />
                               )}
                               {network.offline && (
                                 <p className="text-sm text-warning">
@@ -571,9 +550,10 @@ export default function PayablesPage() {
                                   onClick={() =>
                                     void submitPayment(line, group.supplierName)
                                   }
-                                  loading={payMutation.isPending}
+                                  loading={flow.pending}
                                   disabled={
                                     network.offline ||
+                                    flow.status === "unknown" ||
                                     accountsQuery.isPending ||
                                     accountsQuery.isError
                                   }

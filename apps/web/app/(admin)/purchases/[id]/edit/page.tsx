@@ -1,14 +1,17 @@
 "use client";
 
-import { useId, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
+  computeSaleLineTotalKobo,
   createLagosDateTime,
   formatNaira,
   getLagosBusinessDate,
+  parseQuantityText,
+  quantityToWholeUnits,
   type CreatePurchaseDto,
   type PaymentMethod,
   type ProductDto,
@@ -26,6 +29,8 @@ import { Input, Select, Textarea } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WriteFlowStatus } from "@/components/write-flow-status";
+import { useWriteFlow } from "@/hooks/use-write-flow";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { accountingApi, productsApi, purchasesApi, suppliersApi } from "@/lib/api";
@@ -45,6 +50,8 @@ type PurchaseLineDraft = {
 
 const LOCATIONS: StockLocation[] = ["WAREHOUSE", "RETAIL_SHELF", "MARKET"];
 
+const GENERATED_REFERENCE = /^[SP]-\d{8}-\d{6,}$/;
+
 /**
  * Recovers the price per pack/unit from a stored line so it can be edited.
  *
@@ -55,11 +62,14 @@ function pricePerUnitKoboOf(line: {
   quantity: number;
   lineTotalKobo: string;
 }): string {
-  const quantity = Number(line.quantity);
-  if (!Number.isFinite(quantity) || quantity <= 0) {
+  const parsed = parseQuantityText(String(line.quantity));
+  if (!parsed.ok || !/^[0-9]+$/.test(line.lineTotalKobo)) {
     return line.lineTotalKobo;
   }
-  return String(Math.round(Number(line.lineTotalKobo) / quantity));
+  // round-half-up(total x 10^4 / scaledQuantity) in exact bigint arithmetic
+  const numerator = BigInt(line.lineTotalKobo) * 10000n;
+  const denominator = parsed.scaledQuantity;
+  return ((2n * numerator + denominator) / (2n * denominator)).toString();
 }
 
 const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
@@ -188,7 +198,11 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
   const [purchasedAt, setPurchasedAt] = useState<string>(() =>
     getLagosBusinessDate(new Date(purchase.purchasedAt)),
   );
-  const [reference, setReference] = useState<string>(purchase.reference ?? "");
+  const [reference, setReference] = useState<string>(
+    purchase.reference && !GENERATED_REFERENCE.test(purchase.reference)
+      ? purchase.reference
+      : "",
+  );
   const [notes, setNotes] = useState<string>(purchase.notes ?? "");
   const [lines, setLines] = useState<PurchaseLineDraft[]>(() =>
     purchase.lines.length > 0
@@ -219,6 +233,8 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
 
   const lineSeq = useRef(1);
   const submitting = useRef(false);
+  const flow = useWriteFlow();
+  const retrySubmit = useRef<(() => Promise<void>) | null>(null);
 
   const network = useNetworkStatus();
   const businessDate = useLagosBusinessDate();
@@ -233,7 +249,7 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
   });
   const accountsQuery = useQuery({
     queryKey: queryKeys.accounting.accounts,
-    queryFn: () => accountingApi.listAccounts(),
+    queryFn: () => accountingApi.listPaymentAccounts(),
   });
 
   const productById = useMemo(() => {
@@ -245,23 +261,14 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
   }, [productsQuery.data]);
 
   /**
-   * Mirrors `receivePurchase` in the domain so the preview matches the saved
-   * line total: lineTotalKobo = quantity × price per unit (pack or unit).
+   * Exact line total from the shared domain helper (scale-4 quantity, half-up),
+   * the same arithmetic the sale side uses: quantity × price per pack/unit.
    */
   function lineTotalKobo(line: PurchaseLineDraft): bigint {
-    const qty = Number(line.quantity);
-    const price = line.pricePerUnitKobo;
-    if (!Number.isFinite(qty) || qty <= 0 || !/^[0-9]+$/.test(price)) {
-      return 0n;
-    }
-    const priceKobo = BigInt(price);
-    // A UNIT line is always whole units. A PACK line may be fractional (half a
-    // crate), so the money is rounded once, half-up, the way the domain does.
-    if (line.unit === "UNIT") {
-      if (!Number.isInteger(qty)) return 0n;
-      return BigInt(qty) * priceKobo;
-    }
-    return BigInt(Math.round(qty * Number(priceKobo)));
+    const parsed = parseQuantityText(line.quantity);
+    if (!parsed.ok || !/^[0-9]+$/.test(line.pricePerUnitKobo)) return 0n;
+    if (line.unit === "UNIT" && parsed.scaledQuantity % 10000n !== 0n) return 0n;
+    return computeSaleLineTotalKobo(parsed.scaledQuantity, BigInt(line.pricePerUnitKobo));
   }
 
   const totalKobo = lines.reduce((sum, line) => sum + lineTotalKobo(line), 0n);
@@ -275,25 +282,56 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
     suppliersQuery.isError ||
     (paidKobo > 0n && accountsQuery.isError);
 
-  const updateMutation = useMutation({
-    mutationFn: (input: CreatePurchaseDto) =>
-      purchasesApi.update(purchase.id, input),
-    onSuccess: (updated) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.accounting.all,
-      });
-      toast.success(
-        `Purchase updated — ${formatNaira(totalKobo)} recorded; the original was voided.`,
+  const selectedAccount = (accountsQuery.data ?? []).find(
+    (a) =>
+      a.id ===
+      (accountId || defaultAccountId(accountsQuery.data ?? [], paymentMethod)),
+  ) as { name: string; balanceKobo?: string } | undefined;
+  const accountBalance =
+    selectedAccount?.balanceKobo !== undefined
+      ? BigInt(selectedAccount.balanceKobo)
+      : null;
+
+  // Any form change is a new intent: it must get a new idempotency key.
+  const formSnapshot = JSON.stringify([
+    supplierId,
+    location,
+    purchasedAt,
+    reference,
+    notes,
+    amountPaidNow,
+    paymentMethod,
+    accountId,
+    dueDate,
+    lines,
+  ]);
+  const { edit: renewKey } = flow;
+  useEffect(() => {
+    renewKey();
+  }, [formSnapshot, renewKey]);
+
+  function afterAmended(
+    updated: { id: string; totalKobo: string },
+    previewTotal: bigint,
+  ) {
+    if (
+      process.env.NODE_ENV !== "production" &&
+      updated.totalKobo !== previewTotal.toString()
+    ) {
+      console.warn(
+        `Purchase preview total ${previewTotal} differs from server total ${updated.totalKobo}.`,
       );
-      router.push(`/purchases/${updated.id}`);
-    },
-  });
+    }
+    void queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+    toast.success("Purchase amended — a new purchase was recorded and the original voided.");
+    router.push(`/purchases/${updated.id}?replaced=${purchase.id}`);
+  }
 
   function updateLine(id: string, patch: Partial<PurchaseLineDraft>) {
     setLines((prev) =>
@@ -345,21 +383,17 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       return found;
     }
 
-    const qty = Number(line.quantity);
-    if (line.quantity.trim() === "" || !Number.isFinite(qty) || qty <= 0) {
+    const parsedQty = parseQuantityText(line.quantity);
+    if (!parsedQty.ok) {
+      found[`line-${line.id}-qty`] = parsedQty.message;
+    } else if (
+      quantityToWholeUnits(parsedQty.scaledQuantity, line.unit, product.unitsPerPack) ===
+      null
+    ) {
       found[`line-${line.id}-qty`] =
-        line.unit === "PACK"
-          ? "Enter a quantity of packs greater than 0."
-          : "Enter a quantity of units greater than 0.";
-    } else if (line.unit === "UNIT" && !Number.isInteger(qty)) {
-      found[`line-${line.id}-qty`] =
-        "Unit quantities must be whole numbers.";
-    } else if (line.unit === "PACK") {
-      const totalUnits = qty * product.unitsPerPack;
-      if (!Number.isSafeInteger(totalUnits) || totalUnits <= 0) {
-        found[`line-${line.id}-qty`] =
-          `Quantity must add up to whole units (1 pack = ${product.unitsPerPack} units).`;
-      }
+        line.unit === "UNIT"
+          ? "Unit quantities must be whole numbers."
+          : `Quantity must add up to whole units (1 pack = ${product.unitsPerPack} units).`;
     }
 
     if (!/^[0-9]+$/.test(line.pricePerUnitKobo)) {
@@ -430,8 +464,7 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (submitting.current || updateMutation.isPending) return;
-    updateMutation.reset();
+    if (submitting.current || flow.pending) return;
 
     const found = validateAll();
     setErrors(found);
@@ -446,7 +479,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       location,
       purchasedAt: createLagosDateTime(purchasedAt).toISOString(),
       notes: notes.trim() === "" ? null : notes.trim(),
-      reference: reference.trim() === "" ? null : reference.trim(),
+      reference:
+        reference.trim() === "" || GENERATED_REFERENCE.test(reference.trim())
+          ? null
+          : reference.trim(),
       amountPaidNowKobo: (paidKobo < 0n ? 0n : paidKobo).toString(),
       dueDate: balanceKobo > 0n && dueDate !== "" ? dueDate : null,
       paymentMethod,
@@ -457,7 +493,11 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       lines: lines.map((line) => ({
         productId: line.productId,
         unit: line.unit,
-        quantity: Number(line.quantity),
+        quantity: (() => {
+          const parsed = parseQuantityText(line.quantity);
+          if (!parsed.ok) throw new Error(parsed.message);
+          return parsed.jsonNumber;
+        })(),
         lineTotalKobo: lineTotalKobo(line).toString(),
       })),
     };
@@ -468,10 +508,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
 
     submitting.current = true;
     try {
-      await confirm({
+      const ok = await confirm({
         title: "Save these changes?",
         description:
-          "The original purchase will be voided and a corrected copy recorded, so stock and the supplier ledger stay accurate and fully auditable.",
+          "The original purchase will be voided and a NEW purchase with a new reference recorded, so stock and the supplier ledger stay accurate and fully auditable.",
         confirmLabel: "Save changes",
         details: (
           <dl className="space-y-1.5 text-sm">
@@ -515,8 +555,17 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
             </div>
           </dl>
         ),
-        onConfirm: () => updateMutation.mutateAsync(input),
       });
+      if (!ok) return;
+      const previewTotal = totalKobo;
+      const run = async () => {
+        const result = await flow.run((key) =>
+          purchasesApi.update(purchase.id, input, key),
+        );
+        if (result) afterAmended(result, previewTotal);
+      };
+      retrySubmit.current = run;
+      await run();
     } finally {
       submitting.current = false;
     }
@@ -541,9 +590,9 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       />
 
       <div className="rounded-md border border-warning/40 bg-warning-surface p-4 text-sm text-warning">
-        Saving will <strong>void the original purchase</strong> and record a
-        corrected copy so the stock and supplier ledger stay accurate and fully
-        auditable.
+        Saving will <strong>void this purchase</strong> and create a{" "}
+        <strong>new purchase with a new reference</strong>, so stock and the
+        supplier ledger stay accurate and fully auditable.
       </div>
 
       {supportQueryFailed && (
@@ -704,6 +753,14 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
                   disabled={accountsQuery.isPending || accountsQuery.isError}
                 />
               )}
+              {paidKobo > 0n && accountBalance !== null && paidKobo > accountBalance && (
+                <p role="status" className="text-sm text-warning sm:col-span-2">
+                  {selectedAccount?.name ?? "The account"} holds{" "}
+                  {formatNaira(accountBalance)}, less than this payment of{" "}
+                  {formatNaira(paidKobo)}. The server will refuse it unless you
+                  record income or reconcile first.
+                </p>
+              )}
               {errors["purchase-account"] && (
                 <p role="alert" className="text-sm text-danger sm:col-span-2">
                   {errors["purchase-account"]}
@@ -756,11 +813,11 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
             {lines.map((line, index) => {
               const product = productById.get(line.productId);
               const unitsPerPack = product?.unitsPerPack ?? 24;
-              const qty = Number(line.quantity);
-              const quantityUnits =
-                line.unit === "PACK" && Number.isFinite(qty) && qty > 0
-                  ? qty * unitsPerPack
-                  : qty;
+              const parsedQty = parseQuantityText(line.quantity);
+              const wholeUnits = parsedQty.ok
+                ? quantityToWholeUnits(parsedQty.scaledQuantity, line.unit, unitsPerPack)
+                : null;
+              const quantityUnits = wholeUnits === null ? Number.NaN : Number(wholeUnits);
               const total = lineTotalKobo(line);
               return (
                 <div
@@ -834,10 +891,9 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
                     >
                       <Input
                         id={`line-${line.id}-qty`}
-                        type="number"
+                        type="text"
                         inputMode="decimal"
-                        min={line.unit === "PACK" ? 0.01 : 1}
-                        step={line.unit === "PACK" ? "any" : 1}
+                        autoComplete="off"
                         value={line.quantity}
                         aria-invalid={
                           errors[`line-${line.id}-qty`] !== undefined
@@ -915,10 +971,15 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
             </dl>
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-              {updateMutation.isError && (
-                <p role="alert" className="text-sm text-danger sm:mr-auto">
-                  {toUserMessage(updateMutation.error)}
-                </p>
+              {flow.status !== "idle" && (
+                <div className="sm:mr-auto">
+                  <WriteFlowStatus
+                    flow={flow}
+                    onRetry={() => void retrySubmit.current?.()}
+                    checkHref={`/purchases?date=${purchasedAt}`}
+                    checkLabel="Check recent purchases"
+                  />
+                </div>
               )}
               {network.offline && (
                 <p className="text-sm text-warning sm:mr-auto">
@@ -930,8 +991,8 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
                 type="submit"
                 size="lg"
                 className="w-full sm:w-auto"
-                loading={updateMutation.isPending}
-                disabled={network.offline}
+                loading={flow.pending}
+                disabled={network.offline || flow.status === "unknown"}
               >
                 Save changes
               </Button>

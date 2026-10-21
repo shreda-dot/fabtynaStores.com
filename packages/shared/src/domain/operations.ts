@@ -101,6 +101,66 @@ function toScaledQuantity(quantity: number): bigint {
   );
 }
 
+export type QuantityTextResult =
+  | { ok: true; scaledQuantity: bigint; jsonNumber: number }
+  | { ok: false; message: string };
+
+/**
+ * Validates a typed quantity BEFORE any Number conversion: positive, plain
+ * decimal (no exponent, sign or separators), at most 4 decimal places.
+ * The `jsonNumber` is only produced after that exact check passes.
+ */
+export function parseQuantityText(text: string): QuantityTextResult {
+  const trimmed = text.trim();
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    return { ok: false, message: "Enter a plain positive number, for example 2 or 0.5." };
+  }
+  const [wholePart, fractionPart = ""] = trimmed.split(".");
+  if (fractionPart.length > QUANTITY_SCALE) {
+    return { ok: false, message: `Use at most ${QUANTITY_SCALE} decimal places.` };
+  }
+  const scaledQuantity =
+    BigInt(wholePart) * QUANTITY_SCALE_FACTOR +
+    BigInt(fractionPart.padEnd(QUANTITY_SCALE, "0"));
+  if (scaledQuantity <= 0n) {
+    return { ok: false, message: "Quantity must be greater than zero." };
+  }
+  const jsonNumber = Number(trimmed);
+  if (!Number.isFinite(jsonNumber) || toScaledQuantity(jsonNumber) !== scaledQuantity) {
+    return { ok: false, message: "Quantity is too large or too precise." };
+  }
+  return { ok: true, scaledQuantity, jsonNumber };
+}
+
+/**
+ * Base units for a scaled quantity, or null when it is not a whole number of
+ * units. Same rule `recordSale` and `receivePurchase` enforce.
+ */
+export function quantityToWholeUnits(
+  scaledQuantity: bigint,
+  unit: Unit,
+  unitsPerPack: number,
+): bigint | null {
+  const scaledUnits =
+    unit === "UNIT" ? scaledQuantity : scaledQuantity * BigInt(unitsPerPack);
+  if (scaledUnits <= 0n || scaledUnits % QUANTITY_SCALE_FACTOR !== 0n) {
+    return null;
+  }
+  return scaledUnits / QUANTITY_SCALE_FACTOR;
+}
+
+/**
+ * Exact line total: round-half-up(scaledQuantity x unitPrice / 10^4).
+ * `recordSale` uses this same function, so a preview cannot differ from what
+ * the server stores.
+ */
+export function computeSaleLineTotalKobo(
+  scaledQuantity: bigint,
+  unitPriceKobo: bigint,
+): bigint {
+  return roundHalfUp(scaledQuantity * unitPriceKobo, QUANTITY_SCALE_FACTOR);
+}
+
 export type IdGenerator = () => string;
 
 export interface ReceivePurchaseLineInput {
@@ -1266,9 +1326,9 @@ export function recordSale(
 
     // Money is never multiplied as a float: the quantity is scaled to an
     // integer first, so a fraction such as 1/2 of a 24-pack cannot drift.
-    const lineTotalKobo = roundHalfUp(
-      scaledQuantity * line.unitPriceKobo,
-      QUANTITY_SCALE_FACTOR,
+    const lineTotalKobo = computeSaleLineTotalKobo(
+      scaledQuantity,
+      line.unitPriceKobo,
     );
 
     const currentAtLocation = existingMovements

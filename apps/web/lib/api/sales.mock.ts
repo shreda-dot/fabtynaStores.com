@@ -1,6 +1,7 @@
 import {
   createSaleDtoSchema,
   fromAuditLogDto,
+  getLagosBusinessDate,
   recordSale,
   recordSalePayment,
   toAuditLogDto,
@@ -53,11 +54,17 @@ function buildSaleDetail(
   sale: Sale,
 ): SaleDetailDto {
   const productById = new Map(store.products.map((p) => [p.id, p.name]));
+  const locationByLineId = new Map(
+    store.stockMovements
+      .filter((m) => m.type === "SALE" && m.saleLineId !== null)
+      .map((m) => [m.saleLineId as string, m.location as string]),
+  );
   const lines = store.saleLines
     .filter((line) => line.saleId === sale.id)
     .map((line) => ({
       ...toSaleLineDto(line),
       productName: productById.get(line.productId) ?? line.productId,
+      location: locationByLineId.get(line.id),
     }));
   const lineIds = new Set(lines.map((l) => l.id));
   const movements = store.stockMovements
@@ -71,10 +78,11 @@ function buildSaleDetail(
   const customer = sale.customerId
     ? store.customers.find((c) => c.id === sale.customerId) ?? null
     : null;
+  const accountNameById = new Map(store.accounts.map((a) => [a.id, a.name]));
   const payments = store.salePayments
     .filter((p) => p.saleId === sale.id)
     .sort((a, b) => a.paidAt.getTime() - b.paidAt.getTime())
-    .map(toSalePaymentDto);
+    .map((p) => ({ ...toSalePaymentDto(p), accountName: accountNameById.get(p.accountId) }));
   return jsonClone({
     ...toSaleDto(sale),
     customer: customer ? toCustomerDto(customer) : null,
@@ -105,6 +113,33 @@ export const salesMockApi: SalesApi = {
         };
       });
     return jsonClone(items);
+  },
+
+  async listPage(options) {
+    // Demo data is small: filter everything locally. The real API pages by cursor.
+    const all = await salesMockApi.list();
+    const search = options.search?.trim().toLowerCase() ?? "";
+    const wideSearch = options.unpaid === true || search !== "" || options.customerId !== undefined;
+    const items = all.filter((sale) => {
+      const day = getLagosBusinessDate(new Date(sale.soldAt));
+      if (!wideSearch && options.from && day < options.from) return false;
+      if (!wideSearch && options.to && day > options.to) return false;
+      if (options.status && sale.status !== options.status) return false;
+      if (options.channel && sale.channel !== options.channel) return false;
+      if (options.customerId && sale.customerId !== options.customerId) return false;
+      if (options.unpaid && !(sale.status !== "VOIDED" && BigInt(sale.totalKobo) > BigInt(sale.paidKobo))) {
+        return false;
+      }
+      if (
+        search !== "" &&
+        !(sale.reference ?? "").toLowerCase().includes(search) &&
+        !(sale.customerName ?? "").toLowerCase().includes(search)
+      ) {
+        return false;
+      }
+      return true;
+    });
+    return { items, nextCursor: null, from: options.from ?? null, to: options.to ?? null };
   },
 
   async getById(id) {
@@ -255,7 +290,7 @@ export const salesMockApi: SalesApi = {
 
     const store = readMockStore();
     const sale = store.sales.find((s) => s.id === result.id)!;
-    return buildSaleDetail(store, sale);
+    return { ...buildSaleDetail(store, sale), voidedSaleId: id };
   },
 
   async void(id) {
@@ -330,5 +365,10 @@ export const salesMockApi: SalesApi = {
 
     const store = readMockStore();
     return buildSaleDetail(store, result);
+  },
+
+  async reversePayment() {
+    await delay();
+    throw new Error("Reversing a payment is only available when connected to the real API.");
   },
 };

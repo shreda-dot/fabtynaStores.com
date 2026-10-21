@@ -23,12 +23,11 @@ import { suppliersRealApi } from "./suppliers.real";
 import { customersRealApi } from "./customers.real";
 import { stockRealApi } from "./stock.real";
 import { payablesRealApi } from "./payables.real";
+import { salesRealApi } from "./sales.real";
+import { purchasesRealApi } from "./purchases.real";
 import { debtorsMockApi } from "./debtors.mock";
 import { debtorsRealApi } from "./debtors.real";
 import type { DebtorsApi } from "./debtors.api";
-import type { PurchasesApi } from "./purchases.api";
-import type { SalesApi } from "./sales.api";
-import type { StockApi } from "./stock.api";
 import type { TransfersApi } from "./transfers.api";
 import type { AdjustmentsApi } from "./adjustments.api";
 import type { ReportsApi } from "./reports.api";
@@ -40,24 +39,6 @@ import type { CashApi } from "./cash.api";
 function notImplemented(): never {
   throw createNotConnectedError();
 }
-
-const purchasesRealApi: PurchasesApi = {
-  list: async () => notImplemented(),
-  getById: async () => notImplemented(),
-  create: async () => notImplemented(),
-  update: async () => notImplemented(),
-  void: async () => notImplemented(),
-  recordPayment: async () => notImplemented(),
-};
-
-const salesRealApi: SalesApi = {
-  list: async () => notImplemented(),
-  getById: async () => notImplemented(),
-  create: async () => notImplemented(),
-  update: async () => notImplemented(),
-  void: async () => notImplemented(),
-  recordPayment: async () => notImplemented(),
-};
 
 const transfersRealApi: TransfersApi = {
   list: async () => notImplemented(),

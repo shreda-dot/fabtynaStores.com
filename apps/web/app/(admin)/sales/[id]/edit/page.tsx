@@ -1,19 +1,29 @@
 "use client";
 
-import { useId, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
+  computeSaleLineTotalKobo,
   createLagosDateTime,
   getLagosBusinessDate,
+  parseQuantityText,
+  quantityToWholeUnits,
   type CreateSaleDto,
+  type PaymentMethod,
   type ProductDto,
   type StockLocation,
   type Unit,
 } from "@fabtyna/shared";
 import { QuickAddCustomerDialog } from "@/components/customers/quick-add-customer-dialog";
+import {
+  AccountSelect,
+  defaultAccountId,
+} from "@/components/accounting/account-select";
+import { WriteFlowStatus } from "@/components/write-flow-status";
+import { useWriteFlow } from "@/hooks/use-write-flow";
 import { MoneyInput } from "@/components/money-input";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -26,7 +36,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
-import { customersApi, productsApi, salesApi, stockApi } from "@/lib/api";
+import { accountingApi, customersApi, productsApi, salesApi, stockApi } from "@/lib/api";
 import { ApiError, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
@@ -45,6 +55,9 @@ type SaleLineDraft = {
 function locationForChannel(channel: SaleChannelForSale): StockLocation {
   return channel === "RETAIL" ? "RETAIL_SHELF" : "WAREHOUSE";
 }
+
+// The API rejects client references that look system-generated.
+const GENERATED_REFERENCE = /^[SP]-\d{8}-\d{6,}$/;
 
 export default function EditSalePage() {
   const params = useParams<{ id: string }>();
@@ -136,9 +149,21 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
   const [soldAt, setSoldAt] = useState<string>(() =>
     getLagosBusinessDate(new Date(sale.soldAt)),
   );
-  const [reference, setReference] = useState<string>(sale.reference ?? "");
+  const [reference, setReference] = useState<string>(
+    GENERATED_REFERENCE.test(sale.reference ?? "") ? "" : (sale.reference ?? ""),
+  );
   const [notes, setNotes] = useState<string>(sale.notes ?? "");
-  const [paidKobo, setPaidKobo] = useState<string>(sale.paidKobo);
+  const [paidKobo, setPaidKobo] = useState<string>(
+    sale.livePaymentsKobo ?? sale.paidKobo,
+  );
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [accountId, setAccountId] = useState("");
+  const [retailLocation, setRetailLocation] = useState<"RETAIL_SHELF" | "MARKET">(
+    sale.lines[0]?.location === "MARKET" ? "MARKET" : "RETAIL_SHELF",
+  );
+  const flow = useWriteFlow();
+  const retrySubmit = useRef<(() => Promise<void>) | null>(null);
+  const originalReference = sale.reference ?? sale.id.slice(0, 8);
   const [lines, setLines] = useState<SaleLineDraft[]>(() =>
     sale.lines.length > 0
       ? sale.lines.map((line) => ({
@@ -175,6 +200,10 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
   const stockQuery = useQuery({
     queryKey: queryKeys.stock.list,
     queryFn: () => stockApi.list(),
+  });
+  const accountsQuery = useQuery({
+    queryKey: queryKeys.accounting.accounts,
+    queryFn: () => accountingApi.listPaymentAccounts(),
   });
 
   const productById = useMemo(() => {
@@ -213,10 +242,21 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
     return map;
   }, [sale.lines]);
 
-  const originalLocation = locationForChannel(sale.channel);
+  const originalLocation: StockLocation =
+    (sale.lines[0]?.location as StockLocation | undefined) ??
+    locationForChannel(sale.channel);
 
-  const location: StockLocation = locationForChannel(channel);
+  const location: StockLocation =
+    channel === "RETAIL" ? retailLocation : "WAREHOUSE";
   const defaultUnit: Unit = channel === "RETAIL" ? "UNIT" : "PACK";
+
+  const offeredProducts = useMemo(
+    () =>
+      (productsQuery.data ?? []).filter(
+        (p) => p.saleChannel === "BOTH" || p.saleChannel === channel,
+      ),
+    [productsQuery.data, channel],
+  );
 
   const channelCustomers = useMemo(() => {
     return (customersQuery.data ?? []).filter((c) => c.type === channel);
@@ -232,27 +272,22 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
   }
 
   function lineUnits(line: SaleLineDraft): number {
-    const qty = Number(line.quantity);
-    if (!Number.isFinite(qty) || qty <= 0) return 0;
-    if (defaultUnit === "UNIT") return qty;
+    const parsed = parseQuantityText(line.quantity);
+    if (!parsed.ok) return 0;
     const product = productById.get(line.productId);
-    return qty * (product?.unitsPerPack ?? 1);
+    const units = quantityToWholeUnits(
+      parsed.scaledQuantity,
+      defaultUnit,
+      product?.unitsPerPack ?? 1,
+    );
+    return units === null ? 0 : Number(units);
   }
 
-  /**
-   * Mirrors `recordSale` in the domain so the preview matches the saved total:
-   * UNIT → quantity × unit price; PACK → round(quantity × unit price).
-   */
+  /** Exact total from the shared domain helper, identical to what `recordSale` stores. */
   function lineTotalKobo(line: SaleLineDraft): bigint {
-    const qty = Number(line.quantity);
-    const price = line.unitPriceKobo;
-    if (!Number.isFinite(qty) || qty <= 0 || !/^[0-9]+$/.test(price)) return 0n;
-    const priceKobo = BigInt(price);
-    if (defaultUnit === "UNIT") {
-      if (!Number.isInteger(qty)) return 0n;
-      return BigInt(qty) * priceKobo;
-    }
-    return BigInt(Math.round(qty * Number(priceKobo)));
+    const parsed = parseQuantityText(line.quantity);
+    if (!parsed.ok || !/^[0-9]+$/.test(line.unitPriceKobo)) return 0n;
+    return computeSaleLineTotalKobo(parsed.scaledQuantity, BigInt(line.unitPriceKobo));
   }
 
   const totalKobo = lines.reduce((sum, line) => sum + lineTotalKobo(line), 0n);
@@ -262,17 +297,23 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
   const supportQueryFailed =
     productsQuery.isError || customersQuery.isError || stockQuery.isError;
 
-  const updateMutation = useMutation({
-    mutationFn: (input: CreateSaleDto) => salesApi.update(sale.id, input),
-    onSuccess: (updated) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
-      toast.success("Sale updated — the original was voided and replaced.");
-      router.push(`/sales/${updated.id}`);
-    },
-  });
+  // A new intent whenever the form changes: new idempotency key.
+  const formSnapshot = JSON.stringify([
+    channel,
+    customerId,
+    soldAt,
+    reference,
+    notes,
+    paidKobo,
+    paymentMethod,
+    accountId,
+    retailLocation,
+    lines,
+  ]);
+  const { edit: renewKey } = flow;
+  useEffect(() => {
+    renewKey();
+  }, [formSnapshot, renewKey]);
 
   function updateLine(id: string, patch: Partial<SaleLineDraft>) {
     setLines((prev) =>
@@ -327,20 +368,22 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
       found[`line-${line.id}-product`] = "This product no longer exists.";
       return found;
     }
-    const qty = Number(line.quantity);
-    if (!Number.isFinite(qty) || qty <= 0) {
+    const parsedQty = parseQuantityText(line.quantity);
+    if (product.saleChannel !== "BOTH" && product.saleChannel !== channel) {
+      found[`line-${line.id}-product`] =
+        `${product.name} is not sold on the ${channel.toLowerCase()} channel.`;
+      return found;
+    }
+    if (!parsedQty.ok) {
+      found[`line-${line.id}-qty`] = parsedQty.message;
+    } else if (
+      quantityToWholeUnits(parsedQty.scaledQuantity, defaultUnit, product.unitsPerPack) ===
+      null
+    ) {
       found[`line-${line.id}-qty`] =
         defaultUnit === "UNIT"
-          ? "Enter a quantity of 1 or more."
-          : "Enter a quantity greater than 0.";
-    } else if (defaultUnit === "UNIT" && !Number.isInteger(qty)) {
-      found[`line-${line.id}-qty`] = "Retail quantities must be whole units.";
-    } else if (defaultUnit === "PACK") {
-      const totalUnits = qty * product.unitsPerPack;
-      if (!Number.isSafeInteger(totalUnits) || totalUnits <= 0) {
-        found[`line-${line.id}-qty`] =
-          `Quantity must add up to whole units (1 pack = ${product.unitsPerPack} units).`;
-      }
+          ? "Retail quantities must be whole units."
+          : `Quantity must add up to whole units (1 pack = ${product.unitsPerPack} units).`;
     }
 
     if (
@@ -377,6 +420,12 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
     if (paid > totalKobo) {
       found["paid"] = "Amount received cannot be more than the sale total.";
     }
+    if (
+      paid > 0n &&
+      (accountId || defaultAccountId(accountsQuery.data ?? [], paymentMethod)) === ""
+    ) {
+      found["sale-account"] = "Choose an active account for the money received.";
+    }
 
     let hasValidLine = false;
     for (const line of lines) {
@@ -411,9 +460,7 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (submitting.current || updateMutation.isPending) return;
-    updateMutation.reset();
-
+    if (submitting.current || flow.pending) return;
     const found = validateAll();
     setErrors(found);
     if (Object.keys(found).length > 0) {
@@ -429,12 +476,24 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
       location,
       soldAt: createLagosDateTime(soldAt).toISOString(),
       notes: notes.trim() === "" ? null : notes.trim(),
-      reference: reference.trim() === "" ? null : reference.trim(),
+      reference:
+        GENERATED_REFERENCE.test(reference.trim()) || reference.trim() === ""
+          ? null
+          : reference.trim(),
       paidKobo: paid.toString(),
+      accountId:
+        paid > 0n
+          ? accountId ||
+            defaultAccountId(accountsQuery.data ?? [], paymentMethod)
+          : null,
       lines: lines.map((line) => ({
         productId: line.productId,
         unit: defaultUnit,
-        quantity: Number(line.quantity),
+        quantity: (() => {
+          const parsed = parseQuantityText(line.quantity);
+          if (!parsed.ok) throw new Error(parsed.message);
+          return parsed.jsonNumber;
+        })(),
         unitPriceKobo: line.unitPriceKobo,
       })),
     };
@@ -444,15 +503,17 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
 
     submitting.current = true;
     try {
-      await confirm({
+      const ok = await confirm({
         title: "Save these changes?",
-        description:
-          "The original sale will be voided and a corrected copy recorded.",
+        description: `${originalReference} will be voided and a new sale recorded with a new reference.`,
         confirmLabel: "Save changes",
         details: (
           <dl className="space-y-1.5 text-sm">
             <SummaryRow label="Channel">
               {channel === "RETAIL" ? "Retail (fridge)" : "Wholesale"}
+            </SummaryRow>
+            <SummaryRow label="Stock from">
+              {location.replace(/_/g, " ")}
             </SummaryRow>
             <SummaryRow label="Customer">{customerLabel}</SummaryRow>
             <SummaryRow label="Date">{soldAt}</SummaryRow>
@@ -467,8 +528,40 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
             </SummaryRow>
           </dl>
         ),
-        onConfirm: () => updateMutation.mutateAsync(input),
       });
+      if (!ok) return;
+      const previewTotal = totalKobo;
+      const run = async () => {
+        const updated = await flow.run((key) =>
+          salesApi.update(sale.id, input, key),
+        );
+        if (!updated) return;
+        if (
+          process.env.NODE_ENV !== "production" &&
+          updated.totalKobo !== previewTotal.toString()
+        ) {
+          console.warn(
+            `Sale preview total ${previewTotal} differs from server total ${updated.totalKobo}.`,
+          );
+        }
+        void queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.debtors.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+        toast.success(
+          `${originalReference} was voided and replaced by ${updated.reference ?? "a new sale"}.`,
+        );
+        const voidedId = updated.voidedSaleId;
+        router.push(
+          voidedId
+            ? `/sales/${updated.id}?replaced=${encodeURIComponent(voidedId)}`
+            : `/sales/${updated.id}`,
+        );
+      };
+      retrySubmit.current = run;
+      await run();
     } finally {
       submitting.current = false;
     }
@@ -493,10 +586,12 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
       />
 
       <div className="rounded-md border border-warning/40 bg-warning-surface p-4 text-sm text-warning">
-        Saving will <strong>void the original sale</strong> and record a
-        corrected copy so stock and customer balances stay accurate and fully
-        auditable. Payments recorded so far are consolidated into the
-        &ldquo;Amount received&rdquo; field.
+        Saving will <strong>void {originalReference}</strong> and create a{" "}
+        <strong>new sale with a new reference</strong>. Stock, the customer
+        balance and any money taken up front are reversed and re-recorded, so
+        everything stays auditable. The live payments so far are consolidated
+        into &ldquo;Amount received&rdquo;, and the account must be chosen
+        again.
       </div>
 
       {supportQueryFailed && (
@@ -563,11 +658,26 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
               </FormField>
 
               <FormField id="sale-location" label="Stock location">
-                <Input
-                  id="sale-location"
-                  value={location.replace(/_/g, " ")}
-                  disabled
-                />
+                {channel === "RETAIL" ? (
+                  <Select
+                    id="sale-location"
+                    value={retailLocation}
+                    onChange={(event) =>
+                      setRetailLocation(
+                        event.target.value as "RETAIL_SHELF" | "MARKET",
+                      )
+                    }
+                  >
+                    <option value="RETAIL_SHELF">Retail shelf (fridge)</option>
+                    <option value="MARKET">Market</option>
+                  </Select>
+                ) : (
+                  <Input
+                    id="sale-location"
+                    value={location.replace(/_/g, " ")}
+                    disabled
+                  />
+                )}
               </FormField>
 
               <FormField
@@ -709,7 +819,7 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
                         }
                       >
                         <option value="">Select product</option>
-                        {productsQuery.data?.map((option) => (
+                        {offeredProducts.map((option) => (
                           <option key={option.id} value={option.id}>
                             {option.name}
                           </option>
@@ -729,10 +839,9 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
                     >
                       <Input
                         id={`line-${line.id}-qty`}
-                        type="number"
+                        type="text"
                         inputMode="decimal"
-                        min={defaultUnit === "UNIT" ? 1 : 0.01}
-                        step={defaultUnit === "UNIT" ? 1 : "any"}
+                        autoComplete="off"
                         value={line.quantity}
                         aria-invalid={
                           errors[`line-${line.id}-qty`] !== undefined
@@ -801,6 +910,38 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
                   </p>
                 )}
               </div>
+              {paid > 0n && (
+                <>
+                  <FormField id="sale-payment-method" label="Payment method">
+                    <Select
+                      id="sale-payment-method"
+                      value={paymentMethod}
+                      onChange={(event) => {
+                        setPaymentMethod(event.target.value as PaymentMethod);
+                        setAccountId("");
+                      }}
+                    >
+                      <option value="CASH">Cash</option>
+                      <option value="TRANSFER">Transfer</option>
+                      <option value="OTHER">Other</option>
+                    </Select>
+                  </FormField>
+                  <AccountSelect
+                    id="sale-account"
+                    label="Received into"
+                    accounts={accountsQuery.data ?? []}
+                    accountId={accountId}
+                    onChange={setAccountId}
+                    method={paymentMethod}
+                    disabled={accountsQuery.isPending || accountsQuery.isError}
+                  />
+                  {errors["sale-account"] && (
+                    <p role="alert" className="text-sm text-danger sm:col-span-2">
+                      {errors["sale-account"]}
+                    </p>
+                  )}
+                </>
+              )}
               <div className="text-left sm:text-right">
                 <p className="text-xs text-muted-foreground">Total</p>
                 <p className="text-lg font-semibold text-foreground">
@@ -814,10 +955,13 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
               </div>
             </div>
             <div className="flex flex-col gap-2">
-              {updateMutation.isError && (
-                <p role="alert" className="text-sm text-danger">
-                  {toUserMessage(updateMutation.error)}
-                </p>
+              {flow.status !== "idle" && (
+                <WriteFlowStatus
+                  flow={flow}
+                  onRetry={() => void retrySubmit.current?.()}
+                  checkHref={`/sales?q=${encodeURIComponent(originalReference)}`}
+                  checkLabel="Check recent sales"
+                />
               )}
               {network.offline && (
                 <p className="text-sm text-warning">
@@ -829,8 +973,8 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
                 type="submit"
                 size="lg"
                 className="w-full sm:w-auto"
-                loading={updateMutation.isPending}
-                disabled={network.offline}
+                loading={flow.pending}
+                disabled={network.offline || flow.status === "unknown"}
               >
                 Save changes
               </Button>

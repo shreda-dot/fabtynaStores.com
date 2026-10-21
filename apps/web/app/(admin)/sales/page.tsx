@@ -9,17 +9,11 @@ import {
   useState,
   type ChangeEvent,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { HandCoins, Plus, Search } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import {
-  formatLagosDate,
-  getLagosBusinessDate,
-  getLagosBusinessDayRange,
-  type SaleChannel,
-  type SaleStatus,
-} from "@fabtyna/shared";
+import { formatLagosDate } from "@fabtyna/shared";
 import { DateFilter } from "@/components/date-filter";
 import { RecordDebtorDialog } from "@/components/debtors/record-debtor-dialog";
 import { ResponsiveTable } from "@/components/responsive-table";
@@ -34,48 +28,39 @@ import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageSkeleton } from "@/components/ui/page-skeleton";
 import { Skeleton } from "@/components/ui/skeleton";
-import { StatCard, type StatTrend } from "@/components/ui/stat-card";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
-import { salesApi } from "@/lib/api";
+import { customersApi, salesApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
-import type { SaleListItemDto } from "@/lib/api/sales.api";
+import {
+  saleBalanceDueKobo,
+  type SaleListItemDto,
+  type SaleListOptions,
+} from "@/lib/api/sales.api";
 
-const CHANNELS: (SaleChannel | "ALL")[] = ["ALL", "RETAIL", "WHOLESALE"];
-const STATUSES: (SaleStatus | "ALL")[] = [
-  "ALL",
-  "DRAFT",
-  "COMPLETED",
-  "VOIDED",
-];
+type ChannelFilter = "RETAIL" | "WHOLESALE" | "ALL";
+type StatusFilter = "COMPLETED" | "VOIDED" | "ALL";
+
+const CHANNELS: ChannelFilter[] = ["ALL", "RETAIL", "WHOLESALE"];
+const STATUSES: StatusFilter[] = ["ALL", "COMPLETED", "VOIDED"];
 
 const PAGE_SIZE = 50;
-const TOP_DEBTORS = 3;
-// URL value meaning "every date". When the `date` param is absent the list
-// defaults to today's Lagos business day.
+// URL value meaning "every date". The API caps a range at 366 days, so this is
+// the last 365 days.
 const ALL_DATES = "all";
 
-function parseChannel(value: string | null): SaleChannel | "ALL" {
+function parseChannel(value: string | null): ChannelFilter {
   return value === "RETAIL" || value === "WHOLESALE" ? value : "ALL";
 }
 
-function parseStatus(value: string | null): SaleStatus | "ALL" {
-  return value === "DRAFT" || value === "COMPLETED" || value === "VOIDED"
-    ? value
-    : "ALL";
+function parseStatus(value: string | null): StatusFilter {
+  return value === "COMPLETED" || value === "VOIDED" ? value : "ALL";
 }
 
-function trendFor(today: bigint, yesterday: bigint): StatTrend | undefined {
-  if (today === 0n && yesterday === 0n) return undefined;
-  const direction =
-    today > yesterday ? "up" : today < yesterday ? "down" : "flat";
-  return {
-    direction,
-    label:
-      direction === "flat"
-        ? "Same as yesterday"
-        : `${direction === "up" ? "Up" : "Down"} vs yesterday`,
-  };
+function daysBefore(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
 }
 
 export default function SalesPage() {
@@ -91,17 +76,22 @@ function SalesContent() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  // Business day follows Africa/Lagos time and rolls over automatically.
   const businessDate = useLagosBusinessDate();
 
   const filterChannel = parseChannel(searchParams.get("channel"));
   const filterStatus = parseStatus(searchParams.get("status"));
   const filterSearch = searchParams.get("q") ?? "";
+  const filterUnpaid = searchParams.get("unpaid") === "1";
+  const filterCustomerId = searchParams.get("customerId") ?? "";
 
-  // Date filter: absent param = today, "all" = every date, else a specific day.
+  // Date filter: absent param = today, "all" = last 365 days, else one day.
   const dateParam = searchParams.get("date");
   const showAllDates = dateParam === ALL_DATES;
   const filterDate = showAllDates ? "" : (dateParam ?? businessDate);
+
+  // Like the API: a search, the unpaid filter or a customer filter looks at
+  // every period unless the user picked a date themselves.
+  const wideSearch = filterSearch.trim() !== "" || filterUnpaid || filterCustomerId !== "";
 
   const setParams = useCallback(
     (patch: Record<string, string>) => {
@@ -118,101 +108,68 @@ function SalesContent() {
     [pathname, router, searchParams],
   );
 
-  const sales = useQuery({
-    queryKey: queryKeys.sales.list,
-    queryFn: () => salesApi.list(),
+  const filters = useMemo<SaleListOptions>(() => {
+    const options: SaleListOptions = { limit: PAGE_SIZE };
+    if (showAllDates) {
+      options.from = daysBefore(businessDate, 365);
+      options.to = businessDate;
+    } else if (dateParam !== null) {
+      options.from = dateParam;
+      options.to = dateParam;
+    } else if (!wideSearch) {
+      options.from = businessDate;
+      options.to = businessDate;
+    }
+    if (filterChannel !== "ALL") options.channel = filterChannel;
+    if (filterStatus !== "ALL") options.status = filterStatus;
+    if (filterSearch.trim() !== "") options.search = filterSearch.trim();
+    if (filterUnpaid) options.unpaid = true;
+    if (filterCustomerId !== "") options.customerId = filterCustomerId;
+    return options;
+  }, [
+    showAllDates,
+    dateParam,
+    wideSearch,
+    businessDate,
+    filterChannel,
+    filterStatus,
+    filterSearch,
+    filterUnpaid,
+    filterCustomerId,
+  ]);
+
+  const sales = useInfiniteQuery({
+    queryKey: queryKeys.sales.page(filters),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => salesApi.listPage({ ...filters, cursor: pageParam }),
+    getNextPageParam: (last) => last.nextCursor,
+  });
+
+  // Read before the render branches narrow `sales`.
+  const loadMoreFailed = sales.isFetchNextPageError;
+  const queryError: unknown = sales.error;
+  const fetchNext = sales.fetchNextPage;
+
+  const customers = useQuery({
+    queryKey: queryKeys.customers.list("", false, "picker"),
+    queryFn: () => customersApi.list({ limit: 100 }),
   });
 
   const [debtorDialogOpen, setDebtorDialogOpen] = useState(false);
 
-  const { start: todayStart, end: todayEnd } =
-    getLagosBusinessDayRange(businessDate);
-  const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
-  const todayStartMs = todayStart.getTime();
-  const todayEndMs = todayEnd.getTime();
-  const yesterdayStartMs = yesterdayStart.getTime();
-
-  const stats = useMemo(() => {
-    const rows = sales.data ?? [];
-    let todayRetail = 0n;
-    let todayWholesale = 0n;
-    let yesterdayRetail = 0n;
-    let yesterdayWholesale = 0n;
-
-    for (const sale of rows) {
-      if (sale.status === "VOIDED") continue;
-      const soldAt = new Date(sale.soldAt).getTime();
-      const total = BigInt(sale.totalKobo);
-      if (soldAt >= todayStartMs && soldAt < todayEndMs) {
-        if (sale.channel === "RETAIL") todayRetail += total;
-        else todayWholesale += total;
-      } else if (soldAt >= yesterdayStartMs && soldAt < todayStartMs) {
-        if (sale.channel === "RETAIL") yesterdayRetail += total;
-        else yesterdayWholesale += total;
-      }
-    }
-
-    return { todayRetail, todayWholesale, yesterdayRetail, yesterdayWholesale };
-  }, [sales.data, todayStartMs, todayEndMs, yesterdayStartMs]);
-
-  const filtered = useMemo(() => {
-    const query = filterSearch.trim().toLowerCase();
-    return (sales.data ?? [])
-      .filter((sale) => {
-        if (filterChannel !== "ALL" && sale.channel !== filterChannel)
-          return false;
-        if (filterStatus !== "ALL" && sale.status !== filterStatus)
-          return false;
-        if (
-          filterDate !== "" &&
-          getLagosBusinessDate(new Date(sale.soldAt)) !== filterDate
-        )
-          return false;
-        if (query !== "") {
-          const haystack =
-            `${sale.customerName ?? ""} ${sale.reference ?? ""}`.toLowerCase();
-          if (!haystack.includes(query)) return false;
-        }
-        return true;
-      })
-      .sort(
-        (a, b) => new Date(b.soldAt).getTime() - new Date(a.soldAt).getTime(),
-      );
-  }, [sales.data, filterChannel, filterStatus, filterDate, filterSearch]);
-
-  // Show the list in pages so "all dates" never renders thousands of rows.
-  // The limit resets automatically whenever any filter changes.
-  const filterKey = `${filterChannel}|${filterStatus}|${filterDate}|${filterSearch}`;
-  const [limitState, setLimitState] = useState({
-    key: filterKey,
-    count: PAGE_SIZE,
-  });
-  const visibleCount =
-    limitState.key === filterKey ? limitState.count : PAGE_SIZE;
-  const visible = filtered.slice(0, visibleCount);
-
-  const debtors = useMemo(() => {
-    return (sales.data ?? [])
-      .filter(
-        (sale) =>
-          sale.status !== "VOIDED" &&
-          BigInt(sale.totalKobo) - BigInt(sale.paidKobo) > 0n,
-      )
-      .sort((a, b) => {
-        const owedA = BigInt(a.totalKobo) - BigInt(a.paidKobo);
-        const owedB = BigInt(b.totalKobo) - BigInt(b.paidKobo);
-        if (owedA === owedB) return 0;
-        return owedA > owedB ? -1 : 1;
-      });
-  }, [sales.data]);
-
-  const totalDebt = debtors.reduce(
-    (sum, s) => sum + (BigInt(s.totalKobo) - BigInt(s.paidKobo)),
-    0n,
+  const rows = useMemo(
+    () => (sales.data?.pages ?? []).flatMap((page) => page.items),
+    [sales.data],
   );
+  const appliedFrom = sales.data?.pages[0]?.from ?? null;
+  const appliedTo = sales.data?.pages[0]?.to ?? null;
 
   const otherFiltersActive =
-    filterSearch !== "" || filterChannel !== "ALL" || filterStatus !== "ALL";
+    filterSearch !== "" ||
+    filterChannel !== "ALL" ||
+    filterStatus !== "ALL" ||
+    filterUnpaid ||
+    filterCustomerId !== "";
 
   const columns: ResponsiveTableColumn<SaleListItemDto>[] = [
     {
@@ -258,16 +215,27 @@ function SalesContent() {
       render: (sale) => <Money kobo={sale.paidKobo} tone="neutral" />,
     },
     {
+      header: "Owed",
+      align: "right",
+      render: (sale) => (
+        <Money kobo={saleBalanceDueKobo(sale)} tone="neutral" />
+      ),
+    },
+    {
       header: "Status",
       render: (sale) => <StatusBadge status={sale.status} />,
     },
   ];
 
   const listScope = showAllDates
-    ? "all dates"
-    : filterDate === businessDate
-      ? "today"
-      : filterDate;
+    ? "the last 365 days"
+    : appliedFrom === null
+      ? "all dates"
+      : appliedFrom === appliedTo
+        ? appliedFrom === businessDate
+          ? "today"
+          : appliedFrom
+        : `${appliedFrom} to ${appliedTo}`;
 
   return (
     <div className="space-y-6">
@@ -290,68 +258,6 @@ function SalesContent() {
           </>
         }
       />
-
-      {sales.isPending ? (
-        <Skeleton variant="stat" count={3} />
-      ) : sales.isError ? null : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <StatCard
-            label="Today — retail"
-            value={<Money kobo={stats.todayRetail} tone="neutral" />}
-            trend={trendFor(stats.todayRetail, stats.yesterdayRetail)}
-          />
-          <StatCard
-            label="Today — wholesale"
-            value={<Money kobo={stats.todayWholesale} tone="neutral" />}
-            trend={trendFor(stats.todayWholesale, stats.yesterdayWholesale)}
-          />
-          <StatCard
-            label="Total still owed"
-            value={<Money kobo={totalDebt} tone="neutral" />}
-            tone={totalDebt > 0n ? "danger" : "default"}
-            hint="All unpaid balances from every date."
-          />
-        </div>
-      )}
-
-      {!sales.isPending && !sales.isError && debtors.length > 0 && (
-        <section className="rounded-md border border-border bg-card p-4 sm:p-5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <HandCoins className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-section font-semibold">Biggest debts</h2>
-            </div>
-            <Link
-              href="/debtors"
-              className="text-sm text-primary hover:underline"
-            >
-              View all debtors
-            </Link>
-          </div>
-          <ul className="mt-3 grid gap-3 sm:grid-cols-3">
-            {debtors.slice(0, TOP_DEBTORS).map((s) => {
-              const owed = BigInt(s.totalKobo) - BigInt(s.paidKobo);
-              return (
-                <li
-                  key={s.id}
-                  className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">
-                      {s.customerName ?? "Walk-in"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {s.channel === "RETAIL" ? "Retail" : "Wholesale"} ·{" "}
-                      {formatLagosDate(s.soldAt)}
-                    </p>
-                  </div>
-                  <Money kobo={owed} className="shrink-0" />
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
 
       <section className="space-y-4 rounded-md border border-border bg-card p-4 sm:p-5">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -397,13 +303,27 @@ function SalesContent() {
               ))}
             </Select>
           </FormField>
+          <FormField id="sales-customer" label="Customer">
+            <Select
+              id="sales-customer"
+              value={filterCustomerId}
+              onChange={(event) => setParams({ customerId: event.target.value })}
+            >
+              <option value="">All customers</option>
+              {(customers.data ?? []).map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.name}
+                </option>
+              ))}
+            </Select>
+          </FormField>
           <DateFilter
             id="sales-date"
             value={filterDate}
             onChange={(value) =>
               setParams({
-                // Cleared input = every date. Picking today goes back to the
-                // default (no param) so it keeps following the Lagos day.
+                // Cleared input = last 365 days. Picking today goes back to
+                // the default (no param) so it keeps following the Lagos day.
                 date:
                   value === ""
                     ? ALL_DATES
@@ -414,6 +334,19 @@ function SalesContent() {
             }
             max={businessDate}
           />
+          <div className="flex items-end">
+            <label className="flex min-h-12 items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                className="h-5 w-5"
+                checked={filterUnpaid}
+                onChange={(event) =>
+                  setParams({ unpaid: event.target.checked ? "1" : "" })
+                }
+              />
+              Unpaid only (any date)
+            </label>
+          </div>
         </div>
 
         {sales.isPending ? (
@@ -424,7 +357,7 @@ function SalesContent() {
             message={toUserMessage(sales.error)}
             onRetry={() => void sales.refetch()}
           />
-        ) : filtered.length === 0 ? (
+        ) : rows.length === 0 ? (
           <EmptyState
             title={
               otherFiltersActive
@@ -433,7 +366,7 @@ function SalesContent() {
             }
             description={
               otherFiltersActive
-                ? "Try clearing the search, channel or status filter."
+                ? "Try clearing the search, channel, customer or status filter."
                 : "Record a sale, or look at another date."
             }
             action={
@@ -443,7 +376,13 @@ function SalesContent() {
                     variant="secondary"
                     size="sm"
                     onClick={() =>
-                      setParams({ q: "", channel: "ALL", status: "ALL" })
+                      setParams({
+                        q: "",
+                        channel: "ALL",
+                        status: "ALL",
+                        unpaid: "",
+                        customerId: "",
+                      })
                     }
                   >
                     Clear filters
@@ -455,7 +394,7 @@ function SalesContent() {
                     size="sm"
                     onClick={() => setParams({ date: ALL_DATES })}
                   >
-                    Show all dates
+                    Show the last 365 days
                   </Button>
                 )}
               </div>
@@ -464,27 +403,29 @@ function SalesContent() {
         ) : (
           <>
             <p className="text-sm text-muted-foreground">
-              Showing {visible.length} of {filtered.length} sales for{" "}
-              {listScope}.
+              Showing {rows.length} sales for {listScope}
+              {sales.hasNextPage ? " (more available)" : ""}.
             </p>
             <ResponsiveTable
-              rows={visible}
+              rows={rows}
               columns={columns}
               getKey={(sale) => sale.id}
             />
-            {visible.length < filtered.length && (
+            {loadMoreFailed && (
+              <ErrorState
+                title="More sales could not be loaded"
+                message={toUserMessage(queryError)}
+                onRetry={() => void fetchNext()}
+              />
+            )}
+            {sales.hasNextPage && (
               <div className="flex justify-center">
                 <Button
                   variant="secondary"
-                  onClick={() =>
-                    setLimitState({
-                      key: filterKey,
-                      count: visibleCount + PAGE_SIZE,
-                    })
-                  }
+                  loading={sales.isFetchingNextPage}
+                  onClick={() => void sales.fetchNextPage()}
                 >
-                  Show {Math.min(PAGE_SIZE, filtered.length - visible.length)}{" "}
-                  more
+                  Load more
                 </Button>
               </div>
             )}

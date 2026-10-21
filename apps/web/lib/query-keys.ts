@@ -11,28 +11,37 @@ export const queryKeys = {
     all: key("products"),
     list: (search: string, includeDeleted: boolean) =>
       key("products", "list", search, includeDeleted),
+    // Infinite (paged) data has a different cache shape than list(); never share a key.
+    pages: (search: string, includeDeleted: boolean) =>
+      key("products", "pages", search, includeDeleted),
     detail: (id: string) => key("products", "detail", id),
   },
   suppliers: {
     all: key("suppliers"),
     list: (search: string, includeDeleted: boolean, balanceFilter = "all") =>
       key("suppliers", "list", search, includeDeleted, balanceFilter),
+    pages: (search: string, includeDeleted: boolean, balanceFilter = "all") =>
+      key("suppliers", "pages", search, includeDeleted, balanceFilter),
     detail: (id: string) => key("suppliers", "detail", id),
   },
   purchases: {
     all: key("purchases"),
     list: key("purchases", "list"),
+    page: (filters: unknown) => key("purchases", "page", filters),
     detail: (id: string) => key("purchases", "detail", id),
   },
   sales: {
     all: key("sales"),
     list: key("sales", "list"),
+    page: (filters: unknown) => key("sales", "page", filters),
     detail: (id: string) => key("sales", "detail", id),
   },
   customers: {
     all: key("customers"),
     list: (search: string, includeDeleted: boolean, balanceFilter = "all") =>
       key("customers", "list", search, includeDeleted, balanceFilter),
+    pages: (search: string, includeDeleted: boolean, balanceFilter = "all") =>
+      key("customers", "pages", search, includeDeleted, balanceFilter),
     detail: (id: string) => key("customers", "detail", id),
   },
   reports: {

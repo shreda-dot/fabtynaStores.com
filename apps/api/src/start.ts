@@ -1,13 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "../generated/prisma/client.js";
-import { assertUnauthenticatedModeAllowed, createDevActorResolver, loadDevActor } from "./auth/actor.js";
 import { buildApp } from "./app.js";
+import { startSessionCleanup } from "./auth/session.js";
 import { startIdempotencyCleanup } from "./lib/idempotency.js";
 import type { RuntimeEnv } from "./lib/env.js";
 import { createPrismaClient } from "./lib/prisma.js";
-
-/** Localhost only until real authentication exists. */
-export const LISTEN_HOST = "127.0.0.1";
 
 export interface StartedServer {
   app: FastifyInstance;
@@ -16,21 +13,24 @@ export interface StartedServer {
 }
 
 /**
- * Starts the API. The guard runs FIRST, before any connection is opened, so a
- * misconfigured production start fails without touching the database.
+ * Starts the API with cookie-based server sessions.
  */
 export async function startServer(
   env: RuntimeEnv,
   overrides: { port?: number; logger?: boolean } = {},
 ): Promise<StartedServer> {
-  assertUnauthenticatedModeAllowed(env);
-
   const prisma = createPrismaClient(env.apiDatabaseUrl, { maxConnections: env.dbPoolMax });
   try {
-    const actor = await loadDevActor(prisma, env.devActorEmail);
     const app = buildApp({
       prisma,
-      resolveActor: createDevActorResolver(actor),
+      auth: {
+        nodeEnv: env.nodeEnv,
+        webOrigin: env.webOrigin,
+        cookieDomain: env.cookieDomain,
+        sessionIdleTimeoutHours: env.sessionIdleTimeoutHours,
+        sessionAbsoluteTimeoutDays: env.sessionAbsoluteTimeoutDays,
+      },
+      trustProxy: env.trustProxy,
       logger: overrides.logger ?? true,
       txTimeouts: env.txTimeouts,
       maxDateRangeDays: env.maxDateRangeDays,
@@ -44,12 +44,20 @@ export async function startServer(
         }
       },
     });
+    const stopSessionCleanup = startSessionCleanup(prisma, {
+      idleTimeoutHours: env.sessionIdleTimeoutHours,
+      onError: (error) => app.log.error({ err: error }, "session cleanup failed"),
+      onPurged: (count) => {
+        if (count > 0) app.log.info({ count }, "purged expired admin sessions");
+      },
+    });
     app.addHook("onClose", async () => {
       stopCleanup();
+      stopSessionCleanup();
       await prisma.$disconnect();
     });
 
-    const address = await app.listen({ port: overrides.port ?? env.port, host: LISTEN_HOST });
+    const address = await app.listen({ port: overrides.port ?? env.port, host: env.host });
     return { app, prisma, address };
   } catch (error) {
     await prisma.$disconnect();

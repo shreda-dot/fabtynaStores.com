@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ActorResolver } from "../../auth/actor.js";
+import { requireActor } from "../../auth/actor.js";
 import { validationError } from "../../lib/errors.js";
 import {
   createPurchaseDtoSchema,
@@ -44,10 +44,10 @@ function send(reply: FastifyReply, result: PurchaseResponse) {
 
 export function registerPurchasesRoutes(
   app: FastifyInstance,
-  deps: { service: PurchasesService; resolveActor: ActorResolver },
+  deps: { service: PurchasesService },
 ): void {
   app.post("/purchases", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const idempotencyKey = readIdempotencyKey(request);
 
     const parsed = createPurchaseDtoSchema.safeParse(request.body);
@@ -58,7 +58,7 @@ export function registerPurchasesRoutes(
   });
 
   app.get("/purchases", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     const parsed = listPurchasesQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       throw validationError("The purchases filter is not valid.", zodIssues(parsed.error));
@@ -67,12 +67,12 @@ export function registerPurchasesRoutes(
   });
 
   app.get("/purchases/:id", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     return reply.status(200).send(await deps.service.getPurchase(readPurchaseId(request)));
   });
 
   app.post("/purchases/:id/payments", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const purchaseId = readPurchaseId(request);
     const idempotencyKey = readIdempotencyKey(request);
 
@@ -84,7 +84,7 @@ export function registerPurchasesRoutes(
   });
 
   app.post("/purchases/:id/payments/:paymentId/reverse", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const params = paymentReversalParamsSchema.safeParse(request.params);
     if (!params.success) {
       throw validationError("Invalid purchase or payment id.", zodIssues(params.error));
@@ -101,13 +101,13 @@ export function registerPurchasesRoutes(
   });
 
   app.post("/purchases/:id/void", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const purchaseId = readPurchaseId(request);
     return send(reply, await deps.service.voidPurchase(purchaseId, actor, readIdempotencyKey(request)));
   });
 
   app.put("/purchases/:id", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const purchaseId = readPurchaseId(request);
     const idempotencyKey = readIdempotencyKey(request);
 

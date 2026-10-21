@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ActorResolver } from "../../auth/actor.js";
+import { requireActor } from "../../auth/actor.js";
 import { validationError } from "../../lib/errors.js";
 import {
   createSaleDtoSchema,
@@ -44,10 +44,10 @@ function send(reply: FastifyReply, result: SaleResponse) {
 
 export function registerSalesRoutes(
   app: FastifyInstance,
-  deps: { service: SalesService; resolveActor: ActorResolver },
+  deps: { service: SalesService },
 ): void {
   app.post("/sales", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const idempotencyKey = readIdempotencyKey(request);
 
     const parsed = createSaleDtoSchema.safeParse(request.body);
@@ -58,7 +58,7 @@ export function registerSalesRoutes(
   });
 
   app.get("/sales", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     const parsed = listSalesQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       throw validationError("The sales filter is not valid.", zodIssues(parsed.error));
@@ -67,13 +67,13 @@ export function registerSalesRoutes(
   });
 
   app.get("/sales/:id", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     const sale = await deps.service.getSale(readSaleId(request));
     return reply.status(200).send(sale);
   });
 
   app.post("/sales/:id/payments", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const saleId = readSaleId(request);
     const idempotencyKey = readIdempotencyKey(request);
 
@@ -85,7 +85,7 @@ export function registerSalesRoutes(
   });
 
   app.post("/sales/:id/payments/:paymentId/reverse", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const params = paymentReversalParamsSchema.safeParse(request.params);
     if (!params.success) {
       throw validationError("Invalid sale or payment id.", zodIssues(params.error));
@@ -102,14 +102,14 @@ export function registerSalesRoutes(
   });
 
   app.post("/sales/:id/void", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const saleId = readSaleId(request);
     const idempotencyKey = readIdempotencyKey(request);
     return send(reply, await deps.service.voidSale(saleId, actor, idempotencyKey));
   });
 
   app.put("/sales/:id", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const saleId = readSaleId(request);
     const idempotencyKey = readIdempotencyKey(request);
 

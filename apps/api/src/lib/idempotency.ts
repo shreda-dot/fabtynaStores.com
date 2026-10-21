@@ -32,25 +32,37 @@ export type IdempotencyClaim =
   | { kind: "replay"; status: number; body: unknown };
 
 /**
- * Claims (key, route) INSIDE the caller's transaction.
+ * Claims (key, route, actor) INSIDE the caller's transaction.
  *
- * The claim is `INSERT ... ON CONFLICT DO NOTHING` on the unique index
- * (key, route). If another request holds the key but has not finished, our
- * insert WAITS for that transaction: when it commits we get "already there"
- * and replay its stored response; when it rolls back (the sale failed) our
- * insert succeeds and we own the key. So two simultaneous requests with one key
- * can never both create a sale, and a failed request leaves nothing behind.
+ * The database indexes scope new claims to an actor. Existing NULL-actor rows
+ * are checked separately and conflict rather than replaying an unknown user's
+ * response. If another request by this actor holds the key but has not
+ * finished, the insert waits for it; after commit the stored response replays,
+ * and after rollback this request owns the key.
  */
 export async function claimIdempotencyKey(
   tx: TransactionClient,
-  input: { key: string; route: string; requestHash: string; now: Date },
+  input: { actorId: string; key: string; route: string; requestHash: string; now: Date },
 ): Promise<IdempotencyClaim> {
-  const { key, route, requestHash, now } = input;
+  const { actorId, key, route, requestHash, now } = input;
 
   // An expired row must not block a fresh request with a reused key.
   await tx.idempotencyKey.deleteMany({
     where: { key, route, expiresAt: { lt: now } },
   });
+
+  const legacy = await tx.idempotencyKey.findFirst({
+    where: { key, route, actorId: null, expiresAt: { gte: now } },
+    select: { id: true },
+  });
+  if (legacy !== null) {
+    throw new AppError(
+      409,
+      "CONFLICT",
+      "This Idempotency-Key belongs to an older request. Use a new key and retry.",
+      { key },
+    );
+  }
 
   const id = randomUUID();
   const created = await tx.idempotencyKey.createMany({
@@ -59,6 +71,7 @@ export async function claimIdempotencyKey(
         id,
         key,
         route,
+        actorId,
         requestHash,
         expiresAt: new Date(now.getTime() + IDEMPOTENCY_TTL_MS),
       },
@@ -69,8 +82,8 @@ export async function claimIdempotencyKey(
     return { kind: "claimed", id };
   }
 
-  const existing = await tx.idempotencyKey.findUnique({
-    where: { key_route: { key, route } },
+  const existing = await tx.idempotencyKey.findFirst({
+    where: { key, route, actorId },
   });
   if (existing === null) {
     // Deleted between the insert and the read (expiry cleanup): ask the client to retry.

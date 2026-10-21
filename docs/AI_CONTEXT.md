@@ -1,7 +1,7 @@
 # Fabtyna Stores — AI context (read this first)
 
 Briefing for a new AI session working on this repo with no other history.
-Everything below was reviewed against the repository on 2026-10-20. Docs only:
+Everything below was reviewed against the repository on 2026-10-21. Docs only:
 this file does not change code, migrations or `.env`.
 
 Repository root: `c:\Users\Shreda\fabtyna-stores` (Windows, PowerShell).
@@ -39,7 +39,7 @@ phone on slow networks, so the web app is mobile-first with a network status bar
   products, customers, suppliers, debtors/payables, stock, loans, transfers,
   adjustments, expense categories, expenses, and accounts (see §6).
   - Schema: `apps/api/prisma/schema.prisma`; migrations:
-    `apps/api/prisma/migrations/` (**30** migrations); generated client output:
+    `apps/api/prisma/migrations/` (**33** migrations); generated client output:
     `apps/api/generated/prisma/` (git-ignored).
   - `src/db/`: `expected-schema.ts`, `verify.ts`, `audit.ts`.
   - `src/lib/`: `env.ts`, `prisma.ts` (`createPrismaClient`), `password.ts`
@@ -47,7 +47,9 @@ phone on slow networks, so the web app is mobile-first with a network status bar
     `errors.ts` (error envelope + Postgres error mapping), `retry.ts`,
     `idempotency.ts`.
   - `src/app.ts` (`buildApp`), `src/start.ts` (`startServer`), `src/server.ts`
-    (entry), `src/auth/actor.ts` (temporary guard), `src/modules/sales/`
+    (entry), `src/auth/actor.ts` (session actor), `src/auth/session.ts`
+    (server-side sessions), `src/auth/auth.routes.ts` (auth endpoints),
+    `src/modules/sales/`
     (schemas, validation, repository, service, routes).
   - `src/modules/products/`, `src/modules/parties/`, `src/modules/stock/`,
     `src/modules/expenses/`, `src/modules/accounts/`; `src/scripts/`: `db-verify.ts`,
@@ -90,11 +92,16 @@ Variable NAMES (never values):
 - `DIRECT_URL` — direct (unpooled) endpoint, used by schema/migration commands
   via `apps/api/prisma.config.ts` AND by the running API (below).
 - `DB_POOL_MAX` (API pool size, 1–10, default 10).
-- `ALLOW_UNAUTHENTICATED_DEV`, `DEV_ACTOR_EMAIL` — the temporary no-login guard
-  (below). `NODE_ENV=production` refuses to start.
+- `HOST` (default `127.0.0.1`; must be explicit in production),
+  `TRUST_PROXY` (Fastify proxy trust).
+- `WEB_ORIGIN` (exact browser origin required for CORS and write-request CSRF
+  checks), optional `COOKIE_DOMAIN`.
+- `SESSION_IDLE_TIMEOUT_HOURS` (default 12) and
+  `SESSION_ABSOLUTE_TIMEOUT_DAYS` (default 7).
 - `TEST_DATABASE_URL` / `TEST_DIRECT_URL` — the test suite only.
 - `PORT` (API, default 3001); `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH` (admin seed).
 - Web (`apps/web`, names only): `NEXT_PUBLIC_API_MODE` (default `"mock"`),
+  `NEXT_PUBLIC_API_BASE_URL` (real API origin),
   `NEXT_PUBLIC_API_TIMEOUT_MS`, `NEXT_PUBLIC_MOCK_LATENCY_MS`,
   `NEXT_PUBLIC_MOCK_FAILURE_RATE`.
 
@@ -172,7 +179,7 @@ must print "-- This is an empty migration." and exit 0.
 
 ## 6. Current status (verified)
 
-- Migrations: **31** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
+- Migrations: **33** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
   The newest four add dynamic expense categories, make `OTHER_INCOME`
   source-less, correct the category-index names, and make ordinary expense
   details immutable with a single void transition.
@@ -180,7 +187,11 @@ must print "-- This is an empty migration." and exit 0.
   ledger sources/balances/transfers/guards, default accounts, and a corrective
   account-balance guard/cache migration. The dev and test databases contain the
   default Cash on hand and Moniepoint accounts unless an operator has since
-  changed them.
+  changed them. Migration `20261020001000_admin_sessions` adds the
+  `admin_sessions` table; both databases have this migration after successful
+  final verification. Migration `20261020001100_idempotency_actor_scope` is
+  also applied to dev and test; it preserves prior NULL-actor claims and scopes
+  new claims to the authenticated admin.
 - Accounts are the source of truth for current cash/bank/POS balances. The
   append-only account ledger maintains `account_balances`; the Accounting
   overview financial position and Money Flow report use ledger-derived
@@ -243,20 +254,28 @@ must print "-- This is an empty migration." and exit 0.
   not > 5 min in the future, size bounds. The service also fixed a shared bug
   (below). `creditLimitKobo` is NOT enforced anywhere (stored/displayed only),
   so no customer lock exists.
-- **Idempotency**: optional `Idempotency-Key` header (8–128 chars). The key is
-  claimed inside the sale transaction with `INSERT … ON CONFLICT DO NOTHING` on
-  unique `(key, route)`, so a second simultaneous request waits for the first,
-  then replays its stored response (`Idempotent-Replayed: true`, original
-  status). Same key + different body → 422 `IDEMPOTENCY_MISMATCH`. Rows expire
-  after **24 h**; an unref'd hourly job (`startIdempotencyCleanup`) deletes
-  expired rows in batches. When login exists, add `actorId` to the uniqueness
-  (key stays `(key, route)` for now).
-- **Temporary auth guard (fail-closed)**: `NODE_ENV=production` refuses to
-  start; otherwise `ALLOW_UNAUTHENTICATED_DEV=true` is required, the server
-  listens on **127.0.0.1 only**, and `createdById` is the active admin named by
-  `DEV_ACTOR_EMAIL`. The ONE place real auth replaces: the `ActorResolver` in
-  `apps/api/src/auth/actor.ts` (delete `assertUnauthenticatedModeAllowed` and
-  `loadDevActor` with it).
+- **Idempotency**: optional `Idempotency-Key` header (8–128 chars), claimed in
+  the write transaction. New claims are unique by `(key, route, actorId)`, so
+  separate admins can independently use the same key and route; same-admin
+  retries replay only that admin's response (`Idempotent-Replayed: true`).
+  Same actor/key/route with a different body returns 422
+  `IDEMPOTENCY_MISMATCH`. Pre-migration rows remain NULL-actor legacy claims:
+  a request using that key/route gets a 409 without replaying the stored
+  response until the row expires. Rows expire after **24 h**; an unref'd hourly
+  cleanup deletes expired rows in batches. Drain old API instances that still
+  create NULL-actor claims before deploying this version.
+- **Authentication and route protection.** API authentication uses
+  server-side `admin_sessions`, not JWT. A 32-byte random token is sent only in
+  an HttpOnly cookie; the database stores its SHA-256 hash. Sessions have a
+  sliding 12-hour idle expiry and 7-day absolute expiry, are checked against
+  `adminUsers.isActive` on every request, and are cleaned hourly after 30 days
+  past expiry. Writes require an exact `Origin === WEB_ORIGIN`; CORS allows
+  credentials and exposes `Idempotent-Replayed` and `Retry-After`. Only
+  `GET /health` and `POST /auth/login` are public. Login, logout, current-user,
+  and password-change routes are implemented; password changes revoke other
+  sessions and rotate the current session. `createdById` and audit actors come
+  from the authenticated session. `AdminRole` intentionally remains
+  unenforced.
 - Test isolation: nothing committed to immutable tables can be deleted, so each
   test creates its OWN product/customer/account/reference prefix and asserts
   row counts scoped to those. `seed-admin.test.ts` runs against an isolated
@@ -434,7 +453,7 @@ must print "-- This is an empty migration." and exit 0.
   location-specific low-stock reads, loose-unit wholesale valuation,
   customer/supplier ledger-backed statements, debtor/payable list balances
   (including overdue purchase balances), and customer/supplier profile reads.
-  API tests use Vitest's default file parallelism against the direct test
+  API tests run with Vitest `fileParallelism: false` against the direct test
   database.
 - **Stock/loan lock order extensions.** Loans lock **loan row → account balances
   (sorted accountId)**. Transfers and adjustments lock **product rows (sorted
@@ -446,52 +465,64 @@ must print "-- This is an empty migration." and exit 0.
   and adjustment list stay on today by default unless an explicit range is
   supplied. The max inclusive range remains configurable by
   `API_MAX_DATE_RANGE_DAYS`.
+- **Idempotency statement counts:** when a key is supplied, a new claim adds
+  **3** SQL statements; a successful same-actor replay adds **4**. Requests
+  without an idempotency key are unchanged.
 - **Measured statement counts (new endpoints):** loan create **6**, loan charge
   **4**, loan repayment **10**, transfer create **9**, adjustment create **8**,
-  adjustment void **10** (test DB, no Idempotency-Key replay path).
-- Tests: `apps/api/tests` = 25 files (**226** tests, need the test DB);
-  `packages/shared/src/__tests__` = 9 files (**231** tests, no DB). New purchase
-  files: `purchases-receive`, `purchases-lifecycle`, `purchases-list`,
+  adjustment void **10**, sale payment reversal **11**, purchase payment
+  reversal **10** (test DB, no Idempotency-Key replay path).
+- Tests: `apps/api/tests` = 27 files (**235** tests); shared tests =
+  9 files (**231** tests). New purchase files:
+  `purchases-receive`, `purchases-lifecycle`, `purchases-list`,
   `purchases-concurrency` (10 iterations each: two purchases of one product,
   two payments from an account that can afford one, two voids). The
   "audit-clean" tests in `sales-concurrency.test.ts` ignore `severity: known`
-  checks (paid supplier-less purchases are an intended exception). API test
-  files run with Vitest's default file parallelism against the direct Neon test
-  endpoint. The latest `pnpm verify` passed typecheck, lint, and shared tests
-  (231/231), but the API suite had 5 failures (221/226): remote-database
-  timeouts/503s under concurrent API test files. A financial-position
-  assertion that compared global cash across concurrent writes was also found
-  and changed to assert stable response shape plus local account/stock state;
-  the focused reports suite passes (6/6) after that correction. The payable
-  test's global-delta race was likewise scoped to its own supplier. The root
-  verification stopped before its build stage, but the API TypeScript build
-  and web production build passed separately. After the final focused tests,
-  `db:verify` matched `expected-schema.ts` on both `fabtyna_dev` and
-  `fabtyna_test` (31 migrations each), and `db:audit` returned zero rows on
-  both.
-- `apps/api` has no sign-in endpoint.
-  Loan repayment reversal remains unimplemented: a mistaken repayment cannot
+  checks (paid supplier-less purchases are an intended exception). API tests
+  run with `fileParallelism: false` against the direct Neon test endpoint.
+- **Most recent full verification (before actor-scoped idempotency):**
+  `pnpm verify` ran once. Typecheck and lint passed; shared tests passed
+  (231/231). The API suite ran 26 files: 227 passed and 5 failed out of 232.
+  Three tests exceeded the existing 30-second timeout
+  (`loans-api.test.ts`, `parties-inventory.test.ts`, `stock-operations.test.ts`);
+  two purchase concurrency tests received 500/503 instead of the expected
+  success/conflict pair. The earliest API failure logged `Connection
+  terminated unexpectedly`, followed by PostgreSQL lock timeout `55P03`; a
+  purchase void transaction also exceeded its existing 20-second transaction
+  timeout. API suite duration was about **51m 32s**. `pnpm verify` stopped at
+  tests, so its build stage did not run. No timeouts were raised. The focused
+  actor-scoped idempotency tests subsequently passed **3/3**; the full suite
+  was not rerun.
+- The final focused auth run passed **9/9** tests. The combined sales/purchase
+  run passed **88**, skipped **1** and failed setup for `purchases-list` when
+  DNS could not resolve the Neon host (`ENOTFOUND`); the later full run passed
+  that list test.
+- After migration 33 and the focused idempotency test run, `db:verify` passed
+  all **33** migrations and expected objects on both `fabtyna_dev` and
+  `fabtyna_test`; both object lists matched. `db:audit` returned **0 rows** on
+  each database. The standing Prisma drift check printed
+  `-- This is an empty migration.` and passed.
+- Loan repayment reversal remains unimplemented: a mistaken repayment cannot
   yet be corrected through the UI. Until a reversal operation is built, payment
   forms should require a clear confirmation of the repayment amount, account,
   and date. Any future correction must append reversal ledger rows and adjust
   the repayment/document state atomically; never edit an applied repayment or
   its LOAN_INTEREST reporting expense in place.
-  `@fastify/cookie`, `@fastify/cors`, `@fastify/jwt` and
-  `@fastify/rate-limit` are installed but not used.
-- Auth: **no sign-in endpoint exists.** `AdminUser` + Argon2id hashing + the seed
-  script exist; `AdminRole` is explicitly "NOT ENFORCED ANYWHERE YET" — nothing
-  reads it. The web app has a client-side demo login only
-  (`lib/auth/demo-auth.ts`, `components/auth/auth-guard.tsx`).
-- Web still runs on the **typed MOCK API** by default:
+- `@fastify/cookie`, `@fastify/cors`, and `@fastify/rate-limit` are used;
+  `@fastify/jwt` remains installed but unused.
+- Web business APIs still run on the **typed MOCK API** by default:
   `lib/api/index.ts` selects `*MockApi` unless `NEXT_PUBLIC_API_MODE=real`;
   every `*RealApi` stub throws `"not implemented"`. The mock store persists to
-  localStorage key `fabtyna-mock-v1`; `resetDemoData` resets it.
+  localStorage key `fabtyna-mock-v1`; `resetDemoData` resets it. Authentication
+  has its own mock/real API switch: mock mode retains demo login, while real
+  mode uses `NEXT_PUBLIC_API_BASE_URL` and cookie credentials.
+- Authentication pages and boundaries are connected: real login, logout,
+  current-session checks, and change-password are available. Middleware only
+  checks cookie presence as a UX shortcut; the API is the security boundary.
 - The 5B report endpoints are API-only so far. The real web report client has
   not been connected; the mock client currently implements sales summary only.
-- Latest focused checks in this session: `accounts-gate.test.ts`,
-  `loans-api.test.ts`, `stock-operations.test.ts`, and the sales pagination
-  case all pass on the test DB; pagination now passes under the default 30 s
-  timeout without a timeout override by reducing lock contention in seeding.
+- Auth sessions are covered in `auth-sessions.test.ts`; the verified outcomes
+  are recorded above.
 
 ## 6b. Known limitations
 
@@ -505,9 +536,15 @@ must print "-- This is an empty migration." and exit 0.
 | 4B loans | Loan, charge, repayment, list/detail; interest is reporting-only and does not add another account outflow | `loans-api.test.ts`, `reversal-positive.test.ts` |
 | 4B transfers and adjustments | Transfer create/read; adjustment create/read/void with stock and average-cost reversal | `stock-operations.test.ts`, `stock-balances.test.ts` |
 
-This is test-file coverage, not a claim that every user-facing web surface is
-connected: the real web API remains stubbed. Loan repayment reversal is the
-known operation gap above.
+This is test-file coverage, not a claim that every business-facing web API is
+connected: non-auth real API stubs remain unimplemented. Loan repayment
+reversal is the known operation gap above. Login throttling is in-memory and
+process-local; use a shared rate-limit store before scaling the API horizontally.
+Actor-scoped idempotency is deployed to dev and test. Pre-migration NULL-actor
+claims intentionally conflict (without response replay) until they expire.
+The old global unique index has been replaced by legacy-scope and actor-scope
+partial unique indexes; old API instances must be drained before this version
+is deployed so they cannot create new NULL-actor claims.
 
 - **Quantity is a JSON number in the sale DTO** (`quantity: z.number()`), so a
   client could send a value with float noise. The domain rejects more than 4
@@ -569,47 +606,3 @@ known operation gap above.
   `git clean`/`git reset`.
 - Report which files changed; if a file looks unchanged or was overwritten by a
   tool, say so explicitly.
-
-## 8. Corrections made to the draft
-
-1. **Fastify is not in use.** The draft listed `apps/api` as "Fastify"; no
-   source file references Fastify and there is no `src/server.ts`/`app.ts`. The
-   `dev`/`start` scripts point at files that do not exist. Reworded as "no HTTP
-   server yet" and noted the unused dependencies.
-2. **"React 19 + Compiler" → React 19 only.** `next.config.ts` sets no
-   `reactCompiler` option; the claim is unverifiable, so it was removed. Also
-   dropped the "Turbopack" claim (no explicit config) and stated the concrete
-   version (Next 16.4).
-3. **"real-API stubs exist" corrected.** They exist but every method throws
-   `"not implemented"` — made that explicit, plus the `NEXT_PUBLIC_API_MODE`
-   switch (default `"mock"`).
-4. **`docs/backend-schema.md` claim kept and sharpened** — it documents tables
-   (§3) and constraints in plain English (§4), drift audit (§7).
-5. **Shared test command corrected** to the real script
-   `pnpm --filter @fabtyna/shared test` (the `exec vitest run` form also works).
-6. The migration count was **18** when this file was first written on
-   2026-10-17; it is now 22 after the 2026-10-19 account migrations and
-   account-balance guard correction.
-7. Test counts are refreshed in §6 from the latest successful verification
-   run (8 API files / 84 tests; 9 shared files / 223 tests).
-8. **"which operations exist in apps/api" answered: none** — plus which
-   dependencies are installed but unused.
-9. **Auth status answered:** no sign-in endpoint; demo-only client login;
-   `AdminRole` unenforced.
-10. **Web mock API confirmed** and made specific (mode env var, localStorage key
-    `fabtyna-mock-v1`, `resetDemoData`).
-11. **`db:audit` nuance added:** only `fatal` checks fail the run; `known` checks
-    are documented gaps that print INFO (the draft implied any row = failure).
-12. **Env var names completed:** draft omitted `TEST_DIRECT_URL`, `PORT`,
-    `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH`, and the web `NEXT_PUBLIC_*` names.
-    Values are never included.
-13. **Test-DB guard made specific** (`resolveTestConnectionString` in
-    `apps/api/tests/test-db.ts`, plus the `global-setup.ts` verify step).
-14. **"Percentages as integer basis points" confirmed** (was plausible; now
-    backed by `scaleByBpsFloor` / `basisPointsSchema`).
-15. **Removed the `docs/backend-schema.md`-only framing of migrations** — the
-    schema file itself states the migration history is the single source of
-    truth, and that there is no `sql-drafts/` folder; reflected that.
-16. **Helper/file names pinned:** `createPrismaClient`, `getLagosBusinessDate`,
-    `formatNaira`/`parseMoneyInputToKobo`, `stock.service.ts`, exact script
-    filenames, and the `apps/api/tests/` (not `src/tests/`) location.

@@ -307,7 +307,7 @@ export function createExpensesService(options: ExpensesServiceOptions) {
       return runner.runWrite(createRoute, {}, async (ctx) =>
         runner.withIdempotency(
           ctx,
-          { route: createRoute, key, requestHash: hashRequestBody(body) },
+          { actorId: actor.id, route: createRoute, key, requestHash: hashRequestBody(body) },
           async () => {
             const created = await createInTransaction(ctx, body, actor);
             return { status: 201, body: created.after };
@@ -321,7 +321,7 @@ export function createExpensesService(options: ExpensesServiceOptions) {
       return runner.runWrite(route, { expenseId }, async (ctx) =>
         runner.withIdempotency(
           ctx,
-          { route, key, requestHash: hashRequestBody({ reason }) },
+          { actorId: actor.id, route, key, requestHash: hashRequestBody({ reason }) },
           async () => {
             const result = await voidInTransaction(ctx, expenseId, reason, actor);
             return {
@@ -348,7 +348,7 @@ export function createExpensesService(options: ExpensesServiceOptions) {
       return runner.runWrite(route, { expenseId }, async (ctx) =>
         runner.withIdempotency(
           ctx,
-          { route, key, requestHash: hashRequestBody(body) },
+          { actorId: actor.id, route, key, requestHash: hashRequestBody(body) },
           async () => {
             const originalExpense = await lockExpense(ctx, expenseId);
             if (originalExpense.voidedAt !== null) {

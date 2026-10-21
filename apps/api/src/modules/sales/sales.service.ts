@@ -538,7 +538,7 @@ export function createSalesService(options: SalesServiceOptions) {
     const requestHash = hashRequestBody(dto);
 
     return runWrite(CREATE_SALE_ROUTE, { lines: dto.lines.length }, (ctx) =>
-      withIdempotency(ctx, { route: CREATE_SALE_ROUTE, key: idempotencyKey, requestHash }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route: CREATE_SALE_ROUTE, key: idempotencyKey, requestHash }, async () => {
         const locked = await acquireLocks(ctx, salePlan(dto));
         const stored = await recordNewSale(ctx, {
           dto,
@@ -566,7 +566,7 @@ export function createSalesService(options: SalesServiceOptions) {
     const route = paymentRoute(saleId);
 
     return runWrite(route, {}, (ctx) =>
-      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
         const sale = await lockSale(ctx, saleId);
         if (sale === null) {
           throw new AppError(404, "NOT_FOUND", "Sale not found.", { id: saleId });
@@ -646,7 +646,7 @@ export function createSalesService(options: SalesServiceOptions) {
     const route = paymentReverseRoute(saleId, paymentId);
 
     return runWrite(route, {}, (ctx) =>
-      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
         const sale = await lockSale(ctx, saleId);
         if (sale === null) {
           throw new AppError(404, "NOT_FOUND", "Sale not found.", { id: saleId });
@@ -741,7 +741,7 @@ export function createSalesService(options: SalesServiceOptions) {
   ): Promise<SaleResponse> {
     const route = voidRoute(saleId);
     return runWrite(route, {}, (ctx) =>
-      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody({}) }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody({}) }, async () => {
         const sale = await lockSale(ctx, saleId);
         if (sale === null) {
           throw new AppError(404, "NOT_FOUND", "Sale not found.", { id: saleId });
@@ -793,7 +793,7 @@ export function createSalesService(options: SalesServiceOptions) {
     const route = amendRoute(saleId);
 
     return runWrite(route, { lines: dto.lines.length }, (ctx) =>
-      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
         const original = await lockSale(ctx, saleId);
         if (original === null) {
           throw new AppError(404, "NOT_FOUND", "Sale not found.", { id: saleId });

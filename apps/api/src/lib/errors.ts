@@ -13,6 +13,10 @@ export type ErrorCode =
   | "BUSINESS_RULE"
   | "IDEMPOTENCY_MISMATCH"
   | "UNAVAILABLE"
+  | "UNAUTHENTICATED"
+  | "INVALID_CREDENTIALS"
+  | "RATE_LIMITED"
+  | "CSRF_ORIGIN"
   | "INTERNAL";
 
 export interface ErrorEnvelope {

@@ -150,7 +150,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
     operation: (ctx: TxContext) => Promise<{ entityId: string; entityType: string; action: string; before?: unknown; after: unknown; metadata?: unknown }>,
   ): Promise<WriteResponse> {
     return runner.runWrite(route, extra, async (ctx) =>
-      runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody(body) }, async () => {
+      runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody(body) }, async () => {
         const result = await operation(ctx);
         await insertAuditLog(ctx, result.entityType, {
           actorId: actor.id,

@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { Client } from "pg";
 import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { buildApp } from "../src/app.js";
-import { createDevActorResolver, type Actor } from "../src/auth/actor.js";
+import type { Actor } from "../src/auth/actor.js";
+import { hashSessionToken, SESSION_COOKIE_BASE_NAME } from "../src/auth/session.js";
 import { createPrismaClient } from "../src/lib/prisma.js";
 import { resolveTestConnectionString } from "./test-db.js";
 
@@ -19,6 +20,9 @@ export interface Harness {
   pg: Client;
   actor: Actor;
   app: FastifyInstance;
+  injectAnonymous: FastifyInstance["inject"];
+  authHeaders: Record<string, string>;
+  routes: Array<{ method: string | string[]; url: string }>;
   /** One entry per committed transaction attempt: route, txMs, queries (statement count). */
   txLog: Array<Record<string, unknown>>;
   close(): Promise<void>;
@@ -28,6 +32,7 @@ export interface HarnessOptions {
   /** Lets one test hand the app a client whose transaction is wrapped (see atomicity test). */
   wrapPrisma?: (prisma: PrismaClient) => PrismaClient;
   now?: () => Date;
+  onRoute?: (route: { method: string | string[]; url: string }) => void;
 }
 
 /** One app, one Prisma client (pool of 10, like the API) and one raw pg client for seeding and counting. */
@@ -38,25 +43,69 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   const actorId = newId("sales_actor");
   const actor: Actor = { id: actorId, email: `${actorId}@example.test` };
+  const now = new Date();
+  const sessionToken = randomBytes(32).toString("base64url");
+  const sessionId = newId("sales_session");
   await pg.query(
     `INSERT INTO admin_users (id, email, "passwordHash", "updatedAt") VALUES ($1, $2, 'not-a-real-hash', now())`,
     [actor.id, actor.email],
   );
+  await pg.query(
+    `INSERT INTO admin_sessions (id, "adminUserId", "tokenHash", "createdAt", "lastSeenAt", "expiresAt")
+     VALUES ($1, $2, $3, $4, $4, $5)`,
+    [sessionId, actor.id, hashSessionToken(sessionToken), now, new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)],
+  );
 
   const txLog: Array<Record<string, unknown>> = [];
+  const routes: Array<{ method: string | string[]; url: string }> = [];
   const app = buildApp({
     prisma: options.wrapPrisma ? options.wrapPrisma(prisma) : prisma,
-    resolveActor: createDevActorResolver(actor),
+    auth: {
+      nodeEnv: "test",
+      webOrigin: "http://localhost:3000",
+      cookieDomain: null,
+      sessionIdleTimeoutHours: 12,
+      sessionAbsoluteTimeoutDays: 7,
+    },
+    trustProxy: false,
     now: options.now,
     onTransaction: (entry) => txLog.push(entry),
+    onRoute: (route) => {
+      routes.push(route);
+      options.onRoute?.(route);
+    },
   });
   await app.ready();
+  const injectAnonymous = app.inject.bind(app);
+  const authHeaders = {
+    origin: "http://localhost:3000",
+    cookie: `${SESSION_COOKIE_BASE_NAME}=${sessionToken}`,
+  };
+  const authenticatedApp = new Proxy(app, {
+    get(target, property, receiver) {
+      if (property === "inject") {
+        return (options: { headers?: Record<string, string>; [key: string]: unknown }) =>
+          target.inject({
+            ...options,
+            headers: {
+              ...authHeaders,
+              ...options.headers,
+            },
+          });
+      }
+      const value: unknown = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as FastifyInstance;
 
   return {
     prisma,
     pg,
     actor,
-    app,
+    app: authenticatedApp,
+    injectAnonymous,
+    authHeaders,
+    routes,
     txLog,
     async close() {
       await app.close();

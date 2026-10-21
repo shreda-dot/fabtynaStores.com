@@ -86,7 +86,7 @@ export function createPartiesService(options: PartiesServiceOptions) {
     async createCustomer(input: CreateCustomerBody, actor: Actor, key: string | null) {
       const route = "POST /customers";
       return runner.runWrite(route, {}, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody(input) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody(input) }, async () => {
           counted(ctx);
           const row = await ctx.tx.customer.create({
             data: { ...input, creditLimitKobo: BigInt(input.creditLimitKobo) },
@@ -104,7 +104,7 @@ export function createPartiesService(options: PartiesServiceOptions) {
     async patchCustomer(id: string, input: PatchCustomerBody, actor: Actor, key: string | null) {
       const route = `PATCH /customers/${id}`;
       return runner.runWrite(route, { customerId: id }, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody(input) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody(input) }, async () => {
           counted(ctx);
           const locked = await ctx.tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM customers WHERE id = ${id} FOR UPDATE`;
           if (!locked.length) throw new AppError(404, "NOT_FOUND", "Customer not found.", { id });
@@ -134,7 +134,7 @@ export function createPartiesService(options: PartiesServiceOptions) {
     async createSupplier(input: CreateSupplierBody, actor: Actor, key: string | null) {
       const route = "POST /suppliers";
       return runner.runWrite(route, {}, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody(input) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody(input) }, async () => {
           counted(ctx);
           const row = await ctx.tx.supplier.create({ data: input });
           const after = supplierDto(row);
@@ -150,7 +150,7 @@ export function createPartiesService(options: PartiesServiceOptions) {
     async patchSupplier(id: string, input: PatchSupplierBody, actor: Actor, key: string | null) {
       const route = `PATCH /suppliers/${id}`;
       return runner.runWrite(route, { supplierId: id }, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody(input) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody(input) }, async () => {
           counted(ctx);
           const locked = await ctx.tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM suppliers WHERE id = ${id} FOR UPDATE`;
           if (!locked.length) throw new AppError(404, "NOT_FOUND", "Supplier not found.", { id });
@@ -173,7 +173,7 @@ export function createPartiesService(options: PartiesServiceOptions) {
       const suffix = active ? "reactivate" : "deactivate";
       const route = `POST /customers/${id}/${suffix}`;
       return runner.runWrite(route, { customerId: id }, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody({ active }) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody({ active }) }, async () => {
           counted(ctx);
           const locked = await ctx.tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM customers WHERE id = ${id} FOR UPDATE`;
           if (!locked.length) throw new AppError(404, "NOT_FOUND", "Customer not found.", { id });
@@ -199,7 +199,7 @@ export function createPartiesService(options: PartiesServiceOptions) {
       const suffix = active ? "reactivate" : "deactivate";
       const route = `POST /suppliers/${id}/${suffix}`;
       return runner.runWrite(route, { supplierId: id }, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody({ active }) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody({ active }) }, async () => {
           counted(ctx);
           const locked = await ctx.tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM suppliers WHERE id = ${id} FOR UPDATE`;
           if (!locked.length) throw new AppError(404, "NOT_FOUND", "Supplier not found.", { id });

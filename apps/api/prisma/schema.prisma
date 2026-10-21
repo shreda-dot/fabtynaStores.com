@@ -42,8 +42,8 @@ generator client {
 // The connection string is deliberately NOT declared in this datasource block.
 // Prisma 7 resolves it per command: schema/migration commands read
 // `DIRECT_URL` from `prisma.config.ts` (direct Neon connection, bypassing the
-// pooler), while the runtime client gets the pooled `DATABASE_URL` through its
-// driver adapter (see `src/lib/prisma.ts`).
+// pooler), while the runtime client also uses `DIRECT_URL` through its driver
+// adapter (see `src/lib/prisma.ts`).
 datasource db {
   provider = "postgresql"
 }
@@ -194,10 +194,7 @@ model AdminUser {
   /// `StockTransfer` and `StockAdjustment` reference this table with
   /// `onDelete: Restrict`, so a hard delete would strip the actor from history.
   isActive         Boolean           @default(true)
-  /// Last successful sign-in. Null until sign-in is implemented. Stored as
-  /// `timestamptz` per the documented convention
-  /// (`docs/backend-schema.md` §1); note it is the *only* `timestamptz` column
-  /// so far — every other timestamp column is `timestamp(3)`.
+  /// Updated after a successful password sign-in; stored as `timestamptz`.
   lastLoginAt      DateTime?         @db.Timestamptz(3)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
@@ -206,8 +203,27 @@ model AdminUser {
   stockTransfers   StockTransfer[]
   stockAdjustments StockAdjustment[]
   auditLogs        AuditLog[]
+  sessions         AdminSession[]
+  idempotencyKeys  IdempotencyKey[]
 
   @@map("admin_users")
+}
+
+model AdminSession {
+  id          String    @id @default(cuid())
+  adminUserId String
+  tokenHash   String    @unique
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  lastSeenAt  DateTime  @db.Timestamptz(3)
+  expiresAt   DateTime  @db.Timestamptz(3)
+  revokedAt   DateTime? @db.Timestamptz(3)
+  ip          String?
+  userAgent   String?
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Restrict, map: "fk_admin_sessions_admin_user")
+
+  @@index([adminUserId])
+  @@index([expiresAt])
+  @@map("admin_sessions")
 }
 
 model AuditLog {
@@ -230,19 +246,20 @@ model AuditLog {
 /// Replay protection for retried POST requests (migration
 /// `20261020000200_idempotency_keys`). Operational, not a ledger: a row is
 /// claimed inside the request's own transaction, updated once with the response,
-/// and purged after `expiresAt`. Unique on (key, route) for now; an `actorId`
-/// joins the unique key when login exists.
+/// and purged after `expiresAt`. New claims are scoped to an admin; NULL actor
+/// rows are preserved legacy claims and block cross-actor replay until expiry.
 model IdempotencyKey {
   id             String   @id @default(cuid())
   key            String
   route          String
+  actorId        String?
   requestHash    String
   responseStatus Int?
   responseBody   Json?
   createdAt      DateTime @default(now())
   expiresAt      DateTime
+  actor          AdminUser? @relation(fields: [actorId], references: [id], onDelete: Restrict, map: "fk_idempotency_keys_admin_user")
 
-  @@unique([key, route])
   @@index([expiresAt])
   @@map("idempotency_keys")
 }

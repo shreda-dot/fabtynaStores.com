@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ActorResolver } from "../../auth/actor.js";
+import { requireActor } from "../../auth/actor.js";
 import { validationError } from "../../lib/errors.js";
 import {
   createTransferSchema,
@@ -34,24 +34,24 @@ function send(reply: FastifyReply, result: { status: number; body: unknown; repl
 
 export function registerTransfersRoutes(
   app: FastifyInstance,
-  deps: { service: TransfersService; resolveActor: ActorResolver },
+  deps: { service: TransfersService },
 ): void {
   app.post("/transfers", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const parsed = createTransferSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The stock transfer is not valid.", parsed.error.issues);
     return send(reply, await deps.service.create(parsed.data, actor, readKey(request)));
   });
 
   app.get("/transfers", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     const parsed = listTransfersQuerySchema.safeParse(request.query);
     if (!parsed.success) throw validationError("The transfer filter is not valid.", parsed.error.issues);
     return reply.status(200).send(await deps.service.list(parsed.data));
   });
 
   app.get("/transfers/:id", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     return reply.status(200).send(await deps.service.get(readId(request)));
   });
 }

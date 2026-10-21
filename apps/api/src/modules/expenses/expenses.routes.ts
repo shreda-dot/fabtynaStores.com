@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ActorResolver } from "../../auth/actor.js";
+import { requireActor } from "../../auth/actor.js";
 import { validationError } from "../../lib/errors.js";
 import {
   createExpenseSchema,
@@ -38,31 +38,31 @@ function send(reply: FastifyReply, result: { status: number; body: unknown; repl
 
 export function registerExpensesRoutes(
   app: FastifyInstance,
-  deps: { service: ExpensesService; resolveActor: ActorResolver },
+  deps: { service: ExpensesService },
 ): void {
   app.get("/expenses", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     const parsed = listExpensesQuerySchema.safeParse(request.query);
     if (!parsed.success) throw validationError("The expense filter is not valid.", parsed.error.issues);
     return reply.status(200).send(await deps.service.list(parsed.data));
   });
 
   app.get("/expenses/summary", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     const parsed = expenseSummaryQuerySchema.safeParse(request.query);
     if (!parsed.success) throw validationError("The expense summary filter is not valid.", parsed.error.issues);
     return reply.status(200).send(await deps.service.summary(parsed.data));
   });
 
   app.post("/expenses", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const parsed = createExpenseSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The expense is not valid.", parsed.error.issues);
     return send(reply, await deps.service.create(parsed.data, actor, readIdempotencyKey(request)));
   });
 
   app.post("/expenses/:id/void", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const id = readId(request);
     const parsed = expenseVoidBodySchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The expense void is not valid.", parsed.error.issues);
@@ -73,7 +73,7 @@ export function registerExpensesRoutes(
   });
 
   app.put("/expenses/:id", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const id = readId(request);
     const parsed = createExpenseSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The expense is not valid.", parsed.error.issues);

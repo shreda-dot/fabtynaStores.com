@@ -97,7 +97,7 @@ export function createAdjustmentsService(options: AdjustmentsServiceOptions) {
     const adjustedAt = dto.adjustedAt === undefined ? now() : new Date(dto.adjustedAt);
     assertNotInFuture(adjustedAt, now(), "adjustedAt", "The adjustment date");
     return runWrite(ADJUSTMENT_ROUTE, { lines: dto.lines.length }, (ctx) =>
-      withIdempotency(ctx, { route: ADJUSTMENT_ROUTE, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route: ADJUSTMENT_ROUTE, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
         const productIds = dto.lines.map((line) => line.productId);
         const products = await lockProducts(ctx, productIds);
         const productById = new Map(products.map((product) => [product.id, product]));
@@ -176,7 +176,7 @@ export function createAdjustmentsService(options: AdjustmentsServiceOptions) {
   async function voidOne(id: string, actor: Actor, idempotencyKey: string | null): Promise<WriteResponse> {
     const route = `POST /adjustments/${id}/void`;
     return runWrite(route, {}, (ctx) =>
-      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody({}) }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody({}) }, async () => {
         const initial = await ctx.tx.stockAdjustment.findUnique({
           where: { id },
           include: { lines: { orderBy: { id: "asc" } } },

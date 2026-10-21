@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ActorResolver } from "../../auth/actor.js";
+import { requireActor } from "../../auth/actor.js";
 import { validationError } from "../../lib/errors.js";
 import {
   accountIdParamsSchema,
@@ -43,24 +43,24 @@ function send(reply: FastifyReply, result: { status: number; body: unknown; repl
 
 export function registerAccountsRoutes(
   app: FastifyInstance,
-  deps: { service: AccountsService; resolveActor: ActorResolver },
+  deps: { service: AccountsService },
 ): void {
   app.get("/accounts", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     const parsed = accountListQuerySchema.safeParse(request.query);
     if (!parsed.success) throw validationError("The account filter is not valid.", parsed.error.issues);
     return reply.status(200).send(await deps.service.list(parsed.data.includeInactive));
   });
 
   app.post("/accounts", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const parsed = createAccountSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The account is not valid.", parsed.error.issues);
     return send(reply, await deps.service.create(parsed.data, actor, readIdempotencyKey(request)));
   });
 
   app.patch("/accounts/:id", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const id = readId(request);
     const parsed = renameAccountSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The account name is not valid.", parsed.error.issues);
@@ -72,7 +72,7 @@ export function registerAccountsRoutes(
 
   for (const [suffix, isActive] of [["deactivate", false], ["reactivate", true]] as const) {
     app.post(`/accounts/:id/${suffix}`, async (request, reply) => {
-      const actor = await deps.resolveActor(request);
+      const actor = requireActor(request);
       const id = readId(request);
       return send(
         reply,
@@ -82,7 +82,7 @@ export function registerAccountsRoutes(
   }
 
   app.post("/accounts/:id/opening-balance", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const id = readId(request);
     const parsed = openingBalanceSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The opening balance is not valid.", parsed.error.issues);
@@ -93,7 +93,7 @@ export function registerAccountsRoutes(
   });
 
   app.post("/accounts/:id/reconcile", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const id = readId(request);
     const parsed = reconcileAccountSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The reconciliation is not valid.", parsed.error.issues);
@@ -104,7 +104,7 @@ export function registerAccountsRoutes(
   });
 
   app.post("/accounts/:id/movements", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const id = readId(request);
     const parsed = accountMovementSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The account movement is not valid.", parsed.error.issues);
@@ -115,7 +115,7 @@ export function registerAccountsRoutes(
   });
 
   app.get("/accounts/:id/statement", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     const id = readId(request);
     const parsed = accountStatementQuerySchema.safeParse(request.query);
     if (!parsed.success) throw validationError("The statement filter is not valid.", parsed.error.issues);
@@ -123,14 +123,14 @@ export function registerAccountsRoutes(
   });
 
   app.post("/account-transfers", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const parsed = accountTransferSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The account transfer is not valid.", parsed.error.issues);
     return send(reply, await deps.service.transfer(parsed.data, actor, readIdempotencyKey(request)));
   });
 
   app.post("/account-transfers/:id/reverse", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const id = readId(request);
     const parsed = reversalReasonSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The transfer reversal is not valid.", parsed.error.issues);
@@ -141,7 +141,7 @@ export function registerAccountsRoutes(
   });
 
   app.post("/account-entries/:id/reverse", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const id = readId(request);
     const parsed = reversalReasonSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The account-entry reversal is not valid.", parsed.error.issues);

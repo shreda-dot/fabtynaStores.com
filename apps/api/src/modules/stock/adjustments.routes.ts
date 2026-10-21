@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ActorResolver } from "../../auth/actor.js";
+import { requireActor } from "../../auth/actor.js";
 import { validationError } from "../../lib/errors.js";
 import {
   createAdjustmentSchema,
@@ -34,29 +34,29 @@ function send(reply: FastifyReply, result: { status: number; body: unknown; repl
 
 export function registerAdjustmentsRoutes(
   app: FastifyInstance,
-  deps: { service: AdjustmentsService; resolveActor: ActorResolver },
+  deps: { service: AdjustmentsService },
 ): void {
   app.post("/adjustments", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const parsed = createAdjustmentSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The stock adjustment is not valid.", parsed.error.issues);
     return send(reply, await deps.service.create(parsed.data, actor, readKey(request)));
   });
 
   app.post("/adjustments/:id/void", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     return send(reply, await deps.service.void(readId(request), actor, readKey(request)));
   });
 
   app.get("/adjustments", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     const parsed = listAdjustmentsQuerySchema.safeParse(request.query);
     if (!parsed.success) throw validationError("The adjustment filter is not valid.", parsed.error.issues);
     return reply.status(200).send(await deps.service.list(parsed.data));
   });
 
   app.get("/adjustments/:id", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     return reply.status(200).send(await deps.service.get(readId(request)));
   });
 }

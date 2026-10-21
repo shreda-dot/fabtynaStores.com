@@ -71,6 +71,8 @@ export const EXPECTED_MIGRATIONS = [
   "20261020000700_expense_category_index_names",
   "20261020000800_expense_record_immutability",
   "20261020000900_transfer_reference_sequence",
+  "20261020001000_admin_sessions",
+  "20261020001100_idempotency_actor_scope",
 ] as const;
 
 /**
@@ -88,6 +90,8 @@ export const EXPECTED_TABLES = [
   "idempotency_keys",
   // 20261020000500_expense_categories
   "expense_categories",
+  // 20261020001000_admin_sessions
+  "admin_sessions",
 ] as const;
 
 /**
@@ -102,18 +106,21 @@ export const EXPECTED_SEQUENCES = [
 
 /**
  * Plain (non-partial) indexes that carry a rule. Checked one-directionally.
- * `idempotency_keys_key_route_key` is what makes two simultaneous requests with
- * one Idempotency-Key unable to both claim it; `..._expiresAt_idx` keeps the
- * expiry cleanup from scanning the table (20261020000200).
+ * The idempotency claim uniqueness indexes are partial and listed below;
+ * `idempotency_keys_expiresAt_idx` keeps the expiry cleanup from scanning the
+ * table (20261020000200).
  */
 export const EXPECTED_INDEXES = [
-  "idempotency_keys_key_route_key",
   "idempotency_keys_expiresAt_idx",
   // 20261020000500_expense_categories
   "expense_categories_pkey",
   "expense_categories_normalizedKey_key",
   "expense_categories_code_key",
   "expenses_categoryId_expenseDate_idx",
+  // 20261020001000_admin_sessions
+  "admin_sessions_tokenHash_key",
+  "admin_sessions_adminUserId_idx",
+  "admin_sessions_expiresAt_idx",
 ] as const;
 
 /**
@@ -354,6 +361,10 @@ export const EXPECTED_PARTIAL_INDEXES = [
   "ux_account_ledger_loan_repayment_active",
   "ux_account_ledger_opening_balance_active",
   "ux_account_ledger_transfer_type_active",
+
+  // 20261020001100_idempotency_actor_scope
+  "idempotency_keys_legacy_key_route_key",
+  "idempotency_keys_key_route_actorId_key",
 ] as const;
 
 /**
@@ -380,4 +391,10 @@ export const EXPECTED_FOREIGN_KEYS = [
 
   // 20261017100000_stock_balances
   "fk_stock_balances_product",
+
+  // 20261020001000_admin_sessions
+  "fk_admin_sessions_admin_user",
+
+  // 20261020001100_idempotency_actor_scope
+  "fk_idempotency_keys_admin_user",
 ] as const;

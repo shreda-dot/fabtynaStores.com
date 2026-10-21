@@ -12,5 +12,6 @@ export default defineConfig({
     testTimeout: 30_000,
     // Setup hooks (seeding, schema creation) hit the same slow remote database.
     hookTimeout: 60_000,
+    fileParallelism: false,
   },
 });

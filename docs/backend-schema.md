@@ -70,7 +70,7 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261019000200_default_accounts` | Idempotently creates Cash on hand (`CASH`) and Moniepoint (`BANK`) using SQL-generated IDs (Prisma's `cuid()` default is client-side). Both `fabtyna_dev` and `fabtyna_test` contain these defaults after migration unless an operator has subsequently changed them. |
 | `20261019000300_account_balance_guard_fix` | Corrects the account-balance write guard copied with the same `pg_trigger_depth() = 0` / `RETURN NULL` defect previously found in stock balances. Reconciles existing cached rows from the immutable ledger and inserts missing balance rows; does not edit prior migrations or ledger entries. |
 | `20261020000100_sale_reference_sequence` | Creates `sale_reference_seq` (BIGINT). The Sales API formats generated sale references as `S-YYYYMMDD-000123` from `nextval`; a sequence value is never reused, so concurrent requests cannot collide (gaps after a rollback are expected). |
-| `20261020000200_idempotency_keys` | Creates `idempotency_keys` (`key`, `route`, `requestHash`, `responseStatus`, `responseBody`, `createdAt`, `expiresAt`), unique index `idempotency_keys_key_route_key` on `(key, route)` and `idempotency_keys_expiresAt_idx`. Rows are claimed inside the sale transaction and expire after 24 h; an hourly job deletes expired rows. When login exists the uniqueness gains `actorId`. |
+| `20261020000200_idempotency_keys` | Creates `idempotency_keys` (`key`, `route`, `requestHash`, `responseStatus`, `responseBody`, `createdAt`, `expiresAt`), initially with a unique `(key, route)` index and `idempotency_keys_expiresAt_idx`. The original global unique index is replaced by `20261020001100_idempotency_actor_scope`; rows expire after 24 h and an hourly job deletes expired rows. |
 | `20261020000300_purchase_reference_sequence` | Creates `purchase_reference_seq` (BIGINT). The Purchases API formats generated references as `P-YYYYMMDD-000123` from `nextval` (same rules as sales: never reused, gaps after a rollback are expected). |
 | `20261020000400_reverse_payment_guards` | `fn_check_sale_void_guard` now ignores reversed on-account payments (customer `PAYMENT` entry that has a reversal row). New `fn_check_purchase_void_guard` + `trg_purchase_void_guard` (`BEFORE UPDATE OF status` on `purchases`): blocks a void while a supplier payment has no `SUPPLIER_PAYMENT` account reversal. `fn_check_reversal_integrity` exempts `note` for `account_ledger_entries` only, so the reversal reason can be stored there. db:audit: `paidKobo` = Σ live payments (sales, purchases); supplier-less purchases: `paidKobo` = Σ original `PURCHASE_PAYMENT` entries (fatal). |
 | `20261020000500_expense_categories` | Creates and seeds `expense_categories`, migrates `expenses.category` into `categoryId`, replaces the expense/loan-interest category triggers with ID-backed lookups, and removes the `ExpenseCategory` enum. `LOAN_INTEREST` is reserved for repayment-generated expenses. |
@@ -78,6 +78,8 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261020000700_expense_category_index_names` | Renames two indexes created with PostgreSQL-folded lowercase identifiers to the exact Prisma-style camelCase names checked by `db:verify`. |
 | `20261020000800_expense_record_immutability` | Tightens `fn_expense_immutability`: expense details cannot be edited in place, an ordinary expense can transition to voided once with a reason, and a void cannot be undone or edited. |
 | `20261020000900_transfer_reference_sequence` | Creates `transfer_reference_seq` (BIGINT). The Transfers API formats generated references as `T-YYYYMMDD-000123` from `nextval` (same non-reuse/gap semantics as sale and purchase reference sequences). |
+| `20261020001000_admin_sessions` | Adds `admin_sessions` for server-side login sessions. Stores only the unique SHA-256 token hash, admin FK (`ON DELETE RESTRICT`), session timestamps, optional IP and user agent; indexes token hash, admin user and expiry. Session idle/absolute expiry and revocation are enforced by the API. |
+| `20261020001100_idempotency_actor_scope` | Adds nullable `idempotency_keys.actorId` with an `ON DELETE RESTRICT` FK to `admin_users`; replaces the global `(key, route)` unique index with partial unique indexes for legacy NULL-actor claims and new `(key, route, actorId)` claims. Existing rows remain NULL-actor and conflict without response replay until expiry. |
 
 ## 3. Tables
 
@@ -85,7 +87,9 @@ dev --create-only` diffs the schema against the database. The one surviving
 
 | Table         | Purpose                                               | Key columns                                                                                       |
 | ------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `admin_users` | The only actor type. Authentication is not wired yet. | `email` (unique, stored lower-cased + trimmed), `passwordHash`, `role`, `isActive`, `lastLoginAt` |
+| `admin_users` | The only actor type. Session authentication checks `isActive` on every request. | `email` (unique, stored lower-cased + trimmed), `passwordHash`, `role`, `isActive`, `lastLoginAt` |
+| `admin_sessions` | Server-side sessions; raw cookie token is never stored. | `adminUserId`, unique `tokenHash`, `createdAt`, `lastSeenAt`, `expiresAt`, `revokedAt`, `ip`, `userAgent` |
+| `idempotency_keys` | Short-lived response replay records. Legacy rows have NULL `actorId`; new rows belong to the authenticated admin. | `key`, `route`, `actorId`, `requestHash`, `responseStatus`, `responseBody`, `expiresAt` |
 | `audit_logs`  | Append-only record of every mutation. **Immutable.**  | `actorId`, `action`, `entityType`, `entityId`, `beforeData`, `afterData`, `occurredAt`            |
 
 ### Catalogue and parties
@@ -176,6 +180,26 @@ money paid are represented by a `PURCHASE_PAYMENT` entry keyed by `purchaseId`.
 ---
 
 ## 4. Constraints in plain English
+
+### 4.0 Idempotency claim scope (`20261020000200`, `20261020001100`)
+
+`idempotency_keys` rows expire after 24 hours and are purged hourly. Migration
+`20261020001100_idempotency_actor_scope` replaces the original global unique
+index with:
+
+- `idempotency_keys_legacy_key_route_key`: unique `(key, route)` where
+  `"actorId" IS NULL`, preserving uniqueness for pre-migration rows.
+- `idempotency_keys_key_route_actorId_key`: unique `(key, route, "actorId")`
+  where `"actorId" IS NOT NULL`, allowing different admins to reuse the same
+  key and route while keeping each actor's retries isolated.
+- `fk_idempotency_keys_admin_user`: nullable `"actorId"` references
+  `admin_users(id)` with `ON DELETE RESTRICT`.
+
+New API claims always include the authenticated actor. A live legacy NULL-actor
+row causes a 409 conflict; its stored response is never replayed across actors.
+The legacy row remains until expiry. Old API instances must be drained before
+deploying code that writes actor-scoped claims, or they could create new
+NULL-actor rows.
 
 ### 4.1 Signed ledger amounts (`20261017000100`)
 
@@ -284,12 +308,14 @@ except for the magnitude column (`amountKobo`, or `quantityUnits` for
 
 `sales.reference`, `purchases.reference` and `stock_transfers.reference` are unique. The columns are nullable, so **multiple NULLs are allowed** (Postgres treats NULLs as distinct in a unique index); a non-null reference can never be reused.
 
-### 4.8 Admin users (`20261017051123`)
+### 4.8 Admin users and sessions (`20261017051123`, `20261020001000`)
 
 - **`email` is stored normalised** — `CHECK (email = lower(btrim(email)))`. The seed script normalises before writing; this CHECK is what enforces it against any writer.
-- **`role` is not a security boundary.** `AdminRole` is `OWNER` or `STAFF` (default `STAFF`) and **nothing reads it yet** — there is no authorization layer, so every account has full access.
+- **`role` is not a security boundary.** `AdminRole` is `OWNER` or `STAFF` (default `STAFF`) and intentionally remains unenforced; every authenticated admin has the same route access.
 - **Accounts are deactivated, never deleted** (`isActive = false`): `purchases`, `sales`, `stock_transfers` and `stock_adjustments` reference `admin_users` with `ON DELETE RESTRICT`.
-- **`lastLoginAt`** is nullable and stays null until sign-in exists. It is stored as `TIMESTAMPTZ(3)` (the documented convention above); note it is currently the only `timestamptz` column — every other timestamp column in the schema is `timestamp(3)`.
+- **`lastLoginAt`** is set on successful sign-in. It is stored as `TIMESTAMPTZ(3)`; session timestamps also use `TIMESTAMPTZ(3)`.
+- **`admin_sessions`** stores a SHA-256 hash of the 32-byte random cookie token, never the token itself. `tokenHash` is unique; `adminUserId` references `admin_users` with `ON DELETE RESTRICT`; indexes support lookup by admin and expiry. The API enforces sliding idle expiry (12 hours by default), absolute expiry (7 days by default), revocation, and active-user status. `lastSeenAt` is refreshed at most once per minute. There are no session-specific database triggers.
+- Cookie/session policy is configured by `SESSION_IDLE_TIMEOUT_HOURS`, `SESSION_ABSOLUTE_TIMEOUT_DAYS`, optional `COOKIE_DOMAIN`, `WEB_ORIGIN`, and `HOST`. The API is the authentication boundary; client middleware checks cookie presence only as a navigation shortcut.
 
 ---
 
@@ -544,8 +570,8 @@ migration or `expected-schema.ts` object:
 These reads use fixed statement counts rather than per-row queries: products
 list 1/detail 3, stock list 2/low-stock 1, customer/supplier list 1 each,
 customer/supplier detail 4 each, statements 2 each, and debtors/payables 1 each.
-API tests use Vitest's default file parallelism against the shared remote test
-database.
+API tests use Vitest `fileParallelism: false` against the direct remote test
+database to avoid cross-file lock contention.
 The focused `parties-inventory.test.ts` suite covers location-specific low-stock
 results and verifies that a supplier's non-overdue balance is excluded from
 `overdueTotalKobo`.

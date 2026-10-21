@@ -1,11 +1,12 @@
 "use client";
 
 import { Suspense, useRef, useState, type FormEvent } from "react";
+import Image from "next/image";
 import { Eye, EyeOff, Info } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { loginDemo } from "@/lib/auth/demo-auth";
+import { AuthApiError, authApi, isMockApiMode } from "@/lib/api";
 import { toast } from "@/stores/toast-store";
 
 const DEFAULT_DESTINATION = "/dashboard";
@@ -20,12 +21,19 @@ function safeDestination(raw: string | null): string {
     raw === null ||
     !raw.startsWith("/") ||
     raw.startsWith("//") ||
-    raw.startsWith("/\\") ||
-    raw.startsWith("/login")
+    raw.includes("\\")
   ) {
     return DEFAULT_DESTINATION;
   }
-  return raw;
+  const destination = new URL(raw, "https://same-site.invalid");
+  if (
+    destination.origin !== "https://same-site.invalid" ||
+    destination.pathname === "/login" ||
+    destination.pathname.startsWith("/login/")
+  ) {
+    return DEFAULT_DESTINATION;
+  }
+  return `${destination.pathname}${destination.search}${destination.hash}`;
 }
 
 export default function LoginPage() {
@@ -59,14 +67,19 @@ function LoginForm() {
     setPending(true);
 
     try {
-      // When real authentication replaces the demo, only this call changes.
-      // Real auth should show one generic message ("Invalid email or password")
-      // so the page never reveals which field was wrong.
-      await loginDemo(email.trim(), password);
+      await authApi.login(email.trim(), password);
       router.replace(destination);
       // Stay in the loading state while the next page loads.
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to sign in.");
+      if (cause instanceof AuthApiError && cause.kind === "invalid-credentials") {
+        setError("Email or password is incorrect.");
+      } else if (cause instanceof AuthApiError && cause.kind === "rate-limited") {
+        setError(cause.message);
+      } else if (cause instanceof AuthApiError && cause.kind === "network") {
+        setError("Could not reach the sign-in service. Check your connection and try again.");
+      } else {
+        setError(cause instanceof Error ? cause.message : "Unable to sign in.");
+      }
       submitting.current = false;
       setPending(false);
     }
@@ -76,28 +89,17 @@ function LoginForm() {
     <main className="grid min-h-dvh place-items-center bg-background px-4 py-4">
       <section className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
         <div className="flex items-center gap-3">
-          <svg
-            aria-hidden="true"
-            className="h-11 w-11 shrink-0 text-primary"
-            viewBox="0 0 100 100"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <rect width="100" height="100" rx="20" fill="currentColor" />
-            <path
-              d="M28 28H58M28 28V72M28 50H50"
-              className="stroke-primary-foreground"
-              strokeWidth="10"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+          <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-white p-1 shadow-sm">
+            <Image
+              src="/fabtyna-logo.png"
+              alt=""
+              aria-hidden="true"
+              width={48}
+              height={48}
+              priority
+              className="h-full w-full rounded-lg object-contain"
             />
-            <path
-              d="M72 38C72 32.4772 67.5228 28 62 28H52C46.4772 28 42 32.4772 42 38V38C42 43.5228 46.4772 48 52 48H62C67.5228 48 72 52.4772 72 58V58C72 63.5228 67.5228 68 62 68H52C46.4772 68 42 63.5228 42 58"
-              className="stroke-primary-foreground"
-              strokeWidth="10"
-              strokeLinecap="round"
-            />
-          </svg>
+          </span>
           <div className="min-w-0">
             <h1 className="text-xl font-bold leading-tight tracking-tight">
               Fabtyna Stores
@@ -108,10 +110,12 @@ function LoginForm() {
           </div>
         </div>
 
-        <p className="mt-3 flex items-center gap-2 rounded-md border border-border bg-background/50 px-3 py-2 text-xs text-muted-foreground">
-          <Info aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-          Demo sign-in only. Not real authentication yet.
-        </p>
+        {isMockApiMode && (
+          <p className="mt-3 flex items-center gap-2 rounded-md border border-border bg-background/50 px-3 py-2 text-xs text-muted-foreground">
+            <Info aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+            Demo sign-in only. Not real authentication.
+          </p>
+        )}
 
         <form onSubmit={submit} className="mt-4 space-y-3">
           <div className="space-y-1.5">

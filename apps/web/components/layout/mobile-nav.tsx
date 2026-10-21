@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Package, X } from "lucide-react";
+import { X } from "lucide-react";
 import { navItems } from "./nav-items";
 import { useUIStore } from "@/stores/ui-store";
 
@@ -55,8 +56,15 @@ export function MobileNav() {
             onClick={() => setMobileNavOpen(false)}
             className="flex min-h-11 items-center gap-3 rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <Package aria-hidden="true" className="h-5 w-5" />
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-sidebar-border bg-white p-1">
+              <Image
+                src="/fabtyna-logo.png"
+                alt=""
+                aria-hidden="true"
+                width={32}
+                height={32}
+                className="h-full w-full rounded-sm object-contain"
+              />
             </span>
             <span className="text-lg font-semibold tracking-tight">Fabtyna</span>
           </Link>

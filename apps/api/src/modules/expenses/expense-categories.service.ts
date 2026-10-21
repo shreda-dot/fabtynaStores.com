@@ -91,7 +91,7 @@ export function createExpenseCategoryService(options: ExpenseCategoryServiceOpti
       const normalized = normalizeName(input.name);
       const route = routeFor("POST", "/expense-categories");
       return runner.runWrite(route, {}, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody(input) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody(input) }, async () => {
           counted(ctx);
           const category = await ctx.tx.expenseCategory.create({ data: normalized });
           const after = toCategoryDto(category);
@@ -111,7 +111,7 @@ export function createExpenseCategoryService(options: ExpenseCategoryServiceOpti
       const normalized = normalizeName(input.name);
       const route = routeFor("PATCH", `/expense-categories/${id}`);
       return runner.runWrite(route, { categoryId: id }, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody(input) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody(input) }, async () => {
           const before = await lockCategory(ctx, id);
           if (before.code !== null) {
             throw businessRuleError("System expense categories cannot be renamed.", { categoryId: id });
@@ -138,7 +138,7 @@ export function createExpenseCategoryService(options: ExpenseCategoryServiceOpti
       const route = routeFor(method, `/expense-categories/${id}/${suffix}`);
       const body = { isActive };
       return runner.runWrite(route, { categoryId: id }, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody(body) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody(body) }, async () => {
           const before = await lockCategory(ctx, id);
           if (before.code !== null) {
             throw businessRuleError("System expense categories cannot be deactivated.", { categoryId: id });

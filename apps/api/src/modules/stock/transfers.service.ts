@@ -93,7 +93,7 @@ export function createTransfersService(options: TransfersServiceOptions) {
     const route = CREATE_TRANSFER_ROUTE;
 
     return runWrite(route, { lines: dto.lines.length }, (ctx) =>
-      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
         const productIds = dto.lines.map((line) => line.productId);
         const products = await lockProducts(ctx, productIds);
         const productById = new Map(products.map((product) => [product.id, product]));

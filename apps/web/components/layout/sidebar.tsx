@@ -1,8 +1,8 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Package } from "lucide-react";
 import { navItems } from "./nav-items";
 
 export function Sidebar() {
@@ -14,8 +14,15 @@ export function Sidebar() {
         href="/dashboard"
         className="flex h-16 shrink-0 items-center gap-3 border-b border-sidebar-border px-5 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
       >
-        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <Package aria-hidden="true" className="h-5 w-5" />
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-sidebar-border bg-white p-1">
+          <Image
+            src="/fabtyna-logo.png"
+            alt=""
+            aria-hidden="true"
+            width={32}
+            height={32}
+            className="h-full w-full rounded-sm object-contain"
+          />
         </span>
         <span className="text-base font-semibold tracking-tight">Fabtyna Stores</span>
       </Link>

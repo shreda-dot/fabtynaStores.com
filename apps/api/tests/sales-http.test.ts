@@ -1,11 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { buildApp } from "../src/app.js";
-import { assertUnauthenticatedModeAllowed, createDevActorResolver } from "../src/auth/actor.js";
-import { loadRuntimeEnv, type RuntimeEnv } from "../src/lib/env.js";
-import { startServer } from "../src/start.js";
+import { loadRuntimeEnv } from "../src/lib/env.js";
 import {
-  connectionString,
   createHarness,
   newId,
   postSale,
@@ -24,20 +21,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await h.close();
 });
-
-function envWith(overrides: Partial<RuntimeEnv>): RuntimeEnv {
-  return {
-    apiDatabaseUrl: connectionString,
-    databaseUrl: null,
-    dbPoolMax: 2,
-    port: 0,
-    nodeEnv: "development",
-    allowUnauthenticatedDev: true,
-    devActorEmail: null,
-    txTimeouts: { timeoutMs: 20_000, maxWaitMs: 10_000, lockTimeoutMs: 15_000 },
-    ...overrides,
-  };
-}
 
 describe("HTTP: success and error envelopes", () => {
   it("GET /health works without the database", async () => {
@@ -107,12 +90,38 @@ describe("HTTP: success and error envelopes", () => {
         throw new Error("secret internal detail: password=hunter2");
       },
     } as unknown as PrismaClient;
-    const app = buildApp({ prisma: broken, resolveActor: createDevActorResolver(h.actor) });
+    const app = buildApp({
+      prisma: {
+        ...broken,
+        adminSession: {
+          findUnique: async () => ({
+            id: "test-session",
+            adminUserId: h.actor.id,
+            lastSeenAt: new Date(),
+            expiresAt: new Date(Date.now() + 60_000),
+            revokedAt: null,
+            adminUser: { id: h.actor.id, email: h.actor.email, isActive: true },
+          }),
+        },
+      } as unknown as PrismaClient,
+      auth: {
+        nodeEnv: "test",
+        webOrigin: "http://localhost:3000",
+        cookieDomain: null,
+        sessionIdleTimeoutHours: 12,
+        sessionAbsoluteTimeoutDays: 7,
+      },
+      trustProxy: false,
+    });
     const product = await seedProduct(h.pg, { stock: 3 });
     const valid = await app.inject({
       method: "POST",
       url: "/sales",
       payload: saleBody({ productId: product.id, paidKobo: "10000", accountId: "acct-x" }) as object,
+      headers: {
+        origin: "http://localhost:3000",
+        cookie: "fabtyna_session=test",
+      },
     });
     expect(valid.statusCode).toBe(500);
     const body = valid.json();
@@ -130,61 +139,42 @@ describe("HTTP: success and error envelopes", () => {
         throw { code: "P2010", meta: { driverAdapterError: { cause: { originalCode: "40P01", originalMessage: "deadlock detected" } } } };
       },
     } as unknown as PrismaClient;
-    const app = buildApp({ prisma: deadlocking, resolveActor: createDevActorResolver(h.actor) });
+    const app = buildApp({
+      prisma: {
+        ...deadlocking,
+        adminSession: {
+          findUnique: async () => ({
+            id: "test-session",
+            adminUserId: h.actor.id,
+            lastSeenAt: new Date(),
+            expiresAt: new Date(Date.now() + 60_000),
+            revokedAt: null,
+            adminUser: { id: h.actor.id, email: h.actor.email, isActive: true },
+          }),
+        },
+      } as unknown as PrismaClient,
+      auth: {
+        nodeEnv: "test",
+        webOrigin: "http://localhost:3000",
+        cookieDomain: null,
+        sessionIdleTimeoutHours: 12,
+        sessionAbsoluteTimeoutDays: 7,
+      },
+      trustProxy: false,
+    });
     const res = await app.inject({
       method: "POST",
       url: "/sales",
       payload: saleBody({ productId: "p", paidKobo: "10000", accountId: "a" }) as object,
+      headers: {
+        origin: "http://localhost:3000",
+        cookie: "fabtyna_session=test",
+      },
     });
     expect(res.statusCode).toBe(503);
     expect(res.json().error.code).toBe("UNAVAILABLE");
     expect(calls).toBe(4);
     await app.close();
-  });
-});
-
-describe("13. unauthenticated guard", () => {
-  it("refuses production, and refuses without the explicit dev flag", () => {
-    expect(() => assertUnauthenticatedModeAllowed({ nodeEnv: "production", allowUnauthenticatedDev: true })).toThrow(
-      /production/,
-    );
-    expect(() => assertUnauthenticatedModeAllowed({ nodeEnv: "development", allowUnauthenticatedDev: false })).toThrow(
-      /ALLOW_UNAUTHENTICATED_DEV/,
-    );
-    expect(() => assertUnauthenticatedModeAllowed({ nodeEnv: "development", allowUnauthenticatedDev: true })).not.toThrow();
-  });
-
-  it("startServer refuses in production and without the flag before opening any connection", async () => {
-    await expect(startServer(envWith({ nodeEnv: "production", apiDatabaseUrl: "postgres://nobody@127.0.0.1:1/x" }))).rejects.toThrow(
-      /production/,
-    );
-    await expect(
-      startServer(envWith({ allowUnauthenticatedDev: false, apiDatabaseUrl: "postgres://nobody@127.0.0.1:1/x" })),
-    ).rejects.toThrow(/ALLOW_UNAUTHENTICATED_DEV/);
-  });
-
-  it("startServer refuses a missing, unknown or deactivated DEV_ACTOR_EMAIL", async () => {
-    await expect(startServer(envWith({ devActorEmail: null }))).rejects.toThrow(/DEV_ACTOR_EMAIL is not set/);
-    await expect(startServer(envWith({ devActorEmail: `${newId("ghost")}@example.test` }))).rejects.toThrow(
-      /does not match any admin/,
-    );
-    const inactive = newId("inactive_actor");
-    await h.pg.query(
-      `INSERT INTO admin_users (id, email, "passwordHash", "isActive", "updatedAt") VALUES ($1, $2, 'x', false, now())`,
-      [inactive, `${inactive}@example.test`],
-    );
-    await expect(startServer(envWith({ devActorEmail: `${inactive}@example.test` }))).rejects.toThrow(/deactivated/);
-  });
-
-  it("starts on 127.0.0.1 with a valid active admin and serves /health", async () => {
-    const started = await startServer(envWith({ devActorEmail: h.actor.email }), { port: 0, logger: false });
-    try {
-      expect(started.address).toContain("127.0.0.1");
-      const res = await fetch(`${started.address}/health`);
-      expect(res.status).toBe(200);
-    } finally {
-      await started.app.close();
-    }
   });
 });
 
@@ -200,9 +190,21 @@ describe("env validation", () => {
     }
     expect(message).toMatch(/DB_POOL_MAX/);
     expect(message).not.toContain("topsecret");
-    const ok = loadRuntimeEnv({ DIRECT_URL: secret, DEV_ACTOR_EMAIL: " Owner@Example.com ", ALLOW_UNAUTHENTICATED_DEV: "true" });
+    const ok = loadRuntimeEnv({ DIRECT_URL: "postgres://example.invalid/db" });
     expect(ok.dbPoolMax).toBe(10);
-    expect(ok.devActorEmail).toBe("owner@example.com");
-    expect(ok.allowUnauthenticatedDev).toBe(true);
+    expect(ok.host).toBe("127.0.0.1");
+    expect(ok.webOrigin).toBe("http://localhost:3000");
+  });
+
+  it("requires an explicit HTTPS origin and HOST in production", () => {
+    expect(() => loadRuntimeEnv({ DIRECT_URL: "postgres://host/db", NODE_ENV: "production" })).toThrow(/HOST/);
+    const env = loadRuntimeEnv({
+      DIRECT_URL: "postgres://host/db",
+      NODE_ENV: "production",
+      HOST: "0.0.0.0",
+      WEB_ORIGIN: "https://admin.example.test",
+    });
+    expect(env.host).toBe("0.0.0.0");
+    expect(env.webOrigin).toBe("https://admin.example.test");
   });
 });

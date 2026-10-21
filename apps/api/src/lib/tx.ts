@@ -109,19 +109,21 @@ export function createWriteRunner(options: WriteRunnerOptions) {
    */
   async function withIdempotency(
     ctx: TxContext,
-    input: { route: string; key: string | null; requestHash: string },
+    input: { actorId: string; route: string; key: string | null; requestHash: string },
     work: () => Promise<{ status: number; body: unknown }>,
   ): Promise<WriteResponse> {
     let claimId: string | null = null;
     if (input.key !== null) {
-      ctx.queries.count += 2;
+      ctx.queries.count += 3;
       const claim = await claimIdempotencyKey(ctx.tx, {
+        actorId: input.actorId,
         key: input.key,
         route: input.route,
         requestHash: input.requestHash,
         now: now(),
       });
       if (claim.kind === "replay") {
+        ctx.queries.count += 1;
         return { status: claim.status, body: claim.body, replayed: true };
       }
       claimId = claim.id;

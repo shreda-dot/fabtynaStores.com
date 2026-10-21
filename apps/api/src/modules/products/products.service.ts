@@ -61,7 +61,7 @@ export function createProductsService(options: ProductsServiceOptions) {
     async create(input: CreateProductBody, actor: Actor, key: string | null) {
       const route = "POST /products";
       return runner.runWrite(route, {}, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody(input) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody(input) }, async () => {
           if (input.sku !== null) {
             counted(ctx);
             const duplicate = await ctx.tx.product.findFirst({
@@ -99,7 +99,7 @@ export function createProductsService(options: ProductsServiceOptions) {
     async patch(id: string, input: PatchProductBody, actor: Actor, key: string | null) {
       const route = `PATCH /products/${id}`;
       return runner.runWrite(route, { productId: id }, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody(input) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody(input) }, async () => {
           counted(ctx);
           const locked = await ctx.tx.$queryRaw<Array<{ id: string }>>`
             SELECT id FROM products WHERE id = ${id} FOR UPDATE`;
@@ -152,7 +152,7 @@ export function createProductsService(options: ProductsServiceOptions) {
       const suffix = active ? "reactivate" : "deactivate";
       const route = `POST /products/${id}/${suffix}`;
       return runner.runWrite(route, { productId: id }, async (ctx) =>
-        runner.withIdempotency(ctx, { route, key, requestHash: hashRequestBody({ active }) }, async () => {
+        runner.withIdempotency(ctx, { actorId: actor.id, route, key, requestHash: hashRequestBody({ active }) }, async () => {
           counted(ctx);
           const locked = await ctx.tx.$queryRaw<Array<{ id: string }>>`
             SELECT id FROM products WHERE id = ${id} FOR UPDATE`;

@@ -28,6 +28,9 @@ import { cashMockApi } from "./cash.mock";
 import { accountingMockApi } from "./accounting.mock";
 import { instrumentApi } from "./client";
 import { resetDemoData } from "./mock-store";
+import { authMockApi } from "./auth.mock";
+import { authRealApi } from "./auth.real";
+import type { AuthApi } from "./auth.api";
 
 function notImplemented(): never {
   throw new Error("not implemented");
@@ -161,8 +164,11 @@ export const payablesApi = instrumentApi(apiMode === "mock" ? payablesMockApi : 
 export const loansApi = instrumentApi(apiMode === "mock" ? loansMockApi : loansRealApi);
 export const cashApi = instrumentApi(apiMode === "mock" ? cashMockApi : cashRealApi);
 export const accountingApi = instrumentApi(apiMode === "mock" ? accountingMockApi : accountingRealApi);
+export const authApi: AuthApi = apiMode === "mock" ? authMockApi : authRealApi;
+export const isMockApiMode = apiMode === "mock";
 
 export { resetDemoData };
+export { AuthApiError } from "./auth.api";
 export type { ProductsApi } from "./products.api";
 export type { SuppliersApi } from "./suppliers.api";
 export type { CustomersApi } from "./customers.api";
@@ -177,3 +183,4 @@ export type { PayablesApi } from "./payables.api";
 export type { LoansApi } from "./loans.api";
 export type { CashApi } from "./cash.api";
 export type { AccountingApi } from "./accounting.api";
+export type { AuthApi, AuthUser } from "./auth.api";

@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getLagosBusinessDate } from "@fabtyna/shared";
 import { buildApp } from "../src/app.js";
-import { createDevActorResolver } from "../src/auth/actor.js";
 import {
   accountBalanceOf,
   createHarness,
@@ -39,13 +38,21 @@ describe("expense categories and accounts API", () => {
 
     const cappedApp = buildApp({
       prisma: h.prisma,
-      resolveActor: createDevActorResolver(h.actor),
+      auth: {
+        nodeEnv: "test",
+        webOrigin: "http://localhost:3000",
+        cookieDomain: null,
+        sessionIdleTimeoutHours: 12,
+        sessionAbsoluteTimeoutDays: 7,
+      },
+      trustProxy: false,
       maxDateRangeDays: 30,
     });
     try {
       const customCap = await cappedApp.inject({
         method: "GET",
         url: "/sales?from=2026-01-01&to=2026-01-31",
+        headers: h.authHeaders,
       });
       expect(customCap.statusCode).toBe(400);
       expect(customCap.json<{ error: { message: string } }>().error.message).toContain("30 days");

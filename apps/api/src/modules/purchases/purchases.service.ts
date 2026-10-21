@@ -532,7 +532,7 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
     const requestHash = hashRequestBody(dto);
 
     return runWrite(CREATE_PURCHASE_ROUTE, { lines: dto.lines.length }, (ctx) =>
-      withIdempotency(ctx, { route: CREATE_PURCHASE_ROUTE, key: idempotencyKey, requestHash }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route: CREATE_PURCHASE_ROUTE, key: idempotencyKey, requestHash }, async () => {
         const locked = await acquireLocks(ctx, receivePlan(dto));
         const stored = await recordNewPurchase(ctx, {
           dto,
@@ -559,7 +559,7 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
     const route = purchasePaymentRoute(purchaseId);
 
     return runWrite(route, {}, (ctx) =>
-      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
         const purchase = await lockPurchase(ctx, purchaseId);
         if (purchase === null) {
           throw notFound(purchaseId);
@@ -650,7 +650,7 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
     const route = purchasePaymentReverseRoute(purchaseId, paymentId);
 
     return runWrite(route, {}, (ctx) =>
-      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
         const purchase = await lockPurchase(ctx, purchaseId);
         if (purchase === null) {
           throw notFound(purchaseId);
@@ -718,7 +718,7 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
   ): Promise<PurchaseResponse> {
     const route = purchaseVoidRoute(purchaseId);
     return runWrite(route, {}, (ctx) =>
-      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody({}) }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody({}) }, async () => {
         const purchase = await lockPurchase(ctx, purchaseId);
         if (purchase === null) {
           throw notFound(purchaseId);
@@ -755,7 +755,7 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
     const route = purchaseAmendRoute(purchaseId);
 
     return runWrite(route, { lines: dto.lines.length }, (ctx) =>
-      withIdempotency(ctx, { route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+      withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
         const purchase = await lockPurchase(ctx, purchaseId);
         if (purchase === null) {
           throw notFound(purchaseId);

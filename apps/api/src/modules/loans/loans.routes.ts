@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ActorResolver } from "../../auth/actor.js";
+import { requireActor } from "../../auth/actor.js";
 import { validationError } from "../../lib/errors.js";
 import {
   addLoanChargeDtoSchema,
@@ -39,10 +39,10 @@ function send(reply: FastifyReply, result: LoanResponse) {
 
 export function registerLoansRoutes(
   app: FastifyInstance,
-  deps: { service: LoansService; resolveActor: ActorResolver },
+  deps: { service: LoansService },
 ): void {
   app.post("/loans", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const parsed = createLoanDtoSchema.safeParse(request.body);
     if (!parsed.success) {
       throw validationError("The loan is not valid.", zodIssues(parsed.error));
@@ -51,7 +51,7 @@ export function registerLoansRoutes(
   });
 
   app.post("/loans/:id/charges", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const loanId = readLoanId(request);
     const parsed = addLoanChargeDtoSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -61,7 +61,7 @@ export function registerLoansRoutes(
   });
 
   app.post("/loans/:id/repayments", async (request, reply) => {
-    const actor = await deps.resolveActor(request);
+    const actor = requireActor(request);
     const loanId = readLoanId(request);
     const parsed = recordLoanRepaymentDtoSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -71,7 +71,7 @@ export function registerLoansRoutes(
   });
 
   app.get("/loans", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     const parsed = listLoansQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       throw validationError("The loans filter is not valid.", zodIssues(parsed.error));
@@ -80,7 +80,7 @@ export function registerLoansRoutes(
   });
 
   app.get("/loans/:id", async (request, reply) => {
-    await deps.resolveActor(request);
+    requireActor(request);
     return reply.status(200).send(await deps.service.getLoan(readLoanId(request)));
   });
 }

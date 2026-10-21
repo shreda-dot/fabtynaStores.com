@@ -168,7 +168,7 @@ export function createLoansService(options: LoansServiceOptions) {
       return runWrite(createRoute, {}, async (ctx) =>
         withIdempotency(
           ctx,
-          { route: createRoute, key, requestHash: hashRequestBody(body) },
+          { actorId: actor.id, route: createRoute, key, requestHash: hashRequestBody(body) },
           async () => {
             const accountId = body.accountId?.trim() ?? "";
             if (accountId === "") {
@@ -231,7 +231,7 @@ export function createLoansService(options: LoansServiceOptions) {
       return runWrite(chargeRoute(loanId), { loanId }, async (ctx) =>
         withIdempotency(
           ctx,
-          { route: chargeRoute(loanId), key, requestHash: hashRequestBody(body) },
+          { actorId: actor.id, route: chargeRoute(loanId), key, requestHash: hashRequestBody(body) },
           async () => {
             const loan = await lockLoan(ctx, loanId);
             const charge = mapDomainError(() =>
@@ -287,7 +287,7 @@ export function createLoansService(options: LoansServiceOptions) {
       return runWrite(repaymentRoute(loanId), { loanId }, async (ctx) =>
         withIdempotency(
           ctx,
-          { route: repaymentRoute(loanId), key, requestHash: hashRequestBody(body) },
+          { actorId: actor.id, route: repaymentRoute(loanId), key, requestHash: hashRequestBody(body) },
           async () => {
             const loan = await lockLoan(ctx, loanId);
             const accountId = body.accountId?.trim() ?? "";

@@ -19,10 +19,12 @@ export interface RuntimeEnv {
   dbPoolMax: number;
   port: number;
   nodeEnv: string;
-  /** `ALLOW_UNAUTHENTICATED_DEV=true`: explicit opt-in to run with no login. */
-  allowUnauthenticatedDev: boolean;
-  /** Email of the active admin that created rows while there is no login. */
-  devActorEmail: string | null;
+  host: string;
+  trustProxy: boolean;
+  webOrigin: string;
+  cookieDomain: string | null;
+  sessionIdleTimeoutHours: number;
+  sessionAbsoluteTimeoutDays: number;
   /** Transaction timing for write endpoints (see lib/tx-options.ts). */
   txTimeouts: TxTimeouts;
   /** Maximum inclusive date range accepted by list and statement endpoints. */
@@ -59,6 +61,7 @@ function isPostgresUrl(value: string): boolean {
  */
 export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): RuntimeEnv {
   const problems: string[] = [];
+  const nodeEnv = source.NODE_ENV?.trim() || "development";
 
   const directUrl = source.DIRECT_URL?.trim() ?? "";
   if (directUrl === "") {
@@ -82,6 +85,62 @@ export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): Runtime
       port = parsed;
     }
   }
+
+  const rawHost = source.HOST?.trim() ?? "";
+  const host = rawHost || "127.0.0.1";
+  if (nodeEnv === "production" && rawHost === "") {
+    problems.push("HOST must be set explicitly in production.");
+  }
+
+  const rawWebOrigin = source.WEB_ORIGIN?.trim() ?? "";
+  const webOrigin = rawWebOrigin || "http://localhost:3000";
+  try {
+    const parsedOrigin = new URL(webOrigin);
+    if (
+      parsedOrigin.origin !== webOrigin ||
+      (nodeEnv === "production" && parsedOrigin.protocol !== "https:")
+    ) {
+      problems.push("WEB_ORIGIN must be an exact origin (and use HTTPS in production).");
+    }
+  } catch {
+    problems.push("WEB_ORIGIN must be a valid origin.");
+  }
+  if (nodeEnv === "production" && rawWebOrigin === "") {
+    problems.push("WEB_ORIGIN is required in production.");
+  }
+
+  const rawCookieDomain = source.COOKIE_DOMAIN?.trim() ?? "";
+  if (rawCookieDomain.includes("/") || rawCookieDomain.includes(":")) {
+    problems.push("COOKIE_DOMAIN must be a hostname without a scheme or path.");
+  }
+
+  const rawTrustProxy = source.TRUST_PROXY?.trim().toLowerCase() ?? "";
+  if (rawTrustProxy !== "" && rawTrustProxy !== "true" && rawTrustProxy !== "false") {
+    problems.push("TRUST_PROXY must be true or false.");
+  }
+
+  const readBoundedInteger = (
+    name: string,
+    fallback: number,
+    min: number,
+    max: number,
+  ): number => {
+    const raw = source[name]?.trim() ?? "";
+    if (raw === "") return fallback;
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+      problems.push(`${name} must be an integer between ${min} and ${max}.`);
+      return fallback;
+    }
+    return parsed;
+  };
+  const sessionIdleTimeoutHours = readBoundedInteger("SESSION_IDLE_TIMEOUT_HOURS", 12, 1, 168);
+  const sessionAbsoluteTimeoutDays = readBoundedInteger(
+    "SESSION_ABSOLUTE_TIMEOUT_DAYS",
+    7,
+    1,
+    90,
+  );
 
   const rawPoolMax = source.DB_POOL_MAX?.trim() ?? "";
   let dbPoolMax = 10;
@@ -121,16 +180,18 @@ export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): Runtime
     );
   }
 
-  const devActorEmail = source.DEV_ACTOR_EMAIL?.trim().toLowerCase() ?? "";
-
   return {
     apiDatabaseUrl: directUrl,
     databaseUrl: rawDatabaseUrl === "" ? null : rawDatabaseUrl,
     dbPoolMax,
     port,
-    nodeEnv: source.NODE_ENV?.trim() || "development",
-    allowUnauthenticatedDev: source.ALLOW_UNAUTHENTICATED_DEV?.trim() === "true",
-    devActorEmail: devActorEmail === "" ? null : devActorEmail,
+    nodeEnv,
+    host,
+    trustProxy: rawTrustProxy === "true",
+    webOrigin,
+    cookieDomain: rawCookieDomain === "" ? null : rawCookieDomain,
+    sessionIdleTimeoutHours,
+    sessionAbsoluteTimeoutDays,
     txTimeouts,
     maxDateRangeDays,
   };

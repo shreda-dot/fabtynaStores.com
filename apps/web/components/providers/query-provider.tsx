@@ -26,7 +26,18 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
       void queryClient.invalidateQueries();
     });
     const cleanup = setupMockStoreStorageListener();
-    return cleanup;
+    const handleUnauthorized = () => {
+      queryClient.clear();
+      if (window.location.pathname !== "/login") {
+        const next = `${window.location.pathname}${window.location.search}`;
+        window.location.replace(`/login?next=${encodeURIComponent(next)}`);
+      }
+    };
+    window.addEventListener("fabtyna:unauthorized", handleUnauthorized);
+    return () => {
+      cleanup();
+      window.removeEventListener("fabtyna:unauthorized", handleUnauthorized);
+    };
   }, [queryClient]);
 
   return (

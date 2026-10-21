@@ -5,6 +5,7 @@ export type ApiErrorKind =
   | "timeout"
   | "validation"
   | "not-found"
+  | "unauthorized"
   | "unknown";
 
 /**
@@ -15,17 +16,19 @@ export class ApiError extends Error {
   readonly kind: ApiErrorKind;
   readonly userMessage: string;
   readonly detail: string | undefined;
+  readonly status: number | undefined;
 
   constructor(
     kind: ApiErrorKind,
     userMessage: string,
-    options?: { cause?: unknown; detail?: string },
+    options?: { cause?: unknown; detail?: string; status?: number },
   ) {
     super(userMessage, { cause: options?.cause });
     this.name = "ApiError";
     this.kind = kind;
     this.userMessage = userMessage;
     this.detail = options?.detail;
+    this.status = options?.status;
   }
 }
 
@@ -56,7 +59,26 @@ export function toTechnicalDetail(cause: unknown): string | undefined {
 }
 
 function classifyError(cause: unknown): ApiError {
-  if (cause instanceof ApiError) return cause;
+  if (cause instanceof ApiError) {
+    if (cause.status === 401 || cause.kind === "unauthorized") {
+      return new ApiError("unauthorized", "Your session has expired. Sign in again.", {
+        cause,
+        status: 401,
+      });
+    }
+    return cause;
+  }
+  const status =
+    typeof cause === "object" && cause !== null && "status" in cause &&
+    typeof cause.status === "number"
+      ? cause.status
+      : undefined;
+  if (status === 401) {
+    return new ApiError("unauthorized", "Your session has expired. Sign in again.", {
+      cause,
+      status,
+    });
+  }
   if (cause instanceof TimeoutError) {
     return new ApiError(
       "timeout",
@@ -127,6 +149,9 @@ export async function apiRequest<T>(
     return result;
   } catch (cause) {
     const error = classifyError(cause);
+    if (error.kind === "unauthorized" && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("fabtyna:unauthorized"));
+    }
     if (error.kind === "network" || error.kind === "timeout") {
       useNetworkStore.getState().recordFailure();
     }

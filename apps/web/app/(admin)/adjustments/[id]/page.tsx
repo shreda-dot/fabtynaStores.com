@@ -18,17 +18,20 @@ import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { adjustmentsApi } from "@/lib/api";
+import { adjustmentsApi, isMockApiMode } from "@/lib/api";
 import type { AdjustmentLineWithProductDto } from "@/lib/api/adjustments.api";
 import { ApiError, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
+import { useWriteFlow } from "@/hooks/use-write-flow";
+import { WriteFlowStatus } from "@/components/write-flow-status";
 
 export default function AdjustmentDetailPage() {
   const params = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const network = useNetworkStatus();
+  const writeFlow = useWriteFlow();
   const id = params.id;
 
   const adjustment = useQuery({
@@ -37,15 +40,17 @@ export default function AdjustmentDetailPage() {
   });
 
   const voidMutation = useMutation({
-    mutationFn: () => adjustmentsApi.void(id),
-    onSuccess: () => {
+    mutationFn: () =>
+      isMockApiMode
+        ? adjustmentsApi.void(id)
+        : writeFlow.run((key) => adjustmentsApi.void(id, key)),
+    onSuccess: (result) => {
+      if (!result) return;
       void queryClient.invalidateQueries({ queryKey: queryKeys.adjustments.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
       void adjustment.refetch();
     },
-    onError: (error) => {
-      toast.error(toUserMessage(error));
-    },
+    onError: (error) => toast.error(toUserMessage(error)),
   });
 
   if (adjustment.isPending) {
@@ -149,7 +154,6 @@ export default function AdjustmentDetailPage() {
         </ul>
       ),
       onConfirm: () => voidMutation.mutateAsync(),
-      successMessage: `Adjustment ${a.id.slice(0, 8)} voided.`,
     });
   }
 
@@ -176,7 +180,7 @@ export default function AdjustmentDetailPage() {
               <Button
                 variant="danger"
                 loading={voidMutation.isPending}
-                disabled={network.offline}
+                disabled={network.offline || voidMutation.isPending || writeFlow.status === "unknown"}
                 onClick={() => void tryVoid()}
               >
                 <Ban aria-hidden="true" className="h-4 w-4" />
@@ -185,6 +189,13 @@ export default function AdjustmentDetailPage() {
             )}
           </>
         }
+      />
+      <WriteFlowStatus
+        flow={writeFlow}
+        onRetry={() => voidMutation.mutate()}
+        checkHref="/adjustments"
+        checkLabel="Check adjustments"
+        showFieldErrors
       />
 
       {isVoided && (

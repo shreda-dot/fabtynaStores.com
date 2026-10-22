@@ -116,6 +116,11 @@ export const loansMockApi: LoansApi = {
     return jsonClone(items);
   },
 
+  async listPage() {
+    const items = await loansMockApi.list();
+    return { items, nextCursor: null };
+  },
+
   async getById(id) {
     await delay();
     const store = readMockStore();

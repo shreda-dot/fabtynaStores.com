@@ -19,5 +19,5 @@ export type TransferDetailDto = StockTransferDto & {
 export interface TransfersApi {
   list(): Promise<StockTransferDto[]>;
   getById(id: string): Promise<TransferDetailDto>;
-  create(input: CreateTransferDto): Promise<TransferDetailDto>;
+  create(input: CreateTransferDto, idempotencyKey?: string): Promise<TransferDetailDto>;
 }

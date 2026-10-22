@@ -19,6 +19,31 @@ export interface AccountMigrationNotice {
   message: string;
 }
 
+export type AccountRecordDto = AccountDto & { balanceKobo?: string };
+
+export type AccountStatementEntryDto = {
+  id: string;
+  type: AccountEntryType;
+  amountKobo: string;
+  occurredAt: string | null;
+  note: string | null;
+  sourceDescription: string;
+  isReversal: boolean;
+  reversesEntryId: string | null;
+  reversedByEntryId: string | null;
+  runningBalanceKobo: string;
+};
+
+export type AccountStatementPageDto = {
+  account: { id: string; name: string };
+  from: string | null;
+  to: string | null;
+  openingBalanceKobo: string;
+  closingBalanceKobo: string;
+  entries: AccountStatementEntryDto[];
+  nextCursor: string | null;
+};
+
 export interface MoneyFlowCategoryDto {
   key: AccountMoneyFlowCategoryKey;
   moneyInKobo: string;
@@ -71,37 +96,44 @@ export interface AccountingApi {
   /* Accounts --------------------------------------------------------------- */
 
   /** All accounts, active first, then by name. */
-  listAccounts(): Promise<AccountDto[]>;
+  listAccounts(includeInactive?: boolean): Promise<AccountRecordDto[]>;
 
   /** Active accounts used to receive or fund a payment. */
-  listPaymentAccounts(): Promise<AccountDto[]>;
+  listPaymentAccounts(): Promise<AccountRecordDto[]>;
 
-  createAccount(input: CreateAccountDto): Promise<AccountDto>;
+  createAccount(input: CreateAccountDto, idempotencyKey?: string): Promise<AccountRecordDto>;
 
-  updateAccount(id: string, input: UpdateAccountDto): Promise<AccountDto>;
+  updateAccount(id: string, input: UpdateAccountDto, idempotencyKey?: string): Promise<AccountRecordDto>;
 
   /**
    * Deactivates an account. Refused if the account balance is not zero.
    * Deactivated accounts cannot receive new entries (except reversals).
    */
-  deactivateAccount(id: string, input: DeactivateAccountDto): Promise<AccountDto>;
+  deactivateAccount(id: string, input: DeactivateAccountDto, idempotencyKey?: string): Promise<AccountRecordDto>;
+  reactivateAccount?(id: string, idempotencyKey?: string): Promise<AccountRecordDto>;
 
   /**
    * Posts the initial balance for an account. Refused if the account already
    * has a live opening balance.
    */
-  recordOpeningBalance(input: CreateOpeningBalanceDto): Promise<AccountLedgerEntryDto>;
+  recordOpeningBalance(input: CreateOpeningBalanceDto, idempotencyKey?: string): Promise<AccountLedgerEntryDto>;
 
   /**
    * Posts an ADJUSTMENT entry to match the ledger to a physical count.
    */
-  reconcileAccount(input: ReconcileAccountDto): Promise<AccountLedgerEntryDto>;
+  reconcileAccount(
+    input: ReconcileAccountDto,
+    idempotencyKey?: string,
+    countedAmountKobo?: string,
+  ): Promise<AccountLedgerEntryDto>;
 
   /**
    * Records a transfer of money between two accounts (TRANSFER_OUT from source,
    * TRANSFER_IN to destination).
    */
-  recordTransfer(input: CreateAccountTransferDto): Promise<void>;
+  recordTransfer(input: CreateAccountTransferDto, idempotencyKey?: string): Promise<void | { id: string }>;
+  reverseTransfer?(id: string, reason: string, idempotencyKey?: string): Promise<void>;
+  reverseEntry?(id: string, reason: string, idempotencyKey?: string): Promise<AccountLedgerEntryDto>;
 
   /** Records manual capital, income, drawings or bank/POS charges. */
   recordManualEntry(input: {
@@ -113,7 +145,7 @@ export interface AccountingApi {
     amountKobo: string;
     note: string;
     occurredAt: string;
-  }): Promise<AccountLedgerEntryDto>;
+  }, idempotencyKey?: string): Promise<AccountLedgerEntryDto>;
 
   /**
    * Ledger entries for an account, newest first, optionally limited to a
@@ -123,6 +155,10 @@ export interface AccountingApi {
     accountId: string,
     options?: { from?: string; to?: string },
   ): Promise<AccountLedgerEntryDto[]>;
+  statementPage?(
+    accountId: string,
+    options?: { from?: string; to?: string; cursor?: string; limit?: number },
+  ): Promise<AccountStatementPageDto>;
 
   /** A one-time reminder emitted when legacy mock data is migrated. */
   getMigrationNotice(): Promise<AccountMigrationNotice | null>;

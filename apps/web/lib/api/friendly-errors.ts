@@ -64,6 +64,13 @@ export function friendlyWriteError(cause: unknown): FriendlyWriteError {
     };
   }
 
+  if (
+    cause.code === "CONFLICT" &&
+    details.constraint === "expense_categories_normalizedKey_key"
+  ) {
+    return { message: "An expense category with this name already exists. Choose a different name." };
+  }
+
   if (cause.code === "INSUFFICIENT_STOCK") {
     const name = typeof details.productName === "string" ? details.productName : null;
     const available = details.availableUnits;
@@ -112,6 +119,16 @@ export function friendlyWriteError(cause: unknown): FriendlyWriteError {
 
   if (/Reverse the payments? first/i.test(cause.userMessage)) {
     return { message: cause.userMessage, action: "reverse-payments" };
+  }
+
+  const owed = /outstanding balance of (\d+) kobo/i.exec(cause.userMessage);
+  if (owed?.[1] !== undefined) {
+    return {
+      message: `That repayment is more than the loan still owes. The outstanding balance is ${formatNaira(owed[1])}.`,
+    };
+  }
+  if (/already fully repaid/i.test(cause.userMessage)) {
+    return { message: "This loan is already fully repaid, so no more repayments can be recorded." };
   }
 
   return { message: cause.userMessage };

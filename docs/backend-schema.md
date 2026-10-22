@@ -446,7 +446,7 @@ object names.
 | Rule                                                         | Why it is service-owned                                                                                                                                                                    |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Insufficient-stock messages                                  | The database refuses the oversell (`ck_stock_balances_nonnegative`); turning that failure into a friendly "only 3 left" message, and checking before attempting the write, is the service's job (`apps/api/src/modules/stock/stock.service.ts`). |
-| `lineTotalKobo` equals unit cost × quantity                  | Legitimate rounding can differ; the service computes the line total once and stores it.                                                                                                    |
+| `lineTotalKobo` equals unit cost × quantity                  | Not enforced anywhere. The client supplies each purchase line's `lineTotalKobo` (the invoice amount); `purchases.validation.ts` only bounds it and `purchases.service.ts` stores it unchanged. The server derives `unitCostKobo` from it (`roundHalfUp(lineTotalKobo, quantityUnits)`, `operations.ts` `receivePurchase`), so unit cost × units can differ from the line total by rounding. The server does NOT recompute the line total from quantity × a unit price. |
 | `paidKobo` equals the sum of the matching payment rows       | `paidKobo` is a denormalisation the payment service owns; `pnpm --filter @fabtyna/api db:audit` (§7) proves there is no gap.                                                                |
 | A `PURCHASE`/`SALE` line quantity must result in whole units | Arithmetic and pack snapshots are resolved before the insert. A fractional `PACK` quantity (½ crate) is accepted, but only when it resolves to a whole number of base units — the check is done in scaled integers in `receivePurchase`/`recordSale`. |
 | VOIDED sales/purchases/transfers must not be edited          | Immutability plus the status triggers cover most of it; the remaining "don't offer the action in the UI" checks live in the app.                                                           |
@@ -457,7 +457,7 @@ object names.
 | Purchase void refused when a LIVE supplier payment exists    | `trg_purchase_void_guard` (`20261020000400`) is the backstop; the service checks first under the purchase row lock and returns a friendly 409. Reversed supplier payments do not block. |
 | Payment reversal (sale later payments, any supplier payment) | Service-owned rules (walk-in sale refused, up-front payment refused, reason required, overdraw message); once-only is `ux_*_reversed_once`; reversal integrity is `fn_check_reversal_integrity`. |
 | Purchase void refused when its stock was already sold; friendly overspend/overdraw messages | `ck_stock_balances_nonnegative` and `ck_account_balances_nonnegative` are the backstops; the service checks first, under the lock order purchase → products → stock_balances (all locations) → account_balances → supplier (`FOR SHARE`). |
-| Purchase `averageCostKobo` is recomputed on receive and void | Done by the shared domain, never by SQL; two purchases of one product serialise through the product row so the average is never computed from stale stock. |
+| Purchase `averageCostKobo` is recomputed on receive and void | Done by the shared domain, never by SQL; two purchases of one product serialise through the product row so the average is never computed from stale stock. Known 1-kobo rounding divergence: on receive the average uses the invoice `lineTotalKobo` (`operations.ts` ~line 312–320), but a void/amend recompute replays movements and uses `quantityUnits × unitCostKobo` (`stock.ts` `recomputeAverageCostKobo`, lines 175–180), where `unitCostKobo` is already rounded. Reported to the owner; not changed. |
 | Amend purchase = void + new purchase in one transaction      | Service orchestration; link in audit metadata (`amendedFromPurchaseId` / `amendedByPurchaseId`), no schema change. |
 | Account/category names, activation state, opening balance, reconcile reason, transfer descriptions and list filtering | Validated and audited by the accounts/category services; balance math, source rules, non-negative balance, one live opening balance, transfer pairing, and immutability are backed by shared domain/database guards. |
 | Expense create, void, amend, list and summary | One transaction posts expense + account outflow; void appends an account reversal; amendment is void + recreate. Category names and channel splitting are resolved by the service; the database protects expense details and the void lifecycle. |
@@ -628,3 +628,53 @@ facts (see `docs/AI_CONTEXT.md` section 6a for the full mapping notes):
   after a timeout/network error and renews it after success or a form edit.
 - Connection-level errors that are not Prisma/PG-coded fall to the 500 handler
   (see `errors.ts`); the web treats every 5xx as UNKNOWN.
+- The purchase API accepts and stores submitted `lineTotalKobo`; it does not
+  independently recompute the total from quantity and unit cost. The web uses
+  the shared integer rounding function, but the server does not prove rounding
+  parity. Treat this as a trust-boundary limitation until the API contract is
+  deliberately changed.
+
+## 12. Web consumption of accounting and stock-operation APIs (7C Parts 1–4)
+
+This phase changed only web adapters/screens and the approved test-only shared
+differential test; it added no API routes, schema changes, or migrations. The
+web connects real-mode accounts and paginated account statements, expense
+categories and expenses (including void/amend), stock transfers, and stock
+adjustments (including void). Loans are not started; reports, dashboard, and
+manual cash-snapshot screens remain unconnected. Mock mode retains its separate
+mock adapters.
+
+The web uses `GET /accounts` balances for account cards and uses the cursor
+statement endpoint for date-filtered entries, opening/closing balances, running
+balances, and load-more. The API omits mock-only account note/update fields;
+those inputs are hidden in real mode. The API does not enforce unique account
+names; the real account form checks existing names client-side, so concurrent
+duplicate creation remains possible.
+
+Expense categories use their database IDs in real mode. `LOAN_INTEREST` is not
+offered for manual expenses. `BOTH` expense display splits integer kobo exactly
+as the API does: retail gets floor(amount / 2), wholesale gets the remainder.
+Amendment uses `PUT /expenses/:id`, which voids the original with a reasoned
+reversal and creates a replacement. The transfer create form omits
+mock-only `reference` because the API schema is strict; transfer detail states
+that correction requires an opposite transfer because no void route exists.
+
+All 7C writes use the existing web write-flow and idempotency-intent helper.
+Validation errors expose structured details, and the shared write status
+renders API field paths/messages. Account overdraw returns a 409 business rule
+with a safe message naming the account, balance, amount, and income/reconcile
+hint; transfer/adjustment stock shortages return 409 `INSUFFICIENT_STOCK` with
+product name, location, available units, and requested units. The API's
+non-negative balance and stock constraints remain the final concurrent-write
+guards.
+
+For Gate 0, the new shared differential test passed in the shared suite
+(243/243). The five focused serial API files passed 58/58 on the requested
+rerun; the initial run had 5 failed, 35 passed, and 18 skipped. These are
+focused results, not a claim that the full API suite passed. See
+[`AI_CONTEXT.md`](./AI_CONTEXT.md) section 6a for route-by-route contract
+mapping and the complete Gate 0 evidence.
+
+The 7C web checks passed: typecheck; lint with 0 errors and 3 warnings in
+untouched products/stock files; Vitest 31/31; and production build. The owner
+DEV click-through and post-click-through `db:audit` have not been run.

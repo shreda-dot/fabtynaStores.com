@@ -22,11 +22,13 @@ import { Input, Select } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { adjustmentsApi, productsApi } from "@/lib/api";
+import { adjustmentsApi, isMockApiMode, productsApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
+import { useWriteFlow } from "@/hooks/use-write-flow";
+import { WriteFlowStatus } from "@/components/write-flow-status";
 
 type AdjustmentDirection = "INCREASE" | "DECREASE";
 
@@ -51,6 +53,8 @@ export default function NewAdjustmentPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const uid = useId();
+  const writeFlow = useWriteFlow();
+  const [lastInput, setLastInput] = useState<CreateAdjustmentDto | null>(null);
 
   const [reason, setReason] = useState<string>("");
   const [adjustedAt, setAdjustedAt] = useState<string>(() =>
@@ -88,8 +92,13 @@ export default function NewAdjustmentPage() {
   }, [productsQuery.data]);
 
   const createMutation = useMutation({
-    mutationFn: (input: CreateAdjustmentDto) => adjustmentsApi.create(input),
+    mutationFn: async (input: CreateAdjustmentDto) => {
+      setLastInput(input);
+      if (isMockApiMode) return adjustmentsApi.create(input);
+      return writeFlow.run((key) => adjustmentsApi.create(input, key));
+    },
     onSuccess: (adjustment) => {
+      if (!adjustment) return;
       void queryClient.invalidateQueries({ queryKey: queryKeys.adjustments.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
@@ -102,6 +111,7 @@ export default function NewAdjustmentPage() {
   });
 
   function updateLine(id: string, patch: Partial<AdjustmentLineDraft>) {
+    writeFlow.edit();
     setLines((prev) =>
       prev.map((line) => (line.id === id ? { ...line, ...patch } : line)),
     );
@@ -114,6 +124,7 @@ export default function NewAdjustmentPage() {
   }
 
   function addLine() {
+    writeFlow.edit();
     setLines((prev) => [
       {
         id: newLineId(),
@@ -128,6 +139,7 @@ export default function NewAdjustmentPage() {
   }
 
   function removeLine(id: string) {
+    writeFlow.edit();
     setLines((prev) =>
       prev.length > 1 ? prev.filter((line) => line.id !== id) : prev,
     );
@@ -323,6 +335,15 @@ export default function NewAdjustmentPage() {
       )}
 
       <form onSubmit={submit} className="space-y-6" noValidate>
+        <WriteFlowStatus
+          flow={writeFlow}
+          onRetry={() => {
+            if (lastInput) createMutation.mutate(lastInput);
+          }}
+          checkHref="/adjustments"
+          checkLabel="Check adjustments"
+          showFieldErrors
+        />
         {errorCount > 0 && (
           <div
             role="alert"
@@ -360,7 +381,10 @@ export default function NewAdjustmentPage() {
                   onBlur={() =>
                     setFieldErrors(["adjustment-reason"], validateReason())
                   }
-                  onChange={(event) => setReason(event.target.value)}
+                  onChange={(event) => {
+                    writeFlow.edit();
+                    setReason(event.target.value);
+                  }}
                   placeholder="e.g. Damaged stock, found extra"
                 />
               </FormField>
@@ -379,7 +403,10 @@ export default function NewAdjustmentPage() {
                   onBlur={() =>
                     setFieldErrors(["adjustment-date"], validateDate())
                   }
-                  onChange={(event) => setAdjustedAt(event.target.value)}
+                  onChange={(event) => {
+                    writeFlow.edit();
+                    setAdjustedAt(event.target.value);
+                  }}
                 />
               </FormField>
             </div>
@@ -553,7 +580,7 @@ export default function NewAdjustmentPage() {
               size="lg"
               className="w-full sm:w-auto"
               loading={createMutation.isPending}
-              disabled={network.offline}
+              disabled={network.offline || createMutation.isPending || writeFlow.status === "unknown"}
             >
               Save adjustment
             </Button>

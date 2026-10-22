@@ -26,6 +26,9 @@ import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
+import { useWriteFlow } from "@/hooks/use-write-flow";
+import { WriteFlowStatus } from "@/components/write-flow-status";
+import { isMockApiMode } from "@/lib/api";
 
 type TransferLineDraft = {
   id: string;
@@ -39,6 +42,8 @@ export default function NewTransferPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const uid = useId();
+  const writeFlow = useWriteFlow();
+  const [lastInput, setLastInput] = useState<CreateTransferDto | null>(null);
 
   const [from, setFrom] = useState<StockLocation>("WAREHOUSE");
   const [to, setTo] = useState<StockLocation>("RETAIL_SHELF");
@@ -92,8 +97,14 @@ export default function NewTransferPage() {
   }
 
   const createMutation = useMutation({
-    mutationFn: (input: CreateTransferDto) => transfersApi.create(input),
+    mutationFn: async (input: CreateTransferDto) => {
+      setLastInput(input);
+      return isMockApiMode
+        ? transfersApi.create(input)
+        : writeFlow.run((key) => transfersApi.create(input, key));
+    },
     onSuccess: (transfer) => {
+      if (!transfer) return;
       void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
@@ -108,6 +119,7 @@ export default function NewTransferPage() {
   });
 
   function updateLine(id: string, patch: Partial<TransferLineDraft>) {
+    writeFlow.edit();
     setLines((prev) =>
       prev.map((line) => (line.id === id ? { ...line, ...patch } : line)),
     );
@@ -120,6 +132,7 @@ export default function NewTransferPage() {
   }
 
   function addLine() {
+    writeFlow.edit();
     setLines((prev) => [
       { id: newLineId(), productId: "", quantityUnits: "" },
       ...prev,
@@ -127,6 +140,7 @@ export default function NewTransferPage() {
   }
 
   function removeLine(id: string) {
+    writeFlow.edit();
     setLines((prev) =>
       prev.length > 1 ? prev.filter((line) => line.id !== id) : prev,
     );
@@ -343,6 +357,15 @@ export default function NewTransferPage() {
       )}
 
       <form onSubmit={submit} className="space-y-6" noValidate>
+        <WriteFlowStatus
+          flow={writeFlow}
+          onRetry={() => {
+            if (lastInput) createMutation.mutate(lastInput);
+          }}
+          checkHref="/transfers"
+          checkLabel="Check transfers"
+          showFieldErrors
+        />
         {errorCount > 0 && (
           <div
             role="alert"
@@ -372,6 +395,7 @@ export default function NewTransferPage() {
                   id="transfer-from"
                   value={from}
                   onChange={(event) => {
+                    writeFlow.edit();
                     setFrom(event.target.value as StockLocation);
                     setErrors((prev) => {
                       const next = { ...prev };
@@ -401,6 +425,7 @@ export default function NewTransferPage() {
                     setFieldErrors(["transfer-to"], validateLocations())
                   }
                   onChange={(event) => {
+                    writeFlow.edit();
                     setTo(event.target.value as StockLocation);
                     setErrors((prev) => {
                       const next = { ...prev };
@@ -429,7 +454,10 @@ export default function NewTransferPage() {
                   max={businessDate}
                   aria-invalid={errors["transfer-date"] !== undefined}
                   onBlur={() => setFieldErrors(["transfer-date"], validateDate())}
-                  onChange={(event) => setTransferredAt(event.target.value)}
+                  onChange={(event) => {
+                    writeFlow.edit();
+                    setTransferredAt(event.target.value);
+                  }}
                 />
               </FormField>
             </div>
@@ -438,12 +466,15 @@ export default function NewTransferPage() {
               <Input
                 id="transfer-reason"
                 value={reason}
-                onChange={(event) => setReason(event.target.value)}
+                onChange={(event) => {
+                  writeFlow.edit();
+                  setReason(event.target.value);
+                }}
                 placeholder="e.g. Restock the shelf"
               />
             </FormField>
 
-            <FormField
+            {isMockApiMode && <FormField
               id="transfer-reference"
               label="Reference"
               hint="Auto-generated if left blank"
@@ -451,10 +482,13 @@ export default function NewTransferPage() {
               <Input
                 id="transfer-reference"
                 value={reference}
-                onChange={(event) => setReference(event.target.value)}
+                onChange={(event) => {
+                  writeFlow.edit();
+                  setReference(event.target.value);
+                }}
                 placeholder="Optional"
               />
-            </FormField>
+            </FormField>}
           </CardBody>
         </Card>
 
@@ -585,7 +619,7 @@ export default function NewTransferPage() {
               size="lg"
               className="w-full sm:w-auto"
               loading={createMutation.isPending}
-              disabled={network.offline}
+              disabled={network.offline || createMutation.isPending || writeFlow.status === "unknown"}
             >
               Record transfer
             </Button>

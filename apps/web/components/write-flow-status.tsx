@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
 import { productsApi } from "@/lib/api";
+import { apiFieldErrors } from "@/lib/api/client";
 import {
   findQuotedId,
   friendlyWriteError,
@@ -23,6 +24,7 @@ export function WriteFlowStatus({
   onRetry,
   checkHref,
   checkLabel,
+  showFieldErrors = false,
   onReverseAction,
   reverseActionLabel = "Go to payments",
 }: {
@@ -31,6 +33,7 @@ export function WriteFlowStatus({
   onRetry: () => void;
   checkHref: string;
   checkLabel: string;
+  showFieldErrors?: boolean;
   onReverseAction?: () => void;
   reverseActionLabel?: string;
 }) {
@@ -62,6 +65,7 @@ export function WriteFlowStatus({
 
   if (flow.status === "failed") {
     const friendly = friendlyWriteError(flow.error);
+    const fieldErrors = showFieldErrors ? apiFieldErrors(flow.error) : {};
     const text =
       quotedId !== null && product.data?.name
         ? replaceIdWithName(friendly.message, quotedId, product.data.name)
@@ -69,6 +73,15 @@ export function WriteFlowStatus({
     return (
       <div role="alert" className="space-y-2 rounded-md border border-danger/30 bg-card p-3 text-sm">
         <p className="text-danger">{text}</p>
+        {Object.keys(fieldErrors).length > 0 && (
+          <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+            {Object.entries(fieldErrors).map(([field, message]) => (
+              <li key={field}>
+                <span className="font-medium text-foreground">{field}:</span> {message}
+              </li>
+            ))}
+          </ul>
+        )}
         {friendly.action === "reload" && (
           <Button size="sm" variant="secondary" onClick={() => window.location.reload()}>
             Reload the form

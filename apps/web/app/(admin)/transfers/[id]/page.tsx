@@ -184,7 +184,10 @@ export default function TransferDetailPage() {
       </div>
 
       <Card>
-        <CardHeader title="Items transferred" />
+        <CardHeader
+          title="Items transferred"
+          description="Transfers are immutable and cannot be voided. To correct this, make an opposite transfer."
+        />
         <CardBody>
           <ResponsiveTable
             rows={t.lines}

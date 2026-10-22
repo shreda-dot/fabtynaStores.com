@@ -1,17 +1,19 @@
 "use client";
 
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { Landmark, Plus } from "lucide-react";
 import Link from "next/link";
 import { formatLagosDate } from "@fabtyna/shared";
 import { ResponsiveTable } from "@/components/responsive-table";
 import type { ResponsiveTableColumn } from "@/components/responsive-table";
 import { Badge } from "@/components/ui/badge";
-import { buttonClasses } from "@/components/ui/button";
+import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { FormField } from "@/components/ui/form-field";
+import { Input, Select } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,20 +29,42 @@ function statusTone(status: LoanListItemDto["status"]) {
   return "info" as const;
 }
 
+type StatusFilter = "DEFAULT" | LoanListItemDto["status"];
+
 export default function LoansPage() {
-  const loans = useQuery({
-    queryKey: queryKeys.loans.list,
-    queryFn: () => loansApi.list(),
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("DEFAULT");
+  const [search, setSearch] = useState("");
+  const [dueBefore, setDueBefore] = useState("");
+
+  const filters = useMemo(
+    () => ({
+      status: statusFilter === "DEFAULT" ? undefined : statusFilter,
+      search: search.trim() === "" ? undefined : search.trim(),
+      dueBefore: dueBefore === "" ? undefined : dueBefore,
+    }),
+    [statusFilter, search, dueBefore],
+  );
+
+  const loans = useInfiniteQuery({
+    queryKey: queryKeys.loans.pages(filters),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => loansApi.listPage({ ...filters, cursor: pageParam ?? undefined }),
+    getNextPageParam: (last) => last.nextCursor,
   });
 
+  const loadedItems = useMemo(
+    () => loans.data?.pages.flatMap((page) => page.items) ?? [],
+    [loans.data],
+  );
+
   const rows = useMemo(() => {
-    return (loans.data ?? []).slice().sort((a, b) => {
+    return loadedItems.slice().sort((a, b) => {
       if (a.dueDate === null && b.dueDate === null) return 0;
       if (a.dueDate === null) return 1;
       if (b.dueDate === null) return -1;
       return a.dueDate.localeCompare(b.dueDate);
     });
-  }, [loans.data]);
+  }, [loadedItems]);
 
   const totals = useMemo(() => {
     let borrowed = 0n;
@@ -130,7 +154,12 @@ export default function LoansPage() {
     },
   ];
 
-  const hasAny = (loans.data?.length ?? 0) > 0;
+  const loadMoreFailed = loans.isFetchNextPageError;
+  const queryError: unknown = loans.error;
+  const fetchNext = loans.fetchNextPage;
+
+  const hasAny = loadedItems.length > 0;
+  const filtered = statusFilter !== "DEFAULT" || search.trim() !== "" || dueBefore !== "";
 
   return (
     <div className="space-y-6">
@@ -169,6 +198,37 @@ export default function LoansPage() {
         </div>
       )}
 
+      <Card className="grid gap-3 p-4 sm:grid-cols-3">
+        <FormField id="loan-status" label="Status">
+          <Select
+            id="loan-status"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+          >
+            <option value="DEFAULT">Active and overdue</option>
+            <option value="ACTIVE">Active only</option>
+            <option value="OVERDUE">Overdue only</option>
+            <option value="PAID">Paid</option>
+          </Select>
+        </FormField>
+        <FormField id="loan-search" label="Lender">
+          <Input
+            id="loan-search"
+            value={search}
+            placeholder="Search lender"
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </FormField>
+        <FormField id="loan-due-before" label="Due on or before">
+          <Input
+            id="loan-due-before"
+            type="date"
+            value={dueBefore}
+            onChange={(event) => setDueBefore(event.target.value)}
+          />
+        </FormField>
+      </Card>
+
       <Card className="p-4 sm:p-5">
         {loans.isPending ? (
           <Skeleton variant="row" count={5} />
@@ -181,8 +241,12 @@ export default function LoansPage() {
         ) : rows.length === 0 ? (
           <EmptyState
             icon={Landmark}
-            title="No loans recorded"
-            description="Record money you have borrowed to include it in your financial position."
+            title={filtered ? "No loans match these filters" : "No loans recorded"}
+            description={
+              filtered
+                ? "Change or clear the filters to see other loans."
+                : "Record money you have borrowed to include it in your financial position."
+            }
             action={
               <Link
                 href="/accounting/loans/new"
@@ -193,11 +257,31 @@ export default function LoansPage() {
             }
           />
         ) : (
-          <ResponsiveTable
-            rows={rows}
-            columns={columns}
-            getKey={(loan) => loan.id}
-          />
+          <div className="space-y-4">
+            <ResponsiveTable
+              rows={rows}
+              columns={columns}
+              getKey={(loan) => loan.id}
+            />
+            {loadMoreFailed && (
+              <ErrorState
+                title="More loans could not be loaded"
+                message={toUserMessage(queryError)}
+                onRetry={() => void fetchNext()}
+              />
+            )}
+            {loans.hasNextPage && (
+              <div className="flex justify-center">
+                <Button
+                  variant="secondary"
+                  loading={loans.isFetchingNextPage}
+                  onClick={() => void loans.fetchNextPage()}
+                >
+                  Load more
+                </Button>
+              </div>
+            )}
+          </div>
         )}
       </Card>
     </div>

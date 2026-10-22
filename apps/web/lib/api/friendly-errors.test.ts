@@ -71,6 +71,31 @@ describe("friendlyWriteError", () => {
     expect(result.action).toBe("reload");
   });
 
+  it("names duplicate expense categories", () => {
+    const result = friendlyWriteError(
+      err("CONFLICT", "That record already exists.", {
+        constraint: "expense_categories_normalizedKey_key",
+      }),
+    );
+    expect(result.message).toContain("expense category");
+    expect(result.message).toContain("different name");
+  });
+
+  it("explains a loan repayment above the outstanding balance in naira", () => {
+    const result = friendlyWriteError(
+      err("VALIDATION", "Repayment exceeds the outstanding balance of 250000 kobo.", null, 400),
+    );
+    expect(result.message).toContain("still owes");
+    expect(result.message).not.toContain("kobo");
+  });
+
+  it("explains a loan that is already fully repaid", () => {
+    const result = friendlyWriteError(
+      err("VALIDATION", "This loan is already fully repaid.", null, 400),
+    );
+    expect(result.message).toContain("already fully repaid");
+  });
+
   it("falls back to the server message for other business errors", () => {
     expect(friendlyWriteError(err("BUSINESS_RULE", "Already paid.", null)).message).toBe("Already paid.");
   });

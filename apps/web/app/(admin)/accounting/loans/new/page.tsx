@@ -19,9 +19,11 @@ import { FormField } from "@/components/ui/form-field";
 import { Input, Textarea } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
+import { WriteFlowStatus } from "@/components/write-flow-status";
+import { useWriteFlow } from "@/hooks/use-write-flow";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { accountingApi, loansApi } from "@/lib/api";
+import { accountingApi, isMockApiMode, loansApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
@@ -30,6 +32,9 @@ import { toast } from "@/stores/toast-store";
 export default function NewLoanPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+
+  const writeFlow = useWriteFlow();
+  const [lastInput, setLastInput] = useState<CreateLoanDto | null>(null);
 
   const [lenderName, setLenderName] = useState("");
   const [principalKobo, setPrincipalKobo] = useState("");
@@ -58,8 +63,14 @@ export default function NewLoanPage() {
     principal > 0n && interest >= 0n ? principal + interest : 0n;
 
   const createMutation = useMutation({
-    mutationFn: (input: CreateLoanDto) => loansApi.create(input),
+    mutationFn: async (input: CreateLoanDto) => {
+      setLastInput(input);
+      return isMockApiMode
+        ? loansApi.create(input)
+        : writeFlow.run((key) => loansApi.create(input, key));
+    },
     onSuccess: (loan) => {
+      if (!loan) return;
       void queryClient.invalidateQueries({ queryKey: queryKeys.loans.all });
       void queryClient.invalidateQueries({
         queryKey: queryKeys.accounting.all,
@@ -186,6 +197,14 @@ export default function NewLoanPage() {
       />
 
       <form onSubmit={submit} className="space-y-6" noValidate>
+        <WriteFlowStatus
+          flow={writeFlow}
+          onRetry={() => {
+            if (lastInput) createMutation.mutate(lastInput);
+          }}
+          checkHref="/accounting/loans"
+          checkLabel="Check loans"
+        />
         {errorCount > 0 && (
           <div
             role="alert"
@@ -218,7 +237,10 @@ export default function NewLoanPage() {
                 id="loan-lender"
                 value={lenderName}
                 aria-invalid={errors["loan-lender"] !== undefined}
-                onChange={(event) => setLenderName(event.target.value)}
+                onChange={(event) => {
+                  writeFlow.edit();
+                  setLenderName(event.target.value);
+                }}
                 placeholder="e.g. First Bank"
               />
             </FormField>
@@ -229,7 +251,10 @@ export default function NewLoanPage() {
                   id="loan-principal"
                   label="Amount borrowed"
                   defaultValueKobo="0"
-                  onKoboChange={setPrincipalKobo}
+                  onKoboChange={(value) => {
+                    writeFlow.edit();
+                    setPrincipalKobo(value);
+                  }}
                 />
                 {errors["loan-principal"] && (
                   <p role="alert" className="text-sm text-danger">
@@ -243,7 +268,10 @@ export default function NewLoanPage() {
                   id="loan-interest"
                   label="Agreed interest / fees"
                   defaultValueKobo="0"
-                  onKoboChange={setInterestKobo}
+                  onKoboChange={(value) => {
+                    writeFlow.edit();
+                    setInterestKobo(value);
+                  }}
                 />
                 {errors["loan-interest"] && (
                   <p role="alert" className="text-sm text-danger">
@@ -263,7 +291,10 @@ export default function NewLoanPage() {
                   value={disbursedAt}
                   max={businessDate}
                   aria-invalid={errors["loan-disbursed"] !== undefined}
-                  onChange={(event) => setDisbursedAt(event.target.value)}
+                  onChange={(event) => {
+                    writeFlow.edit();
+                    setDisbursedAt(event.target.value);
+                  }}
                 />
               </FormField>
 
@@ -272,7 +303,10 @@ export default function NewLoanPage() {
                 label="Received into"
                 accounts={accountsQuery.data ?? []}
                 accountId={accountId}
-                onChange={setAccountId}
+                onChange={(value) => {
+                  writeFlow.edit();
+                  setAccountId(value);
+                }}
                 disabled={accountsQuery.isPending || accountsQuery.isError}
               />
 
@@ -287,7 +321,10 @@ export default function NewLoanPage() {
                   value={dueDate}
                   min={disbursedAt}
                   aria-invalid={errors["loan-due"] !== undefined}
-                  onChange={(event) => setDueDate(event.target.value)}
+                  onChange={(event) => {
+                    writeFlow.edit();
+                    setDueDate(event.target.value);
+                  }}
                 />
               </FormField>
             </div>
@@ -297,7 +334,10 @@ export default function NewLoanPage() {
                 id="loan-note"
                 value={note}
                 rows={2}
-                onChange={(event) => setNote(event.target.value)}
+                onChange={(event) => {
+                  writeFlow.edit();
+                  setNote(event.target.value);
+                }}
               />
             </FormField>
           </CardBody>
@@ -353,7 +393,7 @@ export default function NewLoanPage() {
                 size="lg"
                 className="w-full sm:w-auto"
                 loading={createMutation.isPending}
-                disabled={network.offline}
+                disabled={network.offline || writeFlow.status === "unknown"}
               >
                 Record loan
               </Button>

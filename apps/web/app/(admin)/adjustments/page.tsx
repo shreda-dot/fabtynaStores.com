@@ -19,10 +19,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { adjustmentsApi } from "@/lib/api";
+import { isMockApiMode } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
+import { useWriteFlow } from "@/hooks/use-write-flow";
+import { WriteFlowStatus } from "@/components/write-flow-status";
 import type { StockAdjustmentDto } from "@fabtyna/shared";
 
 export default function AdjustmentsPage() {
@@ -30,6 +33,8 @@ export default function AdjustmentsPage() {
   const businessDate = useLagosBusinessDate();
   const network = useNetworkStatus();
   const queryClient = useQueryClient();
+  const writeFlow = useWriteFlow();
+  const [lastVoidId, setLastVoidId] = useState("");
 
   const adjustments = useQuery({
     queryKey: queryKeys.adjustments.list,
@@ -37,14 +42,19 @@ export default function AdjustmentsPage() {
   });
 
   const voidMutation = useMutation({
-    mutationFn: (adjustmentId: string) => adjustmentsApi.void(adjustmentId),
-    onSuccess: () => {
+    mutationFn: async (adjustmentId: string) => {
+      if (isMockApiMode) return adjustmentsApi.void(adjustmentId);
+      if (writeFlow.status === "unknown" && adjustmentId !== lastVoidId) return undefined;
+      if (writeFlow.status === "failed" && adjustmentId !== lastVoidId) writeFlow.edit();
+      setLastVoidId(adjustmentId);
+      return writeFlow.run((key) => adjustmentsApi.void(adjustmentId, key));
+    },
+    onSuccess: (result) => {
+      if (!result) return;
       void queryClient.invalidateQueries({ queryKey: queryKeys.adjustments.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
     },
-    onError: (error) => {
-      toast.error(toUserMessage(error));
-    },
+    onError: (error) => toast.error(toUserMessage(error)),
   });
 
   const rows = useMemo(() => {
@@ -77,7 +87,6 @@ export default function AdjustmentsPage() {
         </ul>
       ),
       onConfirm: () => voidMutation.mutateAsync(a.id),
-      successMessage: `Adjustment ${a.id.slice(0, 8)} voided.`,
     });
   }
 
@@ -113,7 +122,7 @@ export default function AdjustmentsPage() {
               loading={
                 voidMutation.isPending && voidMutation.variables === a.id
               }
-              disabled={voidMutation.isPending || network.offline}
+              disabled={voidMutation.isPending || network.offline || writeFlow.status === "unknown"}
               onClick={() => void tryVoid(a)}
             >
               <Ban aria-hidden="true" className="h-3.5 w-3.5" />
@@ -136,6 +145,15 @@ export default function AdjustmentsPage() {
             New adjustment
           </Link>
         }
+      />
+      <WriteFlowStatus
+        flow={writeFlow}
+        onRetry={() => {
+          if (lastVoidId) voidMutation.mutate(lastVoidId);
+        }}
+        checkHref="/adjustments"
+        checkLabel="Check adjustments"
+        showFieldErrors
       />
 
       <section className="space-y-4 rounded-md border border-border bg-card p-4 sm:p-5">

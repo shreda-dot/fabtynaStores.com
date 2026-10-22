@@ -24,12 +24,28 @@ import { Input, Textarea } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WriteFlowStatus } from "@/components/write-flow-status";
+import { useWriteFlow } from "@/hooks/use-write-flow";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { accountingApi, loansApi } from "@/lib/api";
-import type { LoanDetailDto } from "@/lib/api/loans.api";
+import { accountingApi, isMockApiMode, loansApi } from "@/lib/api";
+import type { LoanDetailDto, SavedRepaymentDto } from "@/lib/api/loans.api";
 import { ApiError, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
+
+type RepaymentInput = {
+  amountKobo: string;
+  interestPortionKobo: string;
+  paidAt: string;
+  accountId: string;
+  note: string | null;
+};
+
+type ChargeInput = {
+  amountKobo: string;
+  reason: string;
+  occurredAt: string;
+};
 
 const LEDGER_LABEL: Record<string, string> = {
   DISBURSEMENT: "Disbursement",
@@ -135,6 +151,11 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
 
   const repaySubmitting = useRef(false);
   const chargeSubmitting = useRef(false);
+  const repayFlow = useWriteFlow();
+  const chargeFlow = useWriteFlow();
+  const [lastRepayment, setLastRepayment] = useState<RepaymentInput | null>(null);
+  const [lastCharge, setLastCharge] = useState<ChargeInput | null>(null);
+  const [savedRepayment, setSavedRepayment] = useState<SavedRepaymentDto | null>(null);
 
   function invalidate() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.loans.all });
@@ -143,15 +164,16 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
   }
 
   const repayMutation = useMutation({
-    mutationFn: (input: {
-      amountKobo: string;
-      interestPortionKobo: string;
-      paidAt: string;
-      accountId: string;
-      note: string | null;
-    }) => loansApi.recordRepayment(loan.id, input),
-    onSuccess: () => {
+    mutationFn: async (input: RepaymentInput) => {
+      setLastRepayment(input);
+      return isMockApiMode
+        ? loansApi.recordRepayment(loan.id, input)
+        : repayFlow.run((key) => loansApi.recordRepayment(loan.id, input, key));
+    },
+    onSuccess: (result) => {
+      if (!result) return;
       invalidate();
+      setSavedRepayment(result.savedRepayment ?? null);
       setRepayAmount("");
       setRepayInterest("0");
       setRepayNote("");
@@ -161,12 +183,14 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
   });
 
   const chargeMutation = useMutation({
-    mutationFn: (input: {
-      amountKobo: string;
-      reason: string;
-      occurredAt: string;
-    }) => loansApi.addCharge(loan.id, input),
-    onSuccess: () => {
+    mutationFn: async (input: ChargeInput) => {
+      setLastCharge(input);
+      return isMockApiMode
+        ? loansApi.addCharge(loan.id, input)
+        : chargeFlow.run((key) => loansApi.addCharge(loan.id, input, key));
+    },
+    onSuccess: (result) => {
+      if (!result) return;
       invalidate();
       setChargeAmount("");
       setChargeReason("");
@@ -224,20 +248,26 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
     const principalPortion = amount - interestPortion;
     const remaining = outstanding - amount;
     const clears = remaining === 0n;
+    const accountName =
+      (accountsQuery.data ?? []).find((account) => account.id === selectedAccountId)?.name ??
+      "the selected account";
 
     repaySubmitting.current = true;
     try {
       await confirm({
         title: "Record this repayment?",
-        description: "Confirm before the repayment is saved.",
+        description:
+          "This cannot be undone yet. There is no way to reverse a loan repayment, so check every detail.",
         confirmLabel: "Record repayment",
         successMessage: `Repayment of ${formatNaira(amount)} recorded for ${loan.lenderName}.`,
         details: (
           <dl className="space-y-1.5 text-sm">
             <SummaryRow label="Lender">{loan.lenderName}</SummaryRow>
-            <SummaryRow label="Amount">
+            <SummaryRow label="Amount (leaves the account)">
               <Money kobo={amount} tone="neutral" />
             </SummaryRow>
+            <SummaryRow label="Paid from">{accountName}</SummaryRow>
+            <SummaryRow label="Date paid">{formatLagosDate(repayDate)}</SummaryRow>
             <SummaryRow label="Interest portion">
               <Money kobo={interestPortion} tone="neutral" />
             </SummaryRow>
@@ -253,8 +283,10 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
             </SummaryRow>
             {interestPortion > 0n && (
               <p className="rounded-sm border border-info/30 bg-info-surface px-2 py-1 text-xs text-info">
-                An expense of {formatNaira(interestPortion)} will be recorded
-                for the interest, reducing net profit.
+                The full amount leaves the account once. An expense of{" "}
+                {formatNaira(interestPortion)} for the interest is also
+                recorded automatically for profit reporting; it does not take
+                money out a second time.
               </p>
             )}
             {clears && (
@@ -447,25 +479,46 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
           />
           <CardBody>
             <form onSubmit={submitRepayment} className="space-y-4" noValidate>
+              <p className="rounded-sm border border-warning/30 bg-warning-surface px-2 py-1 text-xs text-warning">
+                A repayment cannot be undone yet. Check the amount, account and
+                date before you save.
+              </p>
+              <WriteFlowStatus
+                flow={repayFlow}
+                onRetry={() => {
+                  if (lastRepayment) repayMutation.mutate(lastRepayment);
+                }}
+                checkHref="/accounting/loans"
+                checkLabel="Check loans"
+              />
               <MoneyInput
                 key={`repay-${outstanding.toString()}`}
                 id="repay-amount"
                 label="Amount"
                 defaultValueKobo={isSettled ? "0" : outstanding.toString()}
-                onKoboChange={setRepayAmount}
+                onKoboChange={(value) => {
+                  repayFlow.edit();
+                  setRepayAmount(value);
+                }}
               />
               <MoneyInput
                 id="repay-interest"
                 label="Interest portion (0 if none)"
                 defaultValueKobo="0"
-                onKoboChange={setRepayInterest}
+                onKoboChange={(value) => {
+                  repayFlow.edit();
+                  setRepayInterest(value);
+                }}
               />
               <AccountSelect
                 id="repay-account"
                 label="Paid from"
                 accounts={accountsQuery.data ?? []}
                 accountId={accountId}
-                onChange={setAccountId}
+                onChange={(value) => {
+                  repayFlow.edit();
+                  setAccountId(value);
+                }}
                 disabled={accountsQuery.isPending || accountsQuery.isError}
               />
               <FormField id="repay-date" label="Date paid">
@@ -474,7 +527,10 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
                   type="date"
                   value={repayDate}
                   max={businessDate}
-                  onChange={(event) => setRepayDate(event.target.value)}
+                  onChange={(event) => {
+                    repayFlow.edit();
+                    setRepayDate(event.target.value);
+                  }}
                 />
               </FormField>
               <FormField id="repay-note" label="Note (optional)">
@@ -482,10 +538,22 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
                   id="repay-note"
                   value={repayNote}
                   rows={2}
-                  onChange={(event) => setRepayNote(event.target.value)}
+                  onChange={(event) => {
+                    repayFlow.edit();
+                    setRepayNote(event.target.value);
+                  }}
                 />
               </FormField>
 
+              {savedRepayment && (
+                <p
+                  role="status"
+                  className="rounded-sm border border-success/30 bg-success-surface px-2 py-1 text-xs text-success"
+                >
+                  Saved. The server recorded {formatNaira(savedRepayment.amountKobo)}, of
+                  which {formatNaira(savedRepayment.interestPortionKobo)} is interest.
+                </p>
+              )}
               {repayError && (
                 <p role="alert" className="text-sm text-danger">
                   {repayError}
@@ -507,7 +575,7 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
                 type="submit"
                 className="w-full"
                 loading={repayMutation.isPending}
-                disabled={network.offline || isSettled}
+                disabled={network.offline || isSettled || repayFlow.status === "unknown"}
               >
                 <Landmark aria-hidden="true" className="h-4 w-4" />
                 Record repayment
@@ -528,17 +596,31 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
           />
           <CardBody>
             <form onSubmit={submitCharge} className="space-y-4" noValidate>
+              <WriteFlowStatus
+                flow={chargeFlow}
+                onRetry={() => {
+                  if (lastCharge) chargeMutation.mutate(lastCharge);
+                }}
+                checkHref="/accounting/loans"
+                checkLabel="Check loans"
+              />
               <MoneyInput
                 id="charge-amount"
                 label="Amount"
                 defaultValueKobo="0"
-                onKoboChange={setChargeAmount}
+                onKoboChange={(value) => {
+                  chargeFlow.edit();
+                  setChargeAmount(value);
+                }}
               />
               <FormField id="charge-reason" label="Reason">
                 <Input
                   id="charge-reason"
                   value={chargeReason}
-                  onChange={(event) => setChargeReason(event.target.value)}
+                  onChange={(event) => {
+                    chargeFlow.edit();
+                    setChargeReason(event.target.value);
+                  }}
                   placeholder="e.g. Late payment penalty"
                 />
               </FormField>
@@ -548,7 +630,10 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
                   type="date"
                   value={chargeDate}
                   max={businessDate}
-                  onChange={(event) => setChargeDate(event.target.value)}
+                  onChange={(event) => {
+                    chargeFlow.edit();
+                    setChargeDate(event.target.value);
+                  }}
                 />
               </FormField>
 
@@ -568,7 +653,7 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
                 variant="secondary"
                 className="w-full"
                 loading={chargeMutation.isPending}
-                disabled={network.offline}
+                disabled={network.offline || chargeFlow.status === "unknown"}
               >
                 <Plus aria-hidden="true" className="h-4 w-4" />
                 Add charge
@@ -597,6 +682,11 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
                     <p className="text-sm text-foreground">
                       {formatLagosDateTime(repayment.paidAt)}
                     </p>
+                    {repayment.accountName && (
+                      <p className="text-xs text-muted-foreground">
+                        Paid from {repayment.accountName}
+                      </p>
+                    )}
                     {repayment.note && (
                       <p className="text-xs text-muted-foreground">
                         {repayment.note}
@@ -609,14 +699,25 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
                       className="font-medium"
                     />
                     {BigInt(repayment.interestPortionKobo) > 0n && (
-                      <p className="text-xs text-muted-foreground">
-                        incl. interest{" "}
-                        <Money
-                          kobo={repayment.interestPortionKobo}
-                          tone="neutral"
-                        />
-                      </p>
+                      <>
+                        <p className="text-xs text-muted-foreground">
+                          incl. interest{" "}
+                          <Money
+                            kobo={repayment.interestPortionKobo}
+                            tone="neutral"
+                          />
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Linked expense: Loan interest{" "}
+                          <Money
+                            kobo={repayment.interestPortionKobo}
+                            tone="neutral"
+                          />{" "}
+                          (automatic, read-only)
+                        </p>
+                      </>
                     )}
+                    {repayment.reversed && <Badge tone="warning">Reversed</Badge>}
                   </div>
                 </li>
               ))}

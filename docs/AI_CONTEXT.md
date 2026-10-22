@@ -549,7 +549,7 @@ must print "-- This is an empty migration." and exit 0.
 - Auth sessions are covered in `auth-sessions.test.ts`; the verified outcomes
   are recorded above.
 
-## 6a. Web integration status (7A and 7B)
+## 6a. Web integration status (7A to 7C)
 
 Switch: `NEXT_PUBLIC_API_MODE` (`mock` default, or `real`) and
 `NEXT_PUBLIC_API_BASE_URL`. In real mode a module without a real adapter shows
@@ -561,7 +561,8 @@ include the mode.
 | Auth, products, customers, suppliers, stock, debtors, payables (7A) | Connected |
 | Sales: list, detail, new, add/reverse payment, void, amend (7B) | Connected |
 | Purchases: list, detail, new, supplier payment/reverse, void, amend (7B) | Connected |
-| Accounts, statements, expenses, transfers, adjustments, loans (7C) | Not connected |
+| Accounts, paginated statements, expenses/categories, stock transfers, stock adjustments (7C Parts 1–4) | Connected |
+| Loans (7C Part 5) | Not connected; not started |
 | Reports, money flow, dashboard (7D) | Not connected |
 
 Mapping notes (7A and 7B):
@@ -584,34 +585,134 @@ Mapping notes (7A and 7B):
   whole base units. The web keeps the user's text and converts after exact
   validation.
 - Previews use shared exports `parseQuantityText`, `computeSaleLineTotalKobo`,
-  `quantityToWholeUnits` (scaled-bigint half-up), so they match the server.
-  Earlier float previews differed by 1 kobo in some cases and were removed.
+  and `quantityToWholeUnits` (scaled-bigint half-up). Sale totals match the
+  server domain; purchase totals are computed by the web but the purchase API
+  stores the submitted total without independently recomputing it (see 0b).
 - Overdraw arrives as 409 BUSINESS_RULE with details
   `{accountId, accountName, balanceKobo, amountKobo}`. Void of a purchase is
   blocked while any supplier payment is live (including one paid at receipt).
   Any purchase payment can be reversed; sale payment reversal applies only to
   later on-account payments on a sale with a customer.
-- `GET /accounts?includeInactive=false` returns `balanceKobo`, which the shared
-  `AccountDto` type lacks (cast in the pages). `accountingApi.listAccounts` is
-  not real yet; screens use `listPaymentAccounts`.
+- `GET /accounts` returns `balanceKobo`, which the shared `AccountDto` type
+  lacks. The real adapter exposes it through `AccountRecordDto`; mock-only
+  account note/update fields are mapped only for compatibility.
 - Query keys: an `useInfiniteQuery` must never share a key with a `useQuery`
   (data shapes differ; TypeScript cannot detect it). Infinite lists for
   products, customers and suppliers use `queryKeys.X.pages(...)`.
 
-Web checks last run: tsc clean, eslint 0 errors / 4 warnings (unused vars),
-web vitest 27/27, shared vitest 241/241, `pnpm build` OK. The API suite was
-not run for 7B (no API changes).
+### 7C contract mapping (Parts 1–4)
+
+All routes require the authenticated admin session. Validation failures use
+`400 VALIDATION` with `details` containing Zod issues or a `{field, ...}`
+object; missing rows are `404 NOT_FOUND`; business-rule rejections are
+`409 BUSINESS_RULE` with safe details; duplicate category keys are
+`409 CONFLICT` with the constraint name. Writes accept an `Idempotency-Key`.
+`MAPPABLE` means the web preserves the API response/request semantics while
+adapting an existing shared/mock DTO shape; no row below is blocked.
+
+| API route | Request | Response | Errors/details used by web | Web type / status |
+|---|---|---|---|---|
+| `GET /accounts?includeInactive` | query boolean | account rows include `balanceKobo` | `400 VALIDATION` issues | `AccountRecordDto[]` / MAPPABLE (API omits mock-only `note` and `updatedAt`, mapped to null and `createdAt`) |
+| `POST /accounts` | `{name,type}` | account row | `400 VALIDATION` issues | `CreateAccountDto` → `AccountRecordDto` / MAPPABLE (mock-only note hidden in real mode) |
+| `PATCH /accounts/:id` | `{name}` | account row | `400 VALIDATION`; `404 NOT_FOUND` `{accountId}` | `UpdateAccountDto` → `AccountRecordDto` / MAPPABLE (note hidden in real mode) |
+| `POST /accounts/:id/deactivate` / `reactivate` | empty body | account row | `404 NOT_FOUND`; `409 BUSINESS_RULE` for non-zero balance | `AccountRecordDto` / MAPPABLE (no reason body; UI shows API error) |
+| `POST /accounts/:id/opening-balance` | `{amountKobo,occurredAt?,note?}` | ledger entry | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` if already opened | `CreateOpeningBalanceDto` → `AccountLedgerEntryDto` / MAPPABLE |
+| `POST /accounts/:id/reconcile` | `{countedAmountKobo,reason,occurredAt?}` | ledger entry | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` for no-op/invalid count | Shared `deltaKobo` DTO mapped once to a fixed counted-amount body / MAPPABLE |
+| `POST /accounts/:id/movements` | `{type,amountKobo,note?,occurredAt?}` | ledger entry | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` with `{accountId}` and an account/balance/amount-specific message on overdraw | `AccountLedgerEntryDto` / MAPPABLE |
+| `GET /accounts/:id/statement` | `{from?,to?,limit?,cursor?}` | account, dates, opening/closing balances, entries with running balances, next cursor | `400 VALIDATION` (including date range); `404 NOT_FOUND` | `AccountStatementPageDto` / MATCH |
+| `POST /account-transfers` | `{fromAccountId,toAccountId,amountKobo,note?,occurredAt?}` | `{id}` | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` on overdraw | `CreateAccountTransferDto` → `{id}` / MATCH |
+| `POST /account-transfers/:id/reverse` | `{reason}` (1–500 chars) | reversal result | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` if already reversed or reversal would overdraw | `reverseTransfer(id,reason,key)` / MATCH |
+| `POST /account-entries/:id/reverse` | `{reason}` (1–500 chars) | reversal ledger entry | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` unless a reversible manual movement | `AccountLedgerEntryDto` / MATCH |
+| `GET /expense-categories?includeInactive` | query boolean | category rows | `400 VALIDATION` issues | `ExpenseCategoryDto[]` / MATCH |
+| `POST /expense-categories` | `{name}` | category row | `400 VALIDATION`; duplicate normalized name is `409 CONFLICT` with `expense_categories_normalizedKey_key` | `ExpenseCategoryDto` / MATCH |
+| `PATCH /expense-categories/:id` | `{name}` | category row | `400 VALIDATION` for invalid/missing category; `409 BUSINESS_RULE` for protected system categories; duplicate name conflict | `ExpenseCategoryDto` / MATCH |
+| `POST /expense-categories/:id/deactivate` / `reactivate` | empty body | category row | `400 VALIDATION` if missing; `409 BUSINESS_RULE` for protected/system or already-active-state rules | `ExpenseCategoryDto` / MATCH |
+| `GET /expenses` | Lagos date/category/channel/account/search/void filters + cursor/limit | `{items,nextCursor,from,to}` | `400 VALIDATION` issues and date cap | `ExpenseListPageDto` (array helper fetches all cursors) / MAPPABLE |
+| `GET /expenses/summary` | Lagos date/category/channel/account filters | summary with string kobo totals | `400 VALIDATION` issues and date cap | `ExpenseSummaryDto` / MATCH |
+| `POST /expenses` | `{categoryId,channel,description,amountKobo,expenseDate,accountId}` | expense row | `400 VALIDATION`; `409 BUSINESS_RULE` with `{accountId}` and an account/balance/amount-specific message on overdraw or inactive category | `CreateExpenseInput` → `ExpenseRecordDto` / MATCH |
+| `POST /expenses/:id/void` | `{reason}` | voided expense row | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` if already voided or system-managed loan interest | `ExpenseRecordDto` / MATCH |
+| `PUT /expenses/:id` | same create body | `{expense,voidedExpenseId}` | create/void errors plus `404 NOT_FOUND` | `ExpenseAmendResultDto` / MATCH |
+| `GET /transfers` | date/location/search/cursor/limit | `{items,nextCursor}` | `400 VALIDATION` issues and date cap | `StockTransferDto[]` (adapter fetches all cursors) / MAPPABLE |
+| `GET /transfers/:id` | id | transfer, lines, legs, movements | `400 VALIDATION`; `404 NOT_FOUND` | `TransferDetailDto` / MATCH |
+| `POST /transfers` | `{from,to,reason?,transferredAt?,lines:[{productId,quantityUnits}]}`; no `reference` | `{id}` | `400 VALIDATION` (including unknown product); `409 BUSINESS_RULE` for inactive product; `409 INSUFFICIENT_STOCK` `{productId,productName,location,availableUnits,requestedUnits}` | `CreateTransferDto` mapped without mock-only `reference`, then detail fetch / MAPPABLE |
+| `GET /adjustments` | date/location/status/search/cursor/limit | `{items,nextCursor}` | `400 VALIDATION` issues and date cap | `StockAdjustmentDto[]` (adapter fetches all cursors) / MAPPABLE |
+| `GET /adjustments/:id` | id | adjustment, lines, movements | `400 VALIDATION`; `404 NOT_FOUND` | `AdjustmentDetailDto` / MATCH |
+| `POST /adjustments` | `{reason,adjustedAt?,lines:[{productId,location,quantityDeltaUnits,unitCostKobo?,reason?}]}` | `{id}` | `400 VALIDATION` (including unknown product); `409 BUSINESS_RULE` for inactive product; `409 INSUFFICIENT_STOCK` for a negative adjustment beyond stock | `CreateAdjustmentDto` then detail fetch / MAPPABLE |
+| `POST /adjustments/:id/void` | empty body | void result | `404 NOT_FOUND`; `409 BUSINESS_RULE` if already voided or reversal is no longer possible | `void(id,key)` then detail fetch / MAPPABLE |
+
+Additional 7C notes:
+- The web uses `useInfiniteQuery` for account statements and displays the API
+  running balances; `GET /accounts` supplies authoritative balances. Statement
+  range-cap validation remains server-enforced.
+- `AccountDto` has mock-only note/update fields not returned by the account API;
+  real-mode note inputs are hidden. The account API does **not** enforce unique
+  account names, so the web prevents duplicates in its account form but cannot
+  guarantee this against simultaneous requests.
+- Expense category IDs are dynamic API IDs in real mode. `LOAN_INTEREST` is
+  excluded from manual choices. Expense amendment uses `PUT` and reports the
+  voided original ID; it never edits the original expense.
+- The transfer create endpoint is strict and does not accept a caller-supplied
+  reference. The real form hides the mock-only field; the API-generated
+  reference is shown in detail.
+- Stock transfers have no void route. Detail explicitly instructs owners to
+  make an opposite transfer to correct one.
+- Loans, reports, dashboard and manual cash-snapshot UI remain unconnected.
+
+Gate 0 evidence for 7C:
+- 0a: `parseQuantityText`, `quantityToWholeUnits`, and
+  `computeSaleLineTotalKobo` were the owner's approved shared exports;
+  `recordSale` calls the shared line-total function. The new test compares
+  12,000 deterministic generated quantity/price cases (including 3,000 exact
+  half cases) against a test-only copy of the prior formula, plus the
+  `592.05 × 50,769,390` hand-check. Shared tests passed 243/243.
+- 0a API focused tests: the first serial run failed (5 failed, 35 passed,
+  18 skipped); after the owner's request to rerun, the five requested files
+  passed 58/58: `sales-post`, `sales-lifecycle`, `sales-http`,
+  `purchases-receive`, `purchases-lifecycle`. This is not a full API suite.
+- 0b: `592.05 × 50,769,390 = 30,058,017,349.5` kobo, rounded half-up to
+  `30,058,017,350`. The purchase API does not recompute that total: it accepts
+  and stores `lineTotalKobo` supplied by the client (after validation). The
+  web uses the shared function, but the server's rounding cannot be compared
+  because it has no independent calculation; this remains a server trust-boundary
+  limitation, not a claim of API/domain parity.
+- 0d: `lib/query-keys.test.ts` guards representative list, infinite-pages and
+  detail key shapes; 1/1 passed in its focused run.
+- 0e: no `Number()` conversion of kobo remains in sales detail. Sales new/edit
+  use `Number()` only to convert validated stock-unit quantities. Accounting
+  overview bars convert an already-bounded bigint percentage (0–100) to a UI
+  number, not a kobo amount; no exact kobo conversion was needed.
+
+7C web checks: typecheck PASS; lint PASS with 0 errors / 3 warnings (all in
+untouched files: products detail, stock mock, stock real); web Vitest PASS
+31/31; production build PASS. The separate test-runner discovery call found no
+tests, so the actual result is from `pnpm --filter @fabtyna/web test`.
 
 ## 6b. Known limitations
 
-- Web 7B: kobo-to-text conversions still use `Number` in a few display-only
-  places (sale detail unpaid input prefill, accounting overview percentage
-  bars, purchase edit unit-cost prefill). They never reach the API.
-- Real mode: accounting, expenses, transfers, adjustments, loans, reports and
-  the dashboard are not connected (7C/7D).
+- Web sales/purchases: no kobo amount is converted through `Number()`.
+  Remaining numeric conversions are validated stock-unit quantities and
+  bounded 0–100 accounting percentage-bar values.
+- Real mode: loans, reports and the dashboard are not connected (7C Part 5
+  and 7D have not started).
 - Raw connection errors (ENOTFOUND, ECONNRESET) reach the API's 500 handler;
   only Prisma/PG codes P2028, P1001, P1017, 55P03, 40P01, 40001 map to 503.
 - Dev records are immutable and cannot be deleted; use clearly named test data.
+- Account names are NOT unique on the server: `POST /accounts` and
+  `PATCH /accounts/:id` do not check names and `accounts` has no unique name
+  constraint. The web form checks existing names only, so two simultaneous
+  requests (or another client) can create duplicates. Later fix: a transactional
+  name check (or a normalised-name unique index) in a new API migration.
+- Purchase average cost has a 1-kobo rounding divergence: on receive the
+  weighted average uses the invoice `lineTotalKobo`
+  (`operations.ts` `receivePurchase`), but a void/amend recompute replays stock
+  movements with `quantityUnits × unitCostKobo` (`stock.ts`
+  `recomputeAverageCostKobo`), where `unitCostKobo = roundHalfUp(lineTotalKobo,
+  quantityUnits)` is already rounded. Example (units 1 @ 50, then 3 units for a
+  100-kobo line): receive gives 38, recompute gives 37. Reported to the owner;
+  not changed.
+- The purchase API stores the client-supplied `lineTotalKobo` and derives
+  `unitCostKobo` itself; it never recomputes a line total from quantity ×
+  price, so "server rounding parity" with the web preview is not a server rule.
 
 ### 4A / 4B backend coverage snapshot
 

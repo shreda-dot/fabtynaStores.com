@@ -92,6 +92,7 @@ export const queryKeys = {
     all: key("loans"),
     list: key("loans", "list"),
     detail: (id: string) => key("loans", "detail", id),
+    pages: (filters: unknown) => key("loans", "pages", filters),
   },
   cash: {
     all: key("cash"),

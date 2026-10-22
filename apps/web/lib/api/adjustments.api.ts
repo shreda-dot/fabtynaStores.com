@@ -17,6 +17,6 @@ export type AdjustmentDetailDto = StockAdjustmentDto & {
 export interface AdjustmentsApi {
   list(): Promise<StockAdjustmentDto[]>;
   getById(id: string): Promise<AdjustmentDetailDto>;
-  create(input: CreateAdjustmentDto): Promise<AdjustmentDetailDto>;
-  void(id: string): Promise<AdjustmentDetailDto>;
+  create(input: CreateAdjustmentDto, idempotencyKey?: string): Promise<AdjustmentDetailDto>;
+  void(id: string, idempotencyKey?: string): Promise<AdjustmentDetailDto>;
 }

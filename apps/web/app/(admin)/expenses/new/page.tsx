@@ -5,14 +5,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
   createLagosDateTime,
   formatNaira,
   getLagosBusinessDate,
-  type CreateExpenseDto,
-  type ExpenseCategory,
   type SaleChannel,
 } from "@fabtyna/shared";
+import type {
+  CreateExpenseInput,
+  ExpenseAmendResultDto,
+  ExpenseCategoryDto,
+  ExpenseRecordDto,
+} from "@/lib/api/expenses.api";
 import { MoneyInput } from "@/components/money-input";
 import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
 import { Button, buttonClasses } from "@/components/ui/button";
@@ -21,10 +26,12 @@ import { FormField } from "@/components/ui/form-field";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { accountingApi, expensesApi } from "@/lib/api";
+import { accountingApi, expensesApi, isMockApiMode } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { toast } from "@/stores/toast-store";
+import { useWriteFlow } from "@/hooks/use-write-flow";
+import { WriteFlowStatus } from "@/components/write-flow-status";
 
 const CHANNELS: { value: SaleChannel; label: string }[] = [
   { value: "RETAIL", label: "Retail (Fridge)" },
@@ -32,7 +39,7 @@ const CHANNELS: { value: SaleChannel; label: string }[] = [
   { value: "BOTH", label: "Both (split equally)" },
 ];
 
-const CATEGORIES: { value: ExpenseCategory; label: string }[] = [
+const CATEGORIES: { value: string; label: string }[] = [
   { value: "RENT", label: "Rent" },
   { value: "UTILITY", label: "Utility" },
   { value: "SALARY", label: "Salary" },
@@ -67,34 +74,77 @@ function validateDate(value: string): string {
 
 export default function NewExpensePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const amendId = searchParams.get("amendId");
   const queryClient = useQueryClient();
   const network = useNetworkStatus();
+  const writeFlow = useWriteFlow();
+  const [lastInput, setLastInput] = useState<CreateExpenseInput | null>(null);
   const accountsQuery = useQuery({
     queryKey: queryKeys.accounting.accounts,
     queryFn: () => accountingApi.listAccounts(),
   });
+  const categoriesQuery = useQuery({
+    queryKey: [...queryKeys.expenses.all, "categories"],
+    queryFn: async () =>
+      (await expensesApi.listCategories?.()) ??
+      CATEGORIES.map((category): ExpenseCategoryDto => ({
+        id: category.value,
+        name: category.label,
+        code: category.value,
+        isActive: true,
+        createdAt: "",
+        expenseCount: 0,
+      })),
+  });
+  const availableCategories = (categoriesQuery.data ?? []).filter(
+    (row) => row.isActive && row.code !== "LOAN_INTEREST",
+  );
 
-  const [channel, setChannel] = useState<SaleChannel>("RETAIL");
-  const [category, setCategory] = useState<ExpenseCategory>("OTHER");
-  const [description, setDescription] = useState("");
-  const [amountKobo, setAmountKobo] = useState("");
-  const [expenseDate, setExpenseDate] = useState(() => getLagosBusinessDate());
-  const [accountId, setAccountId] = useState("");
+  const [channel, setChannel] = useState<SaleChannel>(() =>
+    searchParams.get("channel") === "WHOLESALE" || searchParams.get("channel") === "BOTH"
+      ? searchParams.get("channel") as SaleChannel
+      : "RETAIL",
+  );
+  const [category, setCategory] = useState(() => searchParams.get("categoryId") ?? "");
+  const [description, setDescription] = useState(() => searchParams.get("description") ?? "");
+  const [amountKobo, setAmountKobo] = useState(() => searchParams.get("amountKobo") ?? "");
+  const [expenseDate, setExpenseDate] = useState(() => searchParams.get("expenseDate") ?? getLagosBusinessDate());
+  const [accountId, setAccountId] = useState(() => searchParams.get("accountId") ?? "");
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const selectedCategoryId =
+    category ||
+    availableCategories.find((row) => row.code === "OTHER")?.id ||
+    availableCategories[0]?.id ||
+    "";
 
   const submitting = useRef(false);
 
   const createMutation = useMutation({
-    mutationFn: (input: CreateExpenseDto) => expensesApi.create(input),
-    onSuccess: async () => {
+    mutationFn: async (input: CreateExpenseInput) => {
+      setLastInput(input);
+      if (isMockApiMode) {
+        return amendId
+          ? expensesApi.amend(amendId, input)
+          : expensesApi.create(input);
+      }
+      return writeFlow.run((key): Promise<ExpenseRecordDto | ExpenseAmendResultDto> =>
+        amendId
+          ? expensesApi.amend(amendId, input, key)
+          : expensesApi.create(input, key),
+      );
+    },
+    onSuccess: async (result) => {
+      if (!result) return;
       await queryClient.invalidateQueries({ queryKey: queryKeys.expenses.all });
       await queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
       await queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
-      toast.success(`Expense of ${formatNaira(amountKobo)} recorded.`);
+      toast.success(
+        amendId && "voidedExpenseId" in result
+          ? `Expense amended; original ${result.voidedExpenseId} was voided.`
+          : `Expense of ${formatNaira(amountKobo)} recorded.`,
+      );
       router.push("/expenses");
-    },
-    onError: (error) => {
-      toast.error(toUserMessage(error));
     },
   });
 
@@ -115,6 +165,7 @@ export default function NewExpensePage() {
     if (amountError !== "") found[AMOUNT_ID] = amountError;
     const dateError = validateDate(expenseDate);
     if (dateError !== "") found[DATE_ID] = dateError;
+    if (selectedCategoryId === "") found["expense-category"] = "Choose an active category.";
     if (defaultAccountId(accountsQuery.data ?? []) === "") {
       found["expense-account"] =
         "Add an active account before recording this expense.";
@@ -143,9 +194,9 @@ export default function NewExpensePage() {
       return;
     }
 
-    const input: CreateExpenseDto = {
+    const input: CreateExpenseInput = {
       channel,
-      category,
+      categoryId: selectedCategoryId,
       description: description.trim(),
       amountKobo,
       expenseDate: createLagosDateTime(expenseDate).toISOString(),
@@ -167,8 +218,10 @@ export default function NewExpensePage() {
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <PageHeader
-        title="New expense"
-        description="Record an operating cost and assign it to a channel."
+        title={amendId ? "Amend expense" : "New expense"}
+        description={amendId
+          ? "Amending voids the original expense and creates a new immutable record."
+          : "Record an operating cost and assign it to a channel."}
         actions={
           <Link
             href="/expenses"
@@ -210,9 +263,10 @@ export default function NewExpensePage() {
                 <Select
                   id="expense-channel"
                   value={channel}
-                  onChange={(event) =>
-                    setChannel(event.target.value as SaleChannel)
-                  }
+                  onChange={(event) => {
+                    writeFlow.edit();
+                    setChannel(event.target.value as SaleChannel);
+                  }}
                 >
                   {CHANNELS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -225,14 +279,16 @@ export default function NewExpensePage() {
               <FormField id="expense-category" label="Category">
                 <Select
                   id="expense-category"
-                  value={category}
-                  onChange={(event) =>
-                    setCategory(event.target.value as ExpenseCategory)
-                  }
+                  value={selectedCategoryId}
+                  onChange={(event) => {
+                    writeFlow.edit();
+                    setCategory(event.target.value);
+                  }}
                 >
-                  {CATEGORIES.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
+                  <option value="">Choose category</option>
+                  {availableCategories.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.name}
                     </option>
                   ))}
                 </Select>
@@ -244,7 +300,10 @@ export default function NewExpensePage() {
               label="Paid from"
               accounts={accountsQuery.data ?? []}
               accountId={accountId}
-              onChange={setAccountId}
+              onChange={(value) => {
+                writeFlow.edit();
+                setAccountId(value);
+              }}
               disabled={accountsQuery.isPending || accountsQuery.isError}
             />
             {errors["expense-account"] && (
@@ -255,6 +314,11 @@ export default function NewExpensePage() {
             {accountsQuery.isError && (
               <p role="alert" className="text-sm text-danger">
                 Accounts could not be loaded: {toUserMessage(accountsQuery.error)}
+              </p>
+            )}
+            {categoriesQuery.isError && (
+              <p role="alert" className="text-sm text-danger">
+                Expense categories could not be loaded: {toUserMessage(categoriesQuery.error)}
               </p>
             )}
 
@@ -270,6 +334,7 @@ export default function NewExpensePage() {
                 aria-invalid={errors[DESCRIPTION_ID] !== undefined}
                 onChange={(event) => {
                   const value = event.target.value;
+                  writeFlow.edit();
                   setDescription(value);
                   if (errors[DESCRIPTION_ID] !== undefined)
                     setFieldError(DESCRIPTION_ID, validateDescription(value));
@@ -290,6 +355,7 @@ export default function NewExpensePage() {
                 label="Amount"
                 defaultValueKobo="0"
                 onKoboChange={(value) => {
+                  writeFlow.edit();
                   setAmountKobo(value);
                   if (
                     errors[AMOUNT_ID] !== undefined &&
@@ -304,6 +370,12 @@ export default function NewExpensePage() {
                   {errors[AMOUNT_ID]}
                 </p>
               )}
+              {channel === "BOTH" && /^[0-9]+$/.test(amountKobo) && BigInt(amountKobo) > 0n && (
+                <p className="text-sm text-muted-foreground">
+                  Split: retail {formatNaira(BigInt(amountKobo) / 2n)} · wholesale{" "}
+                  {formatNaira(BigInt(amountKobo) - BigInt(amountKobo) / 2n)}
+                </p>
+              )}
             </div>
 
             <FormField id={DATE_ID} label="Date" error={errors[DATE_ID]}>
@@ -315,6 +387,7 @@ export default function NewExpensePage() {
                 aria-invalid={errors[DATE_ID] !== undefined}
                 onChange={(event) => {
                   const value = event.target.value;
+                  writeFlow.edit();
                   setExpenseDate(value);
                   if (errors[DATE_ID] !== undefined)
                     setFieldError(DATE_ID, validateDate(value));
@@ -330,6 +403,15 @@ export default function NewExpensePage() {
                 {toUserMessage(createMutation.error)}
               </p>
             )}
+            <WriteFlowStatus
+              flow={writeFlow}
+              onRetry={() => {
+                if (lastInput) createMutation.mutate(lastInput);
+              }}
+              checkHref="/expenses"
+              checkLabel="Check expenses"
+              showFieldErrors
+            />
             {network.offline && (
               <p className="text-sm text-warning">
                 You&rsquo;re offline. Changes can&rsquo;t be saved until you
@@ -348,9 +430,9 @@ export default function NewExpensePage() {
               type="submit"
               size="lg"
               loading={createMutation.isPending}
-              disabled={network.offline}
+              disabled={network.offline || createMutation.isPending || writeFlow.status === "unknown" || categoriesQuery.isPending || accountsQuery.isPending}
             >
-              Save expense
+              {amendId ? "Void and recreate expense" : "Save expense"}
             </Button>
           </CardFooter>
         </Card>

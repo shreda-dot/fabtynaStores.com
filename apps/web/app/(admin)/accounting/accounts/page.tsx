@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Banknote, Plus, RefreshCw } from "lucide-react";
 import {
   createLagosDateTime,
@@ -17,6 +17,7 @@ import {
   type ReconcileAccountDto,
   type UpdateAccountDto,
 } from "@fabtyna/shared";
+import type { AccountStatementEntryDto } from "@/lib/api/accounting.api";
 import { MoneyInput } from "@/components/money-input";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -31,6 +32,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { accountingApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { useWriteFlow } from "@/hooks/use-write-flow";
+import { WriteFlowStatus } from "@/components/write-flow-status";
+import { isMockApiMode } from "@/lib/api";
 
 type ManualType = Extract<
   AccountEntryType,
@@ -41,9 +45,12 @@ type AccountOperation =
   | { kind: "create"; input: CreateAccountDto }
   | { kind: "update"; id: string; input: UpdateAccountDto }
   | { kind: "deactivate"; id: string; input: DeactivateAccountDto }
+  | { kind: "reactivate"; id: string }
   | { kind: "opening"; input: CreateOpeningBalanceDto }
-  | { kind: "reconcile"; input: ReconcileAccountDto }
+  | { kind: "reconcile"; input: ReconcileAccountDto; countedAmountKobo: string }
   | { kind: "transfer"; input: CreateAccountTransferDto }
+  | { kind: "reverseTransfer"; id: string; reason: string }
+  | { kind: "reverseEntry"; id: string; reason: string }
   | {
       kind: "manual";
       input: {
@@ -95,6 +102,14 @@ function accountBalance(
   );
 }
 
+function displayedAccountBalance(
+  account: AccountDto,
+  entries: readonly AccountLedgerEntryDto[],
+): bigint {
+  const balanceKobo = (account as AccountDto & { balanceKobo?: string }).balanceKobo;
+  return balanceKobo === undefined ? accountBalance(account.id, entries) : BigInt(balanceKobo);
+}
+
 function runningEntries(
   accountId: string,
   entries: readonly AccountLedgerEntryDto[],
@@ -122,10 +137,16 @@ function runningEntries(
 
 export default function AccountsPage() {
   const queryClient = useQueryClient();
+  const writeFlow = useWriteFlow();
+  const [lastOperation, setLastOperation] = useState<AccountOperation | null>(null);
+  const [lastTransferId, setLastTransferId] = useState("");
+  const [transferReversalReason, setTransferReversalReason] = useState("");
+  const [entryReversalTarget, setEntryReversalTarget] = useState<AccountStatementEntryDto | null>(null);
+  const [entryReversalReason, setEntryReversalReason] = useState("");
   const businessDate = getLagosBusinessDate();
   const [selectedAccountId, setSelectedAccountId] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const [fromDate, setFromDate] = useState(() => isMockApiMode ? "" : getLagosBusinessDate());
+  const [toDate, setToDate] = useState(() => isMockApiMode ? "" : getLagosBusinessDate());
   const [createName, setCreateName] = useState("");
   const [createType, setCreateType] = useState<AccountDto["type"]>("CASH");
   const [createNote, setCreateNote] = useState("");
@@ -172,7 +193,7 @@ export default function AccountsPage() {
       );
       return entries.flat();
     },
-    enabled: accounts.length > 0,
+    enabled: isMockApiMode && accounts.length > 0,
   });
   const entries = ledgerQuery.data ?? EMPTY_LEDGER_ENTRIES;
   const activeAccounts = accounts.filter((account) => account.isActive);
@@ -182,41 +203,126 @@ export default function AccountsPage() {
     accounts[0] ??
     null;
   const selectedBalance = selectedAccount
-    ? accountBalance(selectedAccount.id, entries)
+    ? displayedAccountBalance(selectedAccount, entries)
     : 0n;
-  const statementRows = selectedAccount
-    ? runningEntries(selectedAccount.id, entries, fromDate, toDate)
-    : [];
+  const statementQuery = useInfiniteQuery({
+    queryKey: ["accounting", "statement", selectedAccount?.id ?? "", fromDate, toDate],
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }): Promise<{
+      entries: AccountStatementEntryDto[];
+      openingBalanceKobo: string;
+      closingBalanceKobo: string;
+      nextCursor: string | null;
+    }> => {
+      if (!selectedAccount) {
+        return { entries: [], openingBalanceKobo: "0", closingBalanceKobo: "0", nextCursor: null };
+      }
+      if (accountingApi.statementPage) {
+        return accountingApi.statementPage(selectedAccount.id, {
+          from: fromDate,
+          to: toDate,
+          cursor: pageParam,
+        });
+      }
+      const rows = runningEntries(selectedAccount.id, entries, fromDate, toDate);
+      return {
+        entries: rows.map(({ entry, balanceKobo }) => ({
+          id: entry.id,
+          type: entry.type,
+          amountKobo: entry.amountKobo,
+          occurredAt: entry.occurredAt,
+          note: entry.note,
+          sourceDescription: ENTRY_LABELS[entry.type],
+          isReversal: entry.reversesEntryId !== null,
+          reversesEntryId: entry.reversesEntryId,
+          reversedByEntryId: null,
+          runningBalanceKobo: balanceKobo.toString(),
+        })),
+        openingBalanceKobo: "0",
+        closingBalanceKobo: rows[0]?.balanceKobo.toString() ?? selectedBalance.toString(),
+        nextCursor: null,
+      };
+    },
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: selectedAccount !== null && (!isMockApiMode || ledgerQuery.isSuccess),
+  });
+  const statementRows = statementQuery.data?.pages.flatMap((page) => page.entries) ?? [];
+  const statementSummary = statementQuery.data?.pages[0];
 
   const operationMutation = useMutation({
-    mutationFn: async (operation: AccountOperation): Promise<unknown> => {
-      switch (operation.kind) {
-        case "create":
-          return accountingApi.createAccount(operation.input);
-        case "update":
-          return accountingApi.updateAccount(operation.id, operation.input);
-        case "deactivate":
-          return accountingApi.deactivateAccount(operation.id, operation.input);
-        case "opening":
-          return accountingApi.recordOpeningBalance(operation.input);
-        case "reconcile":
-          return accountingApi.reconcileAccount(operation.input);
-        case "transfer":
-          return accountingApi.recordTransfer(operation.input);
-        case "manual":
-          return accountingApi.recordManualEntry(operation.input);
+    mutationFn: async (operation: AccountOperation): Promise<unknown | null> => {
+      const isRetry = JSON.stringify(operation) === JSON.stringify(lastOperation);
+      if (!isMockApiMode && writeFlow.status === "unknown" && !isRetry) return null;
+      if (!isMockApiMode && writeFlow.status === "failed" && !isRetry) writeFlow.edit();
+      setLastOperation(operation);
+      const execute = async (key?: string): Promise<unknown> => {
+        let value: unknown;
+        switch (operation.kind) {
+          case "create":
+            value = await accountingApi.createAccount(operation.input, key);
+            break;
+          case "update":
+            value = await accountingApi.updateAccount(operation.id, operation.input, key);
+            break;
+          case "deactivate":
+            value = await accountingApi.deactivateAccount(operation.id, operation.input, key);
+            break;
+          case "reactivate":
+            if (!accountingApi.reactivateAccount) throw new Error("Account reactivation is unavailable.");
+            value = await accountingApi.reactivateAccount(operation.id, key);
+            break;
+          case "opening":
+            value = await accountingApi.recordOpeningBalance(operation.input, key);
+            break;
+          case "reconcile":
+            value = await accountingApi.reconcileAccount(
+              operation.input,
+              key,
+              operation.countedAmountKobo,
+            );
+            break;
+          case "transfer":
+            value = await accountingApi.recordTransfer(operation.input, key);
+            break;
+          case "reverseTransfer":
+            if (!accountingApi.reverseTransfer) throw new Error("Transfer reversal is unavailable.");
+            value = await accountingApi.reverseTransfer(operation.id, operation.reason, key);
+            break;
+          case "reverseEntry":
+            if (!accountingApi.reverseEntry) throw new Error("Entry reversal is unavailable.");
+            value = await accountingApi.reverseEntry(operation.id, operation.reason, key);
+            break;
+          case "manual":
+            value = await accountingApi.recordManualEntry(operation.input, key);
+            break;
+        }
+        return value;
+      };
+      if (isMockApiMode) return (await execute()) ?? true;
+      const result = await writeFlow.run(async (key) => ({ value: await execute(key) }));
+      if (!result) return null;
+      if (operation.kind === "transfer" && typeof result.value === "object" && result.value !== null && "id" in result.value) {
+        setLastTransferId(String(result.value.id));
       }
+      if (operation.kind === "reverseTransfer") setLastTransferId("");
+      return result.value ?? true;
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      if (result === null) return;
       setActionError("");
+      setEntryReversalTarget(null);
       await queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.accounting.accounts });
     },
-    onError: (error) => setActionError(toUserMessage(error)),
   });
 
   function submitCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionError("");
+    if (!isMockApiMode && accounts.some((account) => account.name.trim().toLocaleLowerCase() === createName.trim().toLocaleLowerCase())) {
+      setActionError("An account with this name already exists. Choose a different name.");
+      return;
+    }
     operationMutation.mutate({
       kind: "create",
       input: {
@@ -238,6 +344,10 @@ export default function AccountsPage() {
   function submitEdit(event: FormEvent<HTMLFormElement>, account: AccountDto) {
     event.preventDefault();
     setActionError("");
+    if (!isMockApiMode && accounts.some((candidate) => candidate.id !== account.id && candidate.name.trim().toLocaleLowerCase() === editName.trim().toLocaleLowerCase())) {
+      setActionError("An account with this name already exists. Choose a different name.");
+      return;
+    }
     operationMutation.mutate({
       kind: "update",
       id: account.id,
@@ -280,6 +390,7 @@ export default function AccountsPage() {
     }
     operationMutation.mutate({
       kind: "reconcile",
+      countedAmountKobo: reconcileCount,
       input: {
         accountId: selectedAccount.id,
         deltaKobo: deltaKobo.toString(),
@@ -341,7 +452,7 @@ export default function AccountsPage() {
   function submitDeactivation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!deactivateTarget) return;
-    if (deactivateReason.trim() === "") {
+    if (isMockApiMode && deactivateReason.trim() === "") {
       setActionError("Enter a reason for deactivating this account.");
       return;
     }
@@ -399,6 +510,42 @@ export default function AccountsPage() {
           {actionError || toUserMessage(operationMutation.error)}
         </p>
       )}
+      <WriteFlowStatus
+        flow={writeFlow}
+        onRetry={() => {
+          if (lastOperation) operationMutation.mutate(lastOperation);
+        }}
+        checkHref="/accounting/accounts"
+        checkLabel="Check accounts"
+        showFieldErrors
+      />
+      {lastTransferId && (
+        <Card>
+          <CardHeader title="Reverse the recent account transfer" description="A transfer reversal appends exact opposite entries; it does not delete history." />
+          <CardBody className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <FormField id="transfer-reversal-reason" label="Reason">
+              <Input
+                id="transfer-reversal-reason"
+                value={transferReversalReason}
+                onChange={(event) => { writeFlow.edit(); setTransferReversalReason(event.target.value); }}
+                maxLength={500}
+              />
+            </FormField>
+            <Button
+              variant="secondary"
+              disabled={operationMutation.isPending || transferReversalReason.trim() === ""}
+              loading={operationMutation.isPending}
+              onClick={() => operationMutation.mutate({
+                kind: "reverseTransfer",
+                id: lastTransferId,
+                reason: transferReversalReason.trim(),
+              })}
+            >
+              Reverse transfer
+            </Button>
+          </CardBody>
+        </Card>
+      )}
 
       {accountsQuery.isPending ? (
         <Skeleton variant="card" count={2} />
@@ -418,7 +565,7 @@ export default function AccountsPage() {
                   description={`${account.type} · ${account.isActive ? "Active" : "Deactivated"}`}
                   action={
                     <Money
-                      kobo={accountBalance(account.id, entries)}
+                    kobo={displayedAccountBalance(account, entries)}
                       className="text-lg font-semibold"
                     />
                   }
@@ -433,18 +580,20 @@ export default function AccountsPage() {
                         <Input
                           id={`account-name-${account.id}`}
                           value={editName}
-                          onChange={(event) => setEditName(event.target.value)}
+                          onChange={(event) => { writeFlow.edit(); setEditName(event.target.value); }}
                           required
                         />
                       </FormField>
-                      <FormField id={`account-note-${account.id}`} label="Note (optional)">
-                        <Textarea
-                          id={`account-note-${account.id}`}
-                          value={editNote}
-                          rows={2}
-                          onChange={(event) => setEditNote(event.target.value)}
-                        />
-                      </FormField>
+                      {isMockApiMode && (
+                        <FormField id={`account-note-${account.id}`} label="Note (optional)">
+                          <Textarea
+                            id={`account-note-${account.id}`}
+                            value={editNote}
+                            rows={2}
+                            onChange={(event) => { writeFlow.edit(); setEditNote(event.target.value); }}
+                          />
+                        </FormField>
+                      )}
                       <div className="flex gap-2">
                         <Button type="submit" size="sm" loading={operationMutation.isPending}>
                           Save
@@ -496,6 +645,18 @@ export default function AccountsPage() {
                             Deactivate
                           </Button>
                         )}
+                        {!isMockApiMode && !account.isActive && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            loading={operationMutation.isPending}
+                            disabled={operationMutation.isPending}
+                            onClick={() => operationMutation.mutate({ kind: "reactivate", id: account.id })}
+                          >
+                            Reactivate
+                          </Button>
+                        )}
                       </div>
                     </>
                   )}
@@ -512,7 +673,7 @@ export default function AccountsPage() {
                   <Input
                     id="new-account-name"
                     value={createName}
-                    onChange={(event) => setCreateName(event.target.value)}
+                    onChange={(event) => { writeFlow.edit(); setCreateName(event.target.value); }}
                     required
                   />
                 </FormField>
@@ -520,20 +681,22 @@ export default function AccountsPage() {
                   <Select
                     id="new-account-type"
                     value={createType}
-                    onChange={(event) => setCreateType(event.target.value as AccountDto["type"])}
+                    onChange={(event) => { writeFlow.edit(); setCreateType(event.target.value as AccountDto["type"]); }}
                   >
                     <option value="CASH">Cash</option>
                     <option value="BANK">Bank</option>
                     <option value="POS">POS</option>
                   </Select>
                 </FormField>
-                <FormField id="new-account-note" label="Note (optional)">
-                  <Input
-                    id="new-account-note"
-                    value={createNote}
-                    onChange={(event) => setCreateNote(event.target.value)}
-                  />
-                </FormField>
+                {isMockApiMode && (
+                  <FormField id="new-account-note" label="Note (optional)">
+                    <Input
+                      id="new-account-note"
+                      value={createNote}
+                      onChange={(event) => { writeFlow.edit(); setCreateNote(event.target.value); }}
+                    />
+                  </FormField>
+                )}
                 <div className="flex items-end">
                   <Button type="submit" loading={operationMutation.isPending}>
                     <Plus aria-hidden="true" className="h-4 w-4" />
@@ -544,11 +707,11 @@ export default function AccountsPage() {
             </CardBody>
           </Card>
 
-          {ledgerQuery.isError ? (
+          {statementQuery.isError || (isMockApiMode && ledgerQuery.isError) ? (
             <ErrorState
               title="Account statements could not be loaded"
-              message={toUserMessage(ledgerQuery.error)}
-              onRetry={() => void ledgerQuery.refetch()}
+              message={toUserMessage(statementQuery.error ?? ledgerQuery.error)}
+              onRetry={() => void (isMockApiMode && ledgerQuery.isError ? ledgerQuery.refetch() : statementQuery.refetch())}
             />
           ) : (
             <>
@@ -594,7 +757,17 @@ export default function AccountsPage() {
                       </FormField>
                     </div>
                   )}
-                  {ledgerQuery.isPending ? (
+                  {!isMockApiMode && statementSummary && (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <p className="rounded-md bg-muted p-3 text-sm">
+                        Opening balance: <Money kobo={statementSummary.openingBalanceKobo} />
+                      </p>
+                      <p className="rounded-md bg-muted p-3 text-sm">
+                        Closing balance: <Money kobo={statementSummary.closingBalanceKobo} />
+                      </p>
+                    </div>
+                  )}
+                  {statementQuery.isPending ? (
                     <Skeleton variant="row" count={4} />
                   ) : statementRows.length === 0 ? (
                     <EmptyState
@@ -612,16 +785,17 @@ export default function AccountsPage() {
                             <th className="py-2 pr-3">Note</th>
                             <th className="py-2 pr-3 text-right">Amount</th>
                             <th className="py-2 text-right">Balance</th>
+                            <th className="py-2 text-right">Action</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {statementRows.map(({ entry, balanceKobo }) => (
+                          {statementRows.map((entry) => (
                             <tr key={entry.id} className="border-b border-border/60">
                               <td className="py-2.5 pr-3 whitespace-nowrap">
-                                {formatLagosDateTime(entry.occurredAt)}
+                                {entry.occurredAt ? formatLagosDateTime(entry.occurredAt) : "—"}
                               </td>
                               <td className="py-2.5 pr-3">
-                                {ENTRY_LABELS[entry.type]}
+                                {entry.sourceDescription || ENTRY_LABELS[entry.type]}
                                 {entry.reversesEntryId !== null && " (reversal)"}
                               </td>
                               <td className="max-w-xs py-2.5 pr-3 text-muted-foreground">
@@ -631,12 +805,40 @@ export default function AccountsPage() {
                                 <Money kobo={entry.amountKobo} />
                               </td>
                               <td className="py-2.5 text-right font-medium">
-                                <Money kobo={balanceKobo} />
+                                <Money kobo={entry.runningBalanceKobo} />
+                              </td>
+                              <td className="py-2.5 text-right">
+                                {!isMockApiMode &&
+                                  entry.reversesEntryId === null &&
+                                  ["OWNER_CAPITAL", "OWNER_DRAWING", "OTHER_INCOME", "BANK_OR_POS_CHARGE"].includes(entry.type) && (
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      disabled={operationMutation.isPending}
+                                      onClick={() => {
+                                        setEntryReversalTarget(entry);
+                                        setEntryReversalReason("");
+                                      }}
+                                    >
+                                      Reverse
+                                    </Button>
+                                  )}
                               </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
+                    </div>
+                  )}
+                  {statementQuery.hasNextPage && (
+                    <div className="flex justify-center">
+                      <Button
+                        variant="secondary"
+                        loading={statementQuery.isFetchingNextPage}
+                        onClick={() => void statementQuery.fetchNextPage()}
+                      >
+                        Load more entries
+                      </Button>
                     </div>
                   )}
                 </CardBody>
@@ -655,7 +857,7 @@ export default function AccountsPage() {
                           id="opening-balance"
                           label="Opening balance"
                           defaultValueKobo="0"
-                          onKoboChange={setOpeningAmount}
+                          onKoboChange={(value) => { writeFlow.edit(); setOpeningAmount(value); }}
                         />
                         <Button
                           type="submit"
@@ -682,14 +884,14 @@ export default function AccountsPage() {
                           id="reconcile-count"
                           label="Counted amount"
                           defaultValueKobo={selectedBalance.toString()}
-                          onKoboChange={setReconcileCount}
+                          onKoboChange={(value) => { writeFlow.edit(); setReconcileCount(value); }}
                         />
                         <FormField id="reconcile-reason" label="Reason">
                           <Textarea
                             id="reconcile-reason"
                             value={reconcileReason}
                             rows={2}
-                            onChange={(event) => setReconcileReason(event.target.value)}
+                            onChange={(event) => { writeFlow.edit(); setReconcileReason(event.target.value); }}
                           />
                         </FormField>
                         <Button
@@ -713,7 +915,7 @@ export default function AccountsPage() {
                             <Select
                               id="transfer-from"
                               value={transferFromId || selectedAccount.id}
-                              onChange={(event) => setTransferFromId(event.target.value)}
+                              onChange={(event) => { writeFlow.edit(); setTransferFromId(event.target.value); }}
                             >
                               {activeAccounts.map((account) => (
                                 <option key={account.id} value={account.id}>{account.name}</option>
@@ -724,7 +926,7 @@ export default function AccountsPage() {
                             <Select
                               id="transfer-to"
                               value={transferToId}
-                              onChange={(event) => setTransferToId(event.target.value)}
+                              onChange={(event) => { writeFlow.edit(); setTransferToId(event.target.value); }}
                             >
                               <option value="">Select account</option>
                               {activeAccounts.filter((account) => account.id !== (transferFromId || selectedAccount.id)).map((account) => (
@@ -737,13 +939,13 @@ export default function AccountsPage() {
                           id="transfer-amount"
                           label="Amount"
                           defaultValueKobo="0"
-                          onKoboChange={setTransferAmount}
+                          onKoboChange={(value) => { writeFlow.edit(); setTransferAmount(value); }}
                         />
                         <FormField id="transfer-note" label="Note (optional)">
                           <Input
                             id="transfer-note"
                             value={transferNote}
-                            onChange={(event) => setTransferNote(event.target.value)}
+                            onChange={(event) => { writeFlow.edit(); setTransferNote(event.target.value); }}
                           />
                         </FormField>
                         <Button type="submit" variant="secondary" loading={operationMutation.isPending}>
@@ -761,7 +963,7 @@ export default function AccountsPage() {
                           <Select
                             id="manual-type"
                             value={manualType}
-                            onChange={(event) => setManualType(event.target.value as ManualType)}
+                            onChange={(event) => { writeFlow.edit(); setManualType(event.target.value as ManualType); }}
                           >
                             {MANUAL_TYPES.map((item) => (
                               <option key={item.value} value={item.value}>{item.label}</option>
@@ -772,14 +974,14 @@ export default function AccountsPage() {
                           id="manual-amount"
                           label="Amount"
                           defaultValueKobo="0"
-                          onKoboChange={setManualAmount}
+                          onKoboChange={(value) => { writeFlow.edit(); setManualAmount(value); }}
                         />
                         <FormField id="manual-note" label="Description / reason">
                           <Textarea
                             id="manual-note"
                             value={manualNote}
                             rows={2}
-                            onChange={(event) => setManualNote(event.target.value)}
+                            onChange={(event) => { writeFlow.edit(); setManualNote(event.target.value); }}
                           />
                         </FormField>
                         <Button type="submit" variant="secondary" loading={operationMutation.isPending}>
@@ -807,18 +1009,20 @@ export default function AccountsPage() {
             <p className="text-sm text-muted-foreground">
               {deactivateTarget.name} balance:{" "}
               <Money
-                kobo={accountBalance(deactivateTarget.id, entries)}
+                kobo={displayedAccountBalance(deactivateTarget, entries)}
                 className="font-medium"
               />
             </p>
-            <FormField id="deactivate-reason" label="Reason">
-              <Textarea
-                id="deactivate-reason"
-                value={deactivateReason}
-                rows={3}
-                onChange={(event) => setDeactivateReason(event.target.value)}
-              />
-            </FormField>
+            {isMockApiMode && (
+              <FormField id="deactivate-reason" label="Reason">
+                <Textarea
+                  id="deactivate-reason"
+                  value={deactivateReason}
+                  rows={3}
+                  onChange={(event) => { writeFlow.edit(); setDeactivateReason(event.target.value); }}
+                />
+              </FormField>
+            )}
             <div className="flex justify-end gap-2">
               <Button
                 type="button"
@@ -833,6 +1037,47 @@ export default function AccountsPage() {
               </Button>
             </div>
           </form>
+        )}
+      </Modal>
+      <Modal
+        open={entryReversalTarget !== null}
+        onClose={() => setEntryReversalTarget(null)}
+        title="Reverse account movement"
+        description="This appends an exact reversal. The original ledger entry remains unchanged."
+        busy={operationMutation.isPending}
+      >
+        {entryReversalTarget && (
+          <div className="space-y-4">
+            <p className="text-sm">
+              {ENTRY_LABELS[entryReversalTarget.type]} · <Money kobo={entryReversalTarget.amountKobo} />
+            </p>
+            <FormField id="entry-reversal-reason" label="Reason">
+              <Textarea
+                id="entry-reversal-reason"
+                value={entryReversalReason}
+                rows={3}
+                maxLength={500}
+                onChange={(event) => { writeFlow.edit(); setEntryReversalReason(event.target.value); }}
+              />
+            </FormField>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" disabled={operationMutation.isPending} onClick={() => setEntryReversalTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                disabled={operationMutation.isPending || entryReversalReason.trim() === ""}
+                loading={operationMutation.isPending}
+                onClick={() => operationMutation.mutate({
+                  kind: "reverseEntry",
+                  id: entryReversalTarget.id,
+                  reason: entryReversalReason.trim(),
+                })}
+              >
+                Reverse entry
+              </Button>
+            </div>
+          </div>
         )}
       </Modal>
     </div>

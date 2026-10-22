@@ -63,6 +63,14 @@ export interface MoneyFlowAccountDto {
 }
 
 export interface MoneyFlowReportDto {
+  /** Effective Lagos range; real mode only. */
+  from?: string;
+  to?: string;
+  /**
+   * True when `totals` leave account transfers out (real API). The demo
+   * (mock/shared) totals include transfers.
+   */
+  totalsExcludeTransfers: boolean;
   rows: MoneyFlowAccountDto[];
   totals: {
     openingBalanceKobo: string;
@@ -71,10 +79,17 @@ export interface MoneyFlowReportDto {
     netKobo: string;
     closingBalanceKobo: string;
   };
+  /** Transfers between own accounts, shown separately; real mode only. */
+  transfers?: {
+    moneyInKobo: string;
+    moneyOutKobo: string;
+  };
   sales: {
     billedKobo: string;
     customerMoneyReceivedKobo: string;
     debtOutstandingKobo: string;
+    /** Current unpaid customer balances, not tied to the range; real mode only. */
+    debtsOwedNowKobo?: string;
   };
 }
 

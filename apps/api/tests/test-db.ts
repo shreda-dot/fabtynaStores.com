@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
+import { resolveSslConfig } from "../src/lib/ssl.js";
 import { runDbVerify } from "../src/db/verify.js";
 
 // Prisma 7 and vitest do not load `.env` for us, so load this package's file
@@ -53,6 +54,8 @@ export function resolveTestConnectionString(): string {
     }
   }
 
+  // Fail early (without printing the URL) if SSL would be disabled for a remote host.
+  resolveSslConfig(effective);
   return effective;
 }
 

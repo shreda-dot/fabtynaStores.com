@@ -1,5 +1,6 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../../generated/prisma/client.js";
+import { resolveSslConfig } from "./ssl.js";
 
 export interface PrismaClientOptions {
   /** Maximum connections in the node-postgres pool. Defaults to the driver's own default. */
@@ -27,6 +28,7 @@ export function createPrismaClient(
 
   const adapter = new PrismaPg({
     connectionString,
+    ssl: resolveSslConfig(connectionString),
     ...(options.maxConnections === undefined ? {} : { max: options.maxConnections }),
   });
 

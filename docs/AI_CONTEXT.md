@@ -563,6 +563,7 @@ include the mode.
 | Purchases: list, detail, new, supplier payment/reverse, void, amend (7B) | Connected |
 | Accounts, paginated statements, expenses/categories, stock transfers, stock adjustments (7C Parts 1–4) | Connected |
 | Loans: list, detail, create, charge, repayment (7C Part 5) | Connected (web checks run; no browser click-through yet) |
+| Reports: sales summary, dashboard, product sales, money flow, financial position (7D) | Connected (web checks run; no browser click-through yet) |
 | Reports, money flow, dashboard (7D) | Not connected |
 
 Mapping notes (7A and 7B):
@@ -728,13 +729,63 @@ untouched files: products detail, stock mock, stock real); web Vitest PASS
 31/31; production build PASS. The separate test-runner discovery call found no
 tests, so the actual result is from `pnpm --filter @fabtyna/web test`.
 
+### 7D reports (web)
+
+Hand-checkable DEV scenario (ZZTEST names; records are immutable, so use
+clearly named data and only the DEV database). Amounts in naira. Account
+"ZZTEST Bank" opened with 100,000.
+1. Product ZZTEST Cola, cost 600/unit, retail 1,000/unit, stock 100.
+2. Retail sale A, 10 units = 10,000, paid in full into ZZTEST Bank.
+3. Retail sale B, 5 units = 5,000, part payment 2,000 (debt 3,000); a later
+   payment of 1,000 (debt 2,000).
+4. Retail sale C, 2 units = 2,000, paid, then voided (excluded everywhere).
+5. Retail sale D, 4 units = 4,000, paid 4,000, then the payment is reversed.
+6. Expense 1,001 split BOTH (odd amount; the channel split rule is the API's).
+7. Credit purchase 20,000 from ZZTEST Supplier (moves no money).
+8. Loan 90,000 with agreed interest 10,000; a repayment of 25,000 with 4,000
+   interest.
+Expected for the sale day (cash basis): gotten = 10,000 + 2,000 + 1,000 = 13,000
+(sale D's reversed payment is excluded by the sales summary); COGS follows cash
+received. The loan interest 4,000 is an expense for profit and never cash.
+Bank closing = 100,000 + 10,000 + 2,000 + 1,000 + 4,000 - 4,000 (reversal)
+- 1,001 expense - 25,000 repayment = 86,999 (interest is NOT a second outflow).
+
+Where reports must agree: dashboard vs sales summary (same day: revenue gotten,
+expenses, net profit); money-flow closing vs the account balance; financial
+position cash vs the sum of account balances; receivables vs the debtors total;
+payables vs the payables list total.
+Where they legitimately differ: sales summary gotten 13,000 vs money-flow
+cash received from sales 13,000 only when no reversal falls in the range; with
+sale D reversed on a later day, money flow shows +4,000 on day one and -4,000
+on the reversal day.
+
+Click-through (DEV only): create account and opening balance; enter the
+scenario above; open Reports > Sales summary, Product sales, Money flow;
+Dashboard (pick the date); Accounting (position, assumptions 87.5 and 100.01
+which must be rejected). Press Refresh after writes (reports cache 60 s). Then
+run `pnpm --filter @fabtyna/api db:audit` on dev: expect zero rows.
+
 ## 6b. Known limitations
 
 - Web sales/purchases: no kobo amount is converted through `Number()`.
   Remaining numeric conversions are validated stock-unit quantities and
   bounded 0–100 accounting percentage-bar values.
-- Real mode: reports, the dashboard, position and money flow are not connected
-  (7D).
+- Real mode reports (7D) are connected: sales summary, dashboard, product
+  sales, money flow and financial position. Mock mode implements the sales
+  summary only; dashboard keeps its local computation, product sales shows
+  "not available with demo data".
+- Mock/shared money-flow totals INCLUDE transfers; the API's totals EXCLUDE
+  them (transfers are returned separately). The web labels both
+  ("Totals exclude transfers" / "Demo totals include transfers"); packages/shared
+  was not changed.
+- Money flow dates a payment reversal on its own day, while the sales summary
+  excludes a reversed payment entirely, so cash received can differ between
+  the two reports for a period containing a reversal (the web shows a note).
+- Money flow and the other reports can be up to 60 s stale after writes made
+  on account pages (staleTime); the Refresh button refetches.
+- Old mock data with a paid balance but no payment rows shows no cash received.
+- Report real-mode fixtures from a live API were NOT recorded (dev API not
+  reachable during the 7D build); tests use hand-built API-shaped fixtures.
 - Loan repayment reversal does not exist: a mistaken repayment cannot be
   corrected, and its linked LOAN_INTEREST expense cannot be voided (the void
   guard message "Reverse the loan repayment instead" is misleading for now).
@@ -746,6 +797,23 @@ tests, so the actual result is from `pnpm --filter @fabtyna/web test`.
 - Raw connection errors (ENOTFOUND, ECONNRESET) reach the API's 500 handler;
   only Prisma/PG codes P2028, P1001, P1017, 55P03, 40P01, 40001 map to 503.
 - Dev records are immutable and cannot be deleted; use clearly named test data.
+- Database SSL: one helper, `apps/api/src/lib/ssl.ts` (`resolveSslConfig`), is
+  used by `db/verify.ts`, `db/audit.ts` and `lib/prisma.ts`; `tests/test-db.ts`
+  calls it to fail early. Default is SSL ON; `sslmode` in the URL is applied by
+  node-postgres on top (so `verify-full` stays strict). `sslmode=disable` is
+  honoured ONLY for localhost, 127.0.0.1 or ::1; any other host throws an error
+  that never contains the URL or host. Many test files still pass their own
+  `ssl: { rejectUnauthorized: false }` (they only connect to the Neon direct test URL).
+- Test database targets: `TEST_DIRECT_URL` (hosted, direct) is what the tests,
+  `global-setup.ts` (drift check before every run) and `db:verify`/`db:audit`
+  must use: `pnpm db:verify -- --url TEST_DIRECT_URL`. `TEST_DATABASE_URL` is a
+  local server without SSL; to target it add `?sslmode=disable` to that URL.
+  Last results (dev and test, direct URLs): db:verify PASS, db:audit PASS.
+- `db:verify` / `db:audit` print the database host in their report header; do
+  not paste that output into shared places.
+- The void message for LOAN_INTEREST expenses now says repayment reversal is not
+  available yet. The amend message (`expenses.service.ts` ~359) still says
+  "Reverse the loan repayment instead" and is misleading for the same reason.
 - Account names are NOT unique on the server: `POST /accounts` and
   `PATCH /accounts/:id` do not check names and `accounts` has no unique name
   constraint. The web form checks existing names only, so two simultaneous

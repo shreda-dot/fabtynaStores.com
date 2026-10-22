@@ -53,11 +53,74 @@ export type SalesSummaryTotalsDto = {
   totalNetProfitKobo: string;
 };
 
+export type ReportChannel = "RETAIL" | "WHOLESALE";
+
 export type SalesSummaryDto = {
   days: SalesSummaryDayDto[];
   totals: SalesSummaryTotalsDto;
+  /** Effective Lagos range the server used. */
+  from: string;
+  to: string;
+  channel: ReportChannel | null;
+};
+
+export type SalesSummaryQuery = {
+  from?: string;
+  to?: string;
+  channel?: ReportChannel;
+};
+
+export type DashboardMetricDto = { value: string; yesterday: string };
+
+export type DashboardChannelDto = {
+  supposedKobo: string;
+  gottenKobo: string;
+  debtKobo: string;
+};
+
+export type DashboardDto = {
+  date: string;
+  metrics: {
+    netProfitKobo: DashboardMetricDto;
+    revenueGottenKobo: DashboardMetricDto;
+    expensesKobo: DashboardMetricDto;
+    debtKobo: DashboardMetricDto;
+  };
+  channels: { RETAIL: DashboardChannelDto; WHOLESALE: DashboardChannelDto };
+  stock: {
+    asOf: "now";
+    worthAtCostKobo: string;
+    worthAtRetailKobo: string;
+    worthAtWholesaleKobo: string;
+  };
+};
+
+export type ProductSalesQuery = {
+  from?: string;
+  to?: string;
+  channel?: ReportChannel;
+  limit?: number;
+};
+
+export type ProductSalesItemDto = {
+  productId: string;
+  productName: string;
+  unitsSold: string;
+  billedRevenueKobo: string;
+  cogsKobo: string;
+  grossProfitKobo: string;
+};
+
+export type ProductSalesDto = {
+  items: ProductSalesItemDto[];
+  from: string;
+  to: string;
+  channel: ReportChannel | null;
+  revenueDefinition: string;
 };
 
 export interface ReportsApi {
-  salesSummary(from: Date, to: Date): Promise<SalesSummaryDto>;
+  salesSummary(query: SalesSummaryQuery): Promise<SalesSummaryDto>;
+  dashboard(date?: string): Promise<DashboardDto>;
+  productSales(query: ProductSalesQuery): Promise<ProductSalesDto>;
 }

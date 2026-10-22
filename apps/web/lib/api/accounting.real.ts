@@ -9,6 +9,7 @@ import type {
   UpdateAccountDto,
 } from "@fabtyna/shared";
 import { requestJson } from "./client";
+import { fetchFinancialPosition, fetchMoneyFlow } from "./reports.real";
 import type {
   AccountRecordDto,
   AccountStatementPageDto,
@@ -60,18 +61,11 @@ async function statementPage(
 
 export const accountingRealApi: AccountingApi = {
   async position(options) {
-    const query = new URLSearchParams();
-    if (options) {
-      for (const [key, value] of Object.entries(options)) {
-        if (value !== undefined && value !== null) query.set(key, String(value));
-      }
-    }
-    const suffix = query.size ? `?${query.toString()}` : "";
-    return requestJson(`/reports/financial-position${suffix}`);
+    return fetchFinancialPosition(options);
   },
 
   async moneyFlow(from, to, accountId) {
-    return requestJson(`/reports/money-flow${queryString({ from, to, accountId })}`);
+    return fetchMoneyFlow(from, to, accountId);
   },
 
   async listAccounts(includeInactive = true) {

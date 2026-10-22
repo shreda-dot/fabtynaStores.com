@@ -23,9 +23,11 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard, type StatTrend } from "@/components/ui/stat-card";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
-import { reportsApi, salesApi, stockApi } from "@/lib/api";
+import { reportsApi, salesApi, stockApi, isMockApiMode } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { REPORT_STALE_MS } from "@/lib/report-range";
+import { ReportToolbar } from "@/components/reports/report-toolbar";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -48,13 +50,17 @@ function trendFor(
 }
 
 export default function DashboardPage() {
+  // Real mode shows only what GET /reports/dashboard returns; the demo store still computes locally.
+  const mock = isMockApiMode;
   const stock = useQuery({
     queryKey: queryKeys.stock.list,
     queryFn: () => stockApi.list(),
+    enabled: mock,
   });
   const sales = useQuery({
     queryKey: queryKeys.sales.list,
     queryFn: () => salesApi.list(),
+    enabled: mock,
   });
 
   // "Today" is the Lagos (Africa/Lagos) business day, not the device day.
@@ -64,7 +70,7 @@ export default function DashboardPage() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const viewDate = selectedDate ?? businessDate;
 
-  const { start: dayStart, end: dayEnd } = getLagosBusinessDayRange(viewDate);
+  const { start: dayStart } = getLagosBusinessDayRange(viewDate);
   const reportFrom = new Date(dayStart.getTime() - 6 * DAY_MS);
   const isToday = viewDate === businessDate;
   const yesterdayDate = getLagosBusinessDate(
@@ -74,10 +80,24 @@ export default function DashboardPage() {
   const report = useQuery({
     queryKey: queryKeys.reports.salesSummary(
       getLagosBusinessDate(reportFrom),
-      getLagosBusinessDate(new Date(dayEnd.getTime() - 1)),
+      viewDate,
+      null,
     ),
-    queryFn: () => reportsApi.salesSummary(reportFrom, dayEnd),
+    queryFn: () =>
+      reportsApi.salesSummary({
+        from: getLagosBusinessDate(reportFrom),
+        to: viewDate,
+      }),
+    enabled: mock,
   });
+
+  const dashboard = useQuery({
+    queryKey: queryKeys.reports.dashboard(viewDate),
+    queryFn: () => reportsApi.dashboard(viewDate),
+    enabled: !mock,
+    staleTime: REPORT_STALE_MS,
+  });
+  const dash = dashboard.data;
 
   const today = useMemo(
     () => report.data?.days.find((d) => d.date === viewDate) ?? null,
@@ -88,14 +108,17 @@ export default function DashboardPage() {
     [report.data, yesterdayDate],
   );
 
-  const totalRetailWorth =
-    stock.data?.reduce((sum, row) => sum + BigInt(row.retailWorthKobo), 0n) ??
-    0n;
-  const totalWholesaleWorth =
-    stock.data?.reduce(
-      (sum, row) => sum + BigInt(row.wholesaleWorthKobo),
-      0n,
-    ) ?? 0n;
+  const totalRetailWorth = dash
+    ? BigInt(dash.stock.worthAtRetailKobo)
+    : (stock.data?.reduce((sum, row) => sum + BigInt(row.retailWorthKobo), 0n) ??
+      0n);
+  const totalWholesaleWorth = dash
+    ? BigInt(dash.stock.worthAtWholesaleKobo)
+    : (stock.data?.reduce(
+        (sum, row) => sum + BigInt(row.wholesaleWorthKobo),
+        0n,
+      ) ?? 0n);
+  const stockCostWorth = dash ? BigInt(dash.stock.worthAtCostKobo) : null;
 
   const outstandingDebt = useMemo(() => {
     let retail = 0n;
@@ -116,28 +139,67 @@ export default function DashboardPage() {
 
   const big = (value: string | undefined) => BigInt(value ?? "0");
 
-  const retailSupposed = big(today?.retailSupposedRevenueKobo);
-  const retailGotten = big(today?.retailRevenueGottenKobo);
-  const wholesaleSupposed = big(today?.wholesaleSupposedRevenueKobo);
-  const wholesaleGotten = big(today?.wholesaleRevenueGottenKobo);
-  const todayNetProfit = big(today?.totalNetProfitKobo);
-  const todayExpenses = big(today?.totalExpensesKobo);
+  const retailSupposed = dash
+    ? big(dash.channels.RETAIL.supposedKobo)
+    : big(today?.retailSupposedRevenueKobo);
+  const retailGotten = dash
+    ? big(dash.channels.RETAIL.gottenKobo)
+    : big(today?.retailRevenueGottenKobo);
+  const wholesaleSupposed = dash
+    ? big(dash.channels.WHOLESALE.supposedKobo)
+    : big(today?.wholesaleSupposedRevenueKobo);
+  const wholesaleGotten = dash
+    ? big(dash.channels.WHOLESALE.gottenKobo)
+    : big(today?.wholesaleRevenueGottenKobo);
+  const todayNetProfit = dash
+    ? big(dash.metrics.netProfitKobo.value)
+    : big(today?.totalNetProfitKobo);
+  const todayExpenses = dash
+    ? big(dash.metrics.expensesKobo.value)
+    : big(today?.totalExpensesKobo);
 
-  const yRetailGotten = big(yesterday?.retailRevenueGottenKobo);
-  const yWholesaleGotten = big(yesterday?.wholesaleRevenueGottenKobo);
-  const yNetProfit = big(yesterday?.totalNetProfitKobo);
-  const yExpenses = big(yesterday?.totalExpensesKobo);
+  const yNetProfit = dash
+    ? big(dash.metrics.netProfitKobo.yesterday)
+    : big(yesterday?.totalNetProfitKobo);
+  const yExpenses = dash
+    ? big(dash.metrics.expensesKobo.yesterday)
+    : big(yesterday?.totalExpensesKobo);
 
-  const retailDebt = outstandingDebt.retail;
-  const wholesaleDebt = outstandingDebt.wholesale;
-  const totalDebt = retailDebt + wholesaleDebt;
+  const retailDebt = dash
+    ? big(dash.channels.RETAIL.debtKobo)
+    : outstandingDebt.retail;
+  const wholesaleDebt = dash
+    ? big(dash.channels.WHOLESALE.debtKobo)
+    : outstandingDebt.wholesale;
+  const totalDebt = dash ? big(dash.metrics.debtKobo.value) : retailDebt + wholesaleDebt;
 
-  const totalGotten = retailGotten + wholesaleGotten;
-  const yTotalGotten = yRetailGotten + yWholesaleGotten;
+  const totalGotten = dash
+    ? big(dash.metrics.revenueGottenKobo.value)
+    : retailGotten + wholesaleGotten;
+  const yTotalGotten = dash
+    ? big(dash.metrics.revenueGottenKobo.yesterday)
+    : big(yesterday?.retailRevenueGottenKobo) +
+      big(yesterday?.wholesaleRevenueGottenKobo);
+  const yDebt = dash ? big(dash.metrics.debtKobo.yesterday) : null;
 
-  const isLoading = stock.isPending || report.isPending || sales.isPending;
-  const isError = stock.isError || report.isError || sales.isError;
-
+  const isLoading = mock
+    ? stock.isPending || report.isPending || sales.isPending
+    : dashboard.isPending;
+  const isError = mock
+    ? stock.isError || report.isError || sales.isError
+    : dashboard.isError;
+  const activeError = mock
+    ? (stock.error ?? report.error ?? sales.error)
+    : dashboard.error;
+  const refetchAll = () => {
+    if (mock) {
+      void stock.refetch();
+      void report.refetch();
+      void sales.refetch();
+    } else {
+      void dashboard.refetch();
+    }
+  };
   const breakdownRows: {
     label: string;
     retail: bigint;
@@ -192,14 +254,18 @@ export default function DashboardPage() {
         }
       />
 
+      {!mock && (
+        <ReportToolbar
+          dataUpdatedAt={dashboard.dataUpdatedAt}
+          isFetching={dashboard.isFetching}
+          onRefresh={refetchAll}
+        />
+      )}
+
       {isError ? (
         <ErrorState
-          message={toUserMessage(stock.error ?? report.error ?? sales.error)}
-          onRetry={() => {
-            void stock.refetch();
-            void report.refetch();
-            void sales.refetch();
-          }}
+          message={toUserMessage(activeError)}
+          onRetry={refetchAll}
         />
       ) : isLoading ? (
         <div className="space-y-6">
@@ -272,6 +338,7 @@ export default function DashboardPage() {
                   />
                 }
                 hint="Unpaid balance for sales made on this date. It clears once those sales are paid."
+                trend={yDebt === null ? undefined : trendFor(totalDebt, yDebt, false)}
               />
             </div>
           </section>
@@ -364,7 +431,18 @@ export default function DashboardPage() {
               }
             />
             <CardBody>
+              <p className="mb-3 text-xs text-muted-foreground">
+                As of now, not tied to the selected date.
+              </p>
               <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                {stockCostWorth !== null && (
+                  <div className="flex items-center justify-between gap-4">
+                    <dt className="text-muted-foreground">Worth at cost</dt>
+                    <dd className="font-medium">
+                      <Money kobo={stockCostWorth} tone="neutral" />
+                    </dd>
+                  </div>
+                )}
                 <div className="flex items-center justify-between gap-4">
                   <dt className="text-muted-foreground">Retail (fridge) worth</dt>
                   <dd className="font-medium">

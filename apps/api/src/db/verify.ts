@@ -3,6 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
+import { resolveSslConfig } from "../lib/ssl.js";
 import {
   EXPECTED_CHECK_CONSTRAINTS,
   EXPECTED_FOREIGN_KEYS,
@@ -105,7 +106,7 @@ function missing(expected: readonly string[], found: readonly string[]): string[
 }
 
 export async function runDbVerify(connectionString: string): Promise<VerifyResult> {
-  const client = new Client({ connectionString, ssl: { rejectUnauthorized: false } });
+  const client = new Client({ connectionString, ssl: resolveSslConfig(connectionString) });
   await client.connect();
 
   try {

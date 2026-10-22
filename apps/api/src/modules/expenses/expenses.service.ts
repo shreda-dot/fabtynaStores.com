@@ -242,7 +242,7 @@ export function createExpensesService(options: ExpensesServiceOptions) {
       throw businessRuleError("This expense has already been voided.", { expenseId });
     }
     if (expense.loanRepaymentId !== null) {
-      throw businessRuleError("Reverse the loan repayment instead of voiding its interest expense.", { expenseId });
+      throw businessRuleError(      "Loan interest expenses are created automatically by a repayment and cannot be voided. Loan repayment reversal is not available yet.", { expenseId });
     }
 
     counted(ctx);

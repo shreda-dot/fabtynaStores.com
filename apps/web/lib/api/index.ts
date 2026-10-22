@@ -32,28 +32,17 @@ import { purchasesRealApi } from "./purchases.real";
 import { debtorsMockApi } from "./debtors.mock";
 import { debtorsRealApi } from "./debtors.real";
 import type { DebtorsApi } from "./debtors.api";
-import type { ReportsApi } from "./reports.api";
 import type { CashApi } from "./cash.api";
-import type { AccountingApi } from "./accounting.api";
+import { reportsRealApi } from "./reports.real";
 
 function notImplemented(): never {
   throw createNotConnectedError();
 }
 
-const reportsRealApi: ReportsApi = {
-  salesSummary: async () => notImplemented(),
-};
-
 const cashRealApi: CashApi = {
   list: async () => notImplemented(),
   latest: async () => notImplemented(),
   recordSnapshot: async () => notImplemented(),
-};
-
-const accountingReal7CApi: AccountingApi = {
-  ...accountingRealApi,
-  position: async () => notImplemented(),
-  moneyFlow: async () => notImplemented(),
 };
 
 const apiMode = process.env.NEXT_PUBLIC_API_MODE ?? "mock";
@@ -76,7 +65,7 @@ export const payablesApi = apiMode === "mock" ? instrumentApi(payablesMockApi) :
 export const debtorsApi: DebtorsApi = apiMode === "mock" ? instrumentApi(debtorsMockApi) : debtorsRealApi;
 export const loansApi = apiMode === "mock" ? instrumentApi(loansMockApi) : loansRealApi;
 export const cashApi = apiMode === "mock" ? instrumentApi(cashMockApi) : cashRealApi;
-export const accountingApi = apiMode === "mock" ? instrumentApi(accountingMockApi) : accountingReal7CApi;
+export const accountingApi = apiMode === "mock" ? instrumentApi(accountingMockApi) : accountingRealApi;
 export const authApi: AuthApi = apiMode === "mock" ? authMockApi : authRealApi;
 export const isMockApiMode = apiMode === "mock";
 

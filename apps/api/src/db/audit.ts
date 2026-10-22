@@ -1,4 +1,5 @@
 import { Client } from "pg";
+import { resolveSslConfig } from "../lib/ssl.js";
 import { databaseNameOf, hostOf } from "./verify.js";
 
 /**
@@ -444,7 +445,7 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
 ];
 
 export async function runDbAudit(connectionString: string): Promise<AuditResult> {
-  const client = new Client({ connectionString, ssl: { rejectUnauthorized: false } });
+  const client = new Client({ connectionString, ssl: resolveSslConfig(connectionString) });
   await client.connect();
 
   try {

@@ -617,7 +617,15 @@ times of 1.1 s, 2.5 s, 0.3 s, 1.8 s, and 2.3 s. EXPLAIN ANALYZE aggregated
 2,845 current product rows; the product-sales, current-stock, financial-stock,
 and receivables queries took 0.59 ms, 5.87 ms, 3.31 ms, and 0.48 ms
 respectively. No index change was justified by those plans. Focused coverage is
-`apps/api/tests/reports.test.ts`. The web's real report client is not wired yet.
+`apps/api/tests/reports.test.ts`. The web's real report client is wired (7D):
+`apps/web/lib/api/reports.real.ts` builds queries (unset params omitted,
+booleans "true"/"false", integers as digits) and validates every response with
+zod (`reports.schemas.ts`); a mismatch shows "unexpected response from the
+server". Percent inputs convert to integer bps by exact string parsing
+(`lib/bps.ts`, max 2 decimals, 0 to 100.00). The 366-day inclusive cap is
+enforced in the UI. Web money-flow field names differ from the API
+(`salesBilledKobo` -> `billedKobo`, `cashReceivedFromSalesKobo` ->
+`customerMoneyReceivedKobo`, `debtsFromRangeSalesKobo` -> `debtOutstandingKobo`).
 
 ## 11. Web consumption of the sales and purchases API (7B)
 

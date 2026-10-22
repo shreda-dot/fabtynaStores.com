@@ -1,8 +1,11 @@
 import {
+  getLagosBusinessDate,
+  getLagosBusinessDayRange,
   salesSummary,
   type SalesSummaryResult,
 } from "@fabtyna/shared";
 import type { ReportsApi, SalesSummaryDto } from "./reports.api";
+import { createNotConnectedError } from "./client";
 import { readMockStore } from "./mock-store";
 import { mockDelay } from "./mock-transport";
 
@@ -10,8 +13,14 @@ function delay(): Promise<void> {
   return mockDelay();
 }
 
-function toDto(result: SalesSummaryResult): SalesSummaryDto {
+function toDto(
+  result: SalesSummaryResult,
+  range: { from: string; to: string },
+): SalesSummaryDto {
   return {
+    from: range.from,
+    to: range.to,
+    channel: null,
     days: result.days.map((day) => ({
       date: day.date,
       retailSupposedRevenueKobo: day.retailSupposedRevenueKobo.toString(),
@@ -69,12 +78,15 @@ function toDto(result: SalesSummaryResult): SalesSummaryDto {
 }
 
 export const reportsMockApi: ReportsApi = {
-  async salesSummary(from, to) {
+  async salesSummary(query) {
     await delay();
+    const today = getLagosBusinessDate();
+    const from = query.from ?? query.to ?? today;
+    const to = query.to ?? from;
     const store = readMockStore();
     const result = salesSummary(
-      from,
-      to,
+      getLagosBusinessDayRange(from).start,
+      getLagosBusinessDayRange(to).end,
       store.sales,
       store.saleLines,
       store.products,
@@ -89,6 +101,15 @@ export const reportsMockApi: ReportsApi = {
           .filter((paymentId): paymentId is string => paymentId !== null && paymentId !== undefined),
       ),
     );
-    return toDto(result);
+    return toDto(result, { from, to });
+  },
+
+  // Demo data has no dashboard or product-sales endpoint; pages hide these in mock mode.
+  async dashboard() {
+    throw createNotConnectedError();
+  },
+
+  async productSales() {
+    throw createNotConnectedError();
   },
 };

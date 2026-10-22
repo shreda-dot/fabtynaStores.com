@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
   BadgeCheck,
   CalendarClock,
@@ -28,7 +28,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { accountingApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
+import { MoneyFlowView } from "@/components/reports/money-flow-view";
+import { ReportToolbar } from "@/components/reports/report-toolbar";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { formatBps, parsePercentToBps } from "@/lib/bps";
 import { queryKeys } from "@/lib/query-keys";
+import { REPORT_STALE_MS, validateReportRange } from "@/lib/report-range";
 
 const SCENARIO_LABELS: Record<FinancialPositionScenario, string> = {
   EXPECTED: "Expected",
@@ -48,46 +53,6 @@ const URGENCY_LABEL = {
   LATER: "Later",
 } as const;
 
-const FLOW_CATEGORY_LABELS: Record<string, string> = {
-  SALE_PAYMENT: "Sale payments",
-  CUSTOMER_PAYMENT: "Customer debt payments",
-  SUPPLIER_PAYMENT: "Supplier payments",
-  PURCHASE_PAYMENT: "Supplier-less purchases",
-  EXPENSE: "Expenses",
-  CUSTOMER_REFUND: "Customer refunds",
-  TRANSFER_IN: "Transfers in",
-  TRANSFER_OUT: "Transfers out",
-  OWNER_CAPITAL: "Owner contributions",
-  OWNER_DRAWING: "Owner withdrawals",
-  OTHER_INCOME: "Other income",
-  BANK_OR_POS_CHARGE: "Bank / POS charges",
-  ADJUSTMENT: "Reconciliation adjustments",
-  OPENING_BALANCE: "Opening balance",
-  LOAN_DISBURSEMENT: "Loans received",
-  LOAN_REPAYMENT: "Loan repayments",
-};
-
-function flowCategoryLabel(key: string): string {
-  if (key.startsWith("EXPENSE:")) {
-    const category = key.slice("EXPENSE:".length).toLocaleLowerCase();
-    return `${category.charAt(0).toLocaleUpperCase()}${category.slice(1)} expenses`;
-  }
-  return FLOW_CATEGORY_LABELS[key] ?? key;
-}
-
-function clampPercentText(raw: string): number {
-  const digits = raw.replace(/\D/g, "");
-  if (digits === "") return 0;
-  const value = Number.parseInt(digits, 10);
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(100, Math.max(0, value));
-}
-
-function formatBps(bps: number | null): string {
-  if (bps === null) return "—";
-  return `${(bps / 100).toFixed(0)}%`;
-}
-
 export default function AccountingOverviewPage() {
   const businessDate = useLagosBusinessDate();
 
@@ -101,22 +66,55 @@ export default function AccountingOverviewPage() {
   const [flowTo, setFlowTo] = useState(businessDate);
   const [flowAccountId, setFlowAccountId] = useState("");
 
+  // Percent text becomes integer basis points by exact string parsing only.
+  const discountParsed = parsePercentToBps(discountText);
+  const collectibleParsed = parsePercentToBps(collectibleText);
+  const debouncedDiscount = parsePercentToBps(
+    useDebouncedValue(discountText, 400),
+  );
+  const debouncedCollectible = parsePercentToBps(
+    useDebouncedValue(collectibleText, 400),
+  );
+  const assumptionsValid = debouncedDiscount.ok && debouncedCollectible.ok;
+  const inputsValid = discountParsed.ok && collectibleParsed.ok;
+
   const options = {
-    stockDiscountBps: clampPercentText(discountText) * 100,
-    receivablesCollectibleBps: clampPercentText(collectibleText) * 100,
+    stockDiscountBps: debouncedDiscount.ok ? debouncedDiscount.bps : null,
+    receivablesCollectibleBps: debouncedCollectible.ok
+      ? debouncedCollectible.bps
+      : null,
     includeReceivables,
     includeCash,
   };
 
   const positionQuery = useQuery({
-    queryKey: queryKeys.accounting.position(options),
-    queryFn: () => accountingApi.position(options),
+    queryKey: queryKeys.reports.financialPosition({
+      scenario: null,
+      ...options,
+    }),
+    queryFn: () =>
+      accountingApi.position({
+        stockDiscountBps: options.stockDiscountBps ?? undefined,
+        receivablesCollectibleBps: options.receivablesCollectibleBps ?? undefined,
+        includeReceivables,
+        includeCash,
+      }),
+    enabled: assumptionsValid,
+    placeholderData: keepPreviousData,
+    staleTime: REPORT_STALE_MS,
   });
 
+  // Real accounts already carry their ledger-derived balance; only the demo store needs a sum.
   const accountBalancesQuery = useQuery({
     queryKey: queryKeys.accounting.accountBalances,
     queryFn: async () => {
       const accounts = await accountingApi.listAccounts();
+      if (accounts.every((account) => account.balanceKobo !== undefined)) {
+        return accounts.map((account) => ({
+          account,
+          balanceKobo: BigInt(account.balanceKobo ?? "0"),
+        }));
+      }
       const ledgers = await Promise.all(
         accounts.map((account) => accountingApi.listLedgerEntries(account.id)),
       );
@@ -128,18 +126,21 @@ export default function AccountingOverviewPage() {
         ),
       }));
     },
+    staleTime: REPORT_STALE_MS,
   });
+  const flowRangeError = validateReportRange(flowFrom, flowTo);
   const moneyFlowQuery = useQuery({
-    queryKey: queryKeys.accounting.moneyFlow(
+    queryKey: queryKeys.reports.moneyFlow(
       flowFrom,
       flowTo,
-      flowAccountId,
+      flowAccountId || null,
     ),
     queryFn: () => accountingApi.moneyFlow(flowFrom, flowTo, flowAccountId || undefined),
-    enabled: flowFrom !== "" && flowTo !== "" && flowFrom <= flowTo,
+    enabled: flowRangeError === null,
+    staleTime: REPORT_STALE_MS,
   });
 
-  if (positionQuery.isPending) {
+  if (positionQuery.isPending && assumptionsValid) {
     return (
       <div className="space-y-6">
         <Skeleton variant="text" count={2} className="max-w-sm" />
@@ -167,22 +168,27 @@ export default function AccountingOverviewPage() {
   }
 
   const result = positionQuery.data;
-  const sc = result.scenarios[scenario];
-
-  const supplierPayablesKobo =
-    result.liabilitiesBreakdown.payablesBySupplier.reduce(
-      (sum, line) => sum + line.amountKobo,
-      0n,
+  if (result === undefined) {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          title="Accounting"
+          description="Can you clear everything you owe by selling your stock?"
+        />
+        <ErrorState
+          title="Check the assumptions"
+          message="Enter valid percentages (0 to 100, up to 2 decimals) to load the financial position."
+        />
+      </div>
     );
-  const loansOutstandingKobo = result.liabilitiesBreakdown.loansByLender.reduce(
-    (sum, line) => sum + line.amountKobo,
-    0n,
-  );
+  }
+  const sc = result.scenarios[scenario];
 
   const hasLiabilities = sc.totalLiabilitiesKobo > 0n;
   const shortfall =
     sc.netPositionKobo < 0n ? -sc.netPositionKobo : sc.netPositionKobo;
 
+  // Bar widths are drawing proportions (0-100), not money; the amounts shown come from the server.
   const barMax =
     sc.totalAssetsKobo > sc.totalLiabilitiesKobo
       ? sc.totalAssetsKobo
@@ -196,14 +202,7 @@ export default function AccountingOverviewPage() {
       ? 0
       : Math.min(100, Number((sc.totalLiabilitiesKobo * 100n) / barMax));
 
-  const urgentObligations = result.obligations
-    .filter((obligation) => obligation.urgency !== "LATER")
-    .sort((a, b) => {
-      if (a.dueDate === null) return 1;
-      if (b.dueDate === null) return -1;
-      return a.dueDate.localeCompare(b.dueDate);
-    })
-    .slice(0, 5);
+  const obligations = result.obligations;
 
   return (
     <div className="space-y-6">
@@ -227,6 +226,22 @@ export default function AccountingOverviewPage() {
           </div>
         }
       />
+
+      <div className="space-y-1">
+        <ReportToolbar
+          dataUpdatedAt={positionQuery.dataUpdatedAt}
+          isFetching={positionQuery.isFetching}
+          onRefresh={() => {
+            void positionQuery.refetch();
+            void accountBalancesQuery.refetch();
+            void moneyFlowQuery.refetch();
+          }}
+        />
+        <p className="text-xs text-muted-foreground">
+          Current state only, no historical date. Cash is the sum of your
+          account balances.
+        </p>
+      </div>
 
       {/* 1. Headline verdict */}
       <Card
@@ -301,26 +316,34 @@ export default function AccountingOverviewPage() {
           description="Change these to see how the position moves."
         />
         <CardBody className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <FormField id="discount" label="Stock discount %">
+          <FormField
+            id="discount"
+            label="Stock discount %"
+            error={discountParsed.ok ? undefined : discountParsed.error}
+          >
             <input
               id="discount"
-              type="number"
-              min="0"
-              max="100"
-              inputMode="numeric"
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
               value={discountText}
+              aria-invalid={!discountParsed.ok}
               onChange={(event) => setDiscountText(event.target.value)}
               className="min-h-11 w-full rounded-md border border-input bg-surface px-3 text-base text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             />
           </FormField>
-          <FormField id="collectible" label="Debtors collectible %">
+          <FormField
+            id="collectible"
+            label="Debtors collectible %"
+            error={collectibleParsed.ok ? undefined : collectibleParsed.error}
+          >
             <input
               id="collectible"
-              type="number"
-              min="0"
-              max="100"
-              inputMode="numeric"
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
               value={collectibleText}
+              aria-invalid={!collectibleParsed.ok}
               onChange={(event) => setCollectibleText(event.target.value)}
               className="min-h-11 w-full rounded-md border border-input bg-surface px-3 text-base text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             />
@@ -349,8 +372,11 @@ export default function AccountingOverviewPage() {
           </div>
           <div className="flex items-end pb-1 text-xs text-muted-foreground sm:col-span-2 lg:col-span-1">
             <span>
-              Discount applies to stock only. Debts are scaled by the
-              collectible percentage.
+              Percentages may have up to 2 decimals (for example 87.5). Discount
+              applies to stock only. Debts are scaled by the collectible
+              percentage.
+              {!inputsValid && " Showing the last valid result until the input is fixed."}
+              {positionQuery.isFetching && " Updating…"}
             </span>
           </div>
         </CardBody>
@@ -393,22 +419,64 @@ export default function AccountingOverviewPage() {
           />
           <CardBody>
             <dl className="space-y-2 text-sm">
-              <SummaryRow label="Supplier credit">
-                <Link
-                  href="/accounting/payables"
-                  className="text-primary hover:underline"
-                >
-                  <Money kobo={supplierPayablesKobo} tone="neutral" />
-                </Link>
-              </SummaryRow>
-              <SummaryRow label="Loans">
-                <Link
-                  href="/accounting/loans"
-                  className="text-primary hover:underline"
-                >
-                  <Money kobo={loansOutstandingKobo} tone="neutral" />
-                </Link>
-              </SummaryRow>
+              <div>
+                <dt className="font-medium text-foreground">
+                  By supplier (credit purchases)
+                </dt>
+                <dd>
+                  {result.liabilitiesBreakdown.payablesBySupplier.length === 0 ? (
+                    <p className="mt-1 text-muted-foreground">
+                      No unpaid supplier purchases.
+                    </p>
+                  ) : (
+                    <ul className="mt-1 space-y-1">
+                      {result.liabilitiesBreakdown.payablesBySupplier.map(
+                        (line) => (
+                          <li
+                            key={line.supplierId}
+                            className="flex items-center justify-between gap-3"
+                          >
+                            <Link
+                              href="/accounting/payables"
+                              className="text-primary hover:underline"
+                            >
+                              {line.supplierName}
+                            </Link>
+                            <Money kobo={line.amountKobo} tone="neutral" />
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-medium text-foreground">By lender (loans)</dt>
+                <dd>
+                  {result.liabilitiesBreakdown.loansByLender.length === 0 ? (
+                    <p className="mt-1 text-muted-foreground">
+                      No outstanding loans.
+                    </p>
+                  ) : (
+                    <ul className="mt-1 space-y-1">
+                      {result.liabilitiesBreakdown.loansByLender.map((line) => (
+                        <li
+                          key={line.loanId}
+                          className="flex items-center justify-between gap-3"
+                        >
+                          <Link
+                            href={`/accounting/loans/${line.loanId}`}
+                            className="text-primary hover:underline"
+                          >
+                            {line.lenderName}
+                          </Link>
+                          <Money kobo={line.amountKobo} tone="neutral" />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </dd>
+              </div>
               <div className="mt-2 flex items-center justify-between gap-4 border-t border-border pt-2">
                 <dt className="font-semibold text-foreground">
                   Total liabilities
@@ -628,9 +696,9 @@ export default function AccountingOverviewPage() {
             </FormField>
           </div>
 
-          {flowFrom === "" || flowTo === "" || flowFrom > flowTo ? (
+          {flowRangeError !== null ? (
             <p role="alert" className="text-sm text-danger">
-              Choose a valid date range.
+              {flowRangeError}
             </p>
           ) : moneyFlowQuery.isPending ? (
             <Skeleton variant="row" count={4} />
@@ -641,110 +709,7 @@ export default function AccountingOverviewPage() {
               onRetry={() => void moneyFlowQuery.refetch()}
             />
           ) : (
-            <>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <FlowSummary
-                  label="Opening balance"
-                  amount={moneyFlowQuery.data.totals.openingBalanceKobo}
-                />
-                <FlowSummary
-                  label="Money in"
-                  amount={moneyFlowQuery.data.totals.moneyInKobo}
-                />
-                <FlowSummary
-                  label="Money out"
-                  amount={moneyFlowQuery.data.totals.moneyOutKobo}
-                />
-                <FlowSummary
-                  label="Closing balance"
-                  amount={moneyFlowQuery.data.totals.closingBalanceKobo}
-                />
-              </div>
-
-              <div className="rounded-md border border-border p-4">
-                <h3 className="font-semibold">Sales and customer collections</h3>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Sales billed and outstanding are for non-voided sales made in this date range. Customer money received is the net of sale and debt payments (including reversals) posted to the selected account(s) in this range.
-                </p>
-                <dl className="mt-3 grid gap-3 sm:grid-cols-3">
-                  <FlowSummary
-                    label="Sales billed"
-                    amount={moneyFlowQuery.data.sales.billedKobo}
-                  />
-                  <FlowSummary
-                    label="Customer money received"
-                    amount={moneyFlowQuery.data.sales.customerMoneyReceivedKobo}
-                  />
-                  <FlowSummary
-                    label="Debt still owed on these sales"
-                    amount={moneyFlowQuery.data.sales.debtOutstandingKobo}
-                  />
-                </dl>
-              </div>
-
-              <div className="space-y-4">
-                {moneyFlowQuery.data.rows.map((row) => (
-                  <section
-                    key={row.accountId}
-                    className="rounded-md border border-border p-4"
-                  >
-                    <h3 className="mb-3 font-semibold">
-                      {row.accountName} <span className="text-xs text-muted-foreground">({row.accountType})</span>
-                    </h3>
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[36rem] text-sm">
-                        <thead>
-                          <tr className="border-b border-border text-left text-muted-foreground">
-                            <th className="py-2 pr-3">Balance</th>
-                            <th className="py-2 pr-3 text-right">Opening</th>
-                            <th className="py-2 pr-3 text-right">Money in</th>
-                            <th className="py-2 pr-3 text-right">Money out</th>
-                            <th className="py-2 text-right">Closing</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr>
-                            <td className="py-2 pr-3 font-medium">Account</td>
-                            <td className="py-2 pr-3 text-right"><Money kobo={row.openingBalanceKobo} /></td>
-                            <td className="py-2 pr-3 text-right"><Money kobo={row.moneyInKobo} /></td>
-                            <td className="py-2 pr-3 text-right"><Money kobo={row.moneyOutKobo} /></td>
-                            <td className="py-2 text-right font-semibold"><Money kobo={row.closingBalanceKobo} /></td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                    <div className="mt-4 overflow-x-auto">
-                      <table className="w-full min-w-[28rem] text-sm">
-                        <thead>
-                          <tr className="border-b border-border text-left text-muted-foreground">
-                            <th className="py-2 pr-3">Category</th>
-                            <th className="py-2 pr-3 text-right">Money in</th>
-                            <th className="py-2 text-right">Money out</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {row.categories.length === 0 ? (
-                            <tr>
-                              <td colSpan={3} className="py-3 text-muted-foreground">
-                                No money movement in this date range.
-                              </td>
-                            </tr>
-                          ) : (
-                            row.categories.map((category) => (
-                              <tr key={category.key} className="border-b border-border/60 last:border-0">
-                                <td className="py-2 pr-3">{flowCategoryLabel(category.key)}</td>
-                                <td className="py-2 pr-3 text-right"><Money kobo={category.moneyInKobo} /></td>
-                                <td className="py-2 text-right"><Money kobo={category.moneyOutKobo} /></td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </section>
-                ))}
-              </div>
-            </>
+            <MoneyFlowView data={moneyFlowQuery.data} />
           )}
         </CardBody>
       </Card>
@@ -752,8 +717,8 @@ export default function AccountingOverviewPage() {
       {/* 7. Due soon and overdue */}
       <Card>
         <CardHeader
-          title="Due soon and overdue"
-          description="Obligations to settle first."
+          title="Obligations"
+          description="Up to 50 obligations, soonest due date first."
           action={
             <InfoHint label="How urgency is decided">
               Overdue means the due date has passed with a balance outstanding.
@@ -762,14 +727,14 @@ export default function AccountingOverviewPage() {
           }
         />
         <CardBody>
-          {urgentObligations.length === 0 ? (
+          {obligations.length === 0 ? (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
               <CalendarClock aria-hidden="true" className="h-4 w-4" />
-              Nothing is overdue or due in the next 7 days.
+              No outstanding obligations.
             </p>
           ) : (
             <ul className="divide-y divide-border">
-              {urgentObligations.map((obligation) => (
+              {obligations.map((obligation) => (
                 <li
                   key={`${obligation.kind}-${obligation.id}`}
                   className="flex flex-wrap items-center justify-between gap-2 py-2.5"
@@ -791,7 +756,11 @@ export default function AccountingOverviewPage() {
                     />
                     <Badge
                       tone={
-                        obligation.urgency === "OVERDUE" ? "danger" : "warning"
+                        obligation.urgency === "OVERDUE"
+                          ? "danger"
+                          : obligation.urgency === "DUE_IN_7_DAYS"
+                            ? "warning"
+                            : "neutral"
                       }
                     >
                       {URGENCY_LABEL[obligation.urgency]}
@@ -819,17 +788,6 @@ export default function AccountingOverviewPage() {
           </div>
         </CardBody>
       </Card>
-    </div>
-  );
-}
-
-function FlowSummary({ label, amount }: { label: string; amount: string }) {
-  return (
-    <div className="rounded-md border border-border p-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 font-semibold text-foreground">
-        <Money kobo={amount} />
-      </p>
     </div>
   );
 }

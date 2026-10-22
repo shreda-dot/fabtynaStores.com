@@ -46,8 +46,24 @@ export const queryKeys = {
   },
   reports: {
     all: key("reports"),
-    salesSummary: (from: string, to: string) =>
-      key("reports", "sales-summary", from, to),
+    salesSummary: (from: string, to: string, channel: string | null = null) =>
+      key("reports", "sales-summary", from, to, channel ?? "ALL"),
+    dashboard: (date: string) => key("reports", "dashboard", date),
+    productSales: (
+      from: string,
+      to: string,
+      channel: string | null,
+      limit: number,
+    ) => key("reports", "product-sales", from, to, channel ?? "ALL", limit),
+    moneyFlow: (from: string, to: string, accountId: string | null) =>
+      key("reports", "money-flow", from, to, accountId ?? "ALL"),
+    financialPosition: (options: {
+      scenario: string | null;
+      stockDiscountBps: number | null;
+      receivablesCollectibleBps: number | null;
+      includeReceivables: boolean;
+      includeCash: boolean;
+    }) => key("reports", "financial-position", options),
   },
   expenses: {
     all: key("expenses"),
@@ -100,13 +116,10 @@ export const queryKeys = {
   },
   accounting: {
     all: key("accounting"),
-    position: (options: unknown) => key("accounting", "position", options),
-    accounts: key("accounting", "accounts"),
     migrationNotice: key("accounting", "migration-notice"),
+    accounts: key("accounting", "accounts"),
     accountLedger: (id: string, from?: string, to?: string) =>
       key("accounting", "account-ledger", id, from ?? "", to ?? ""),
-    moneyFlow: (from: string, to: string, accountId: string) =>
-      key("accounting", "money-flow", from, to, accountId),
     accountBalances: key("accounting", "account-balances"),
   },
 };

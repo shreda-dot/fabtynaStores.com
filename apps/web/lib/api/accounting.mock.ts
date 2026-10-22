@@ -215,6 +215,7 @@ export const accountingMockApi: AccountingApi = {
       accountId,
     );
     return {
+      totalsExcludeTransfers: false,
       rows: report.rows.map((row) => ({
         accountId: row.accountId,
         accountName: row.accountName,

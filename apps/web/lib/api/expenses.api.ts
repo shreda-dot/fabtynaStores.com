@@ -42,6 +42,8 @@ export type ExpenseListOptions = {
   to?: string;
   categoryId?: string;
   channel?: SaleChannel;
+  /** Free-text search (real API only). */
+  q?: string;
   includeVoided?: boolean;
 };
 

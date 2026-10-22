@@ -8,6 +8,7 @@ const result = spawnSync("pnpm", ["exec", "next", "build"], {
   shell: process.platform === "win32",
   env: {
     ...process.env,
+    NEXT_DIST_DIR: ".next-verify",
     NEXT_PUBLIC_API_MODE: "real",
     NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || "https://api.placeholder.invalid",
   },

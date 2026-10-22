@@ -4,6 +4,7 @@
 **/node_modules/
 apps/api/generated/prisma/
 apps/web/.next/
+apps/web/.next-verify/
 apps/web/out/
 coverage/
 *.tsbuildinfo

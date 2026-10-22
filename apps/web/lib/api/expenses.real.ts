@@ -19,15 +19,26 @@ function query(values: Record<string, string | undefined>): string {
   return result ? `?${result}` : "";
 }
 
-function listQuery(options: ExpenseListOptions & { cursor?: string; limit?: number }): string {
+export function listQuery(options: ExpenseListOptions & { cursor?: string; limit?: number }): string {
+  const q = options.q?.trim();
   return query({
     from: options.from,
     to: options.to,
     categoryId: options.categoryId,
     channel: options.channel,
+    q: q ? q : undefined,
     includeVoided: options.includeVoided ? "true" : undefined,
     cursor: options.cursor,
     limit: String(options.limit ?? 50),
+  });
+}
+
+export function summaryQuery(options: ExpenseListOptions): string {
+  return query({
+    from: options.from,
+    to: options.to,
+    categoryId: options.categoryId,
+    channel: options.channel === "BOTH" ? undefined : options.channel,
   });
 }
 
@@ -52,14 +63,7 @@ export const expensesRealApi: ExpensesApi = {
   },
 
   async summary(options = {}) {
-    return requestJson<ExpenseSummaryDto>(
-      `/expenses/summary${query({
-        from: options.from,
-        to: options.to,
-        categoryId: options.categoryId,
-        channel: options.channel === "BOTH" ? undefined : options.channel,
-      })}`,
-    );
+    return requestJson<ExpenseSummaryDto>(`/expenses/summary${summaryQuery(options)}`);
   },
 
   async create(input: CreateExpenseInput, idempotencyKey) {

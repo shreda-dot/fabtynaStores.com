@@ -19,6 +19,7 @@ export function ReportRangeFields({
   businessDate,
   error,
   onChange,
+  presets: customPresets,
 }: {
   idPrefix: string;
   from: string;
@@ -26,6 +27,8 @@ export function ReportRangeFields({
   businessDate: string;
   error: string | null;
   onChange: (from: string, to: string) => void;
+  /** Overrides the default presets (used by the expenses page). */
+  presets?: { label: string; from: string; to: string }[];
 }) {
   const { start } = getLagosBusinessDayRange(businessDate);
   const yesterday = getLagosBusinessDate(new Date(start.getTime() - DAY_MS));
@@ -34,7 +37,7 @@ export function ReportRangeFields({
   );
   const monthStart = `${businessDate.slice(0, 7)}-01`;
 
-  const presets = [
+  const presets = customPresets ?? [
     { label: "Today", from: businessDate, to: businessDate },
     { label: "Yesterday", from: yesterday, to: yesterday },
     { label: "Last 7 days", from: sevenDaysAgo, to: businessDate },

@@ -67,8 +67,13 @@ export const queryKeys = {
   },
   expenses: {
     all: key("expenses"),
-    list: (from?: string, to?: string) =>
-      key("expenses", "list", from ?? "", to ?? ""),
+    list: (filters: unknown) => key("expenses", "list", filters),
+    // Infinite (paged) data has a different cache shape than list(); never share a key.
+    pages: (filters: unknown) => key("expenses", "pages", filters),
+    summary: (filters: unknown) => key("expenses", "summary", filters),
+    // Active-only and all-categories are different arrays; keep separate caches.
+    categories: (includeInactive: boolean) =>
+      key("expenses", "categories", includeInactive ? "all" : "active"),
     detail: (id: string) => key("expenses", "detail", id),
   },
   stock: {

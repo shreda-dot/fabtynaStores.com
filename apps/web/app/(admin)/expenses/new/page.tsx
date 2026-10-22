@@ -29,6 +29,7 @@ import { useNetworkStatus } from "@/hooks/use-network-status";
 import { accountingApi, expensesApi, isMockApiMode } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { selectableCategories } from "@/lib/expense-filters";
 import { toast } from "@/stores/toast-store";
 import { useWriteFlow } from "@/hooks/use-write-flow";
 import { WriteFlowStatus } from "@/components/write-flow-status";
@@ -85,7 +86,7 @@ export default function NewExpensePage() {
     queryFn: () => accountingApi.listAccounts(),
   });
   const categoriesQuery = useQuery({
-    queryKey: [...queryKeys.expenses.all, "categories"],
+    queryKey: queryKeys.expenses.categories(false),
     queryFn: async () =>
       (await expensesApi.listCategories?.()) ??
       CATEGORIES.map((category): ExpenseCategoryDto => ({
@@ -97,10 +98,8 @@ export default function NewExpensePage() {
         expenseCount: 0,
       })),
   });
-  const availableCategories = (categoriesQuery.data ?? []).filter(
-    (row) => row.isActive && row.code !== "LOAN_INTEREST",
-  );
-
+  const [categorySearch, setCategorySearch] = useState("");
+  const allSelectable = selectableCategories(categoriesQuery.data ?? []);
   const [channel, setChannel] = useState<SaleChannel>(() =>
     searchParams.get("channel") === "WHOLESALE" || searchParams.get("channel") === "BOTH"
       ? searchParams.get("channel") as SaleChannel
@@ -109,13 +108,26 @@ export default function NewExpensePage() {
   const [category, setCategory] = useState(() => searchParams.get("categoryId") ?? "");
   const [description, setDescription] = useState(() => searchParams.get("description") ?? "");
   const [amountKobo, setAmountKobo] = useState(() => searchParams.get("amountKobo") ?? "");
-  const [expenseDate, setExpenseDate] = useState(() => searchParams.get("expenseDate") ?? getLagosBusinessDate());
+  const [expenseDate, setExpenseDate] = useState(() => {
+    const prefill = searchParams.get("expenseDate");
+    return prefill !== null && /^\d{4}-\d{2}-\d{2}$/.test(prefill)
+      ? prefill
+      : getLagosBusinessDate();
+  });
   const [accountId, setAccountId] = useState(() => searchParams.get("accountId") ?? "");
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const searchNeedle = categorySearch.trim().toLowerCase();
+  // The chosen category stays listed even when the search would hide it.
+  const availableCategories = allSelectable.filter(
+    (row) =>
+      searchNeedle === "" ||
+      row.name.toLowerCase().includes(searchNeedle) ||
+      row.id === category,
+  );
   const selectedCategoryId =
     category ||
-    availableCategories.find((row) => row.code === "OTHER")?.id ||
-    availableCategories[0]?.id ||
+    allSelectable.find((row) => row.code === "OTHER")?.id ||
+    allSelectable[0]?.id ||
     "";
 
   const submitting = useRef(false);
@@ -277,6 +289,14 @@ export default function NewExpensePage() {
               </FormField>
 
               <FormField id="expense-category" label="Category">
+                {allSelectable.length > 8 && (
+                  <Input
+                    aria-label="Search categories"
+                    placeholder="Search categories"
+                    value={categorySearch}
+                    onChange={(event) => setCategorySearch(event.target.value)}
+                  />
+                )}
                 <Select
                   id="expense-category"
                   value={selectedCategoryId}

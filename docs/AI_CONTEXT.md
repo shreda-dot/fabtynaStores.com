@@ -771,8 +771,53 @@ Dashboard (pick the date); Accounting (position, assumptions 87.5 and 100.01
 which must be rejected). Press Refresh after writes (reports cache 60 s). Then
 run `pnpm --filter @fabtyna/api db:audit` on dev: expect zero rows.
 
+### Expenses upgrade (web only; API and shared untouched)
+
+- `/expenses`: Lagos date range (presets Today, Yesterday, This week from
+  Monday, This month, Last 30 days; 366 inclusive days; no future dates),
+  filters (category incl. inactive, channel, debounced text search, Show
+  voided, default on), all kept in the URL (`from`, `to`, `categoryId`,
+  `channel`, `q`, `voided=0`, `view`). Summary block from
+  `GET /expenses/summary`; by-category table sorted by amount; click a row to
+  filter the list. Loan interest is labelled "Automatic" by looking up the
+  category code in the categories list (the summary has no `code`).
+- List uses `useInfiniteQuery` on `expensesApi.listPage` (50 per page, "Load
+  more"); pages merge without duplicate ids. Keys: `queryKeys.expenses.list`,
+  `pages`, `summary`, `categories(includeInactive)`.
+- `/expenses/categories`: search, active/inactive filter, "Show 20 more"
+  (client side), create, inline rename, deactivate, reactivate; system
+  categories read-only with a badge; single-line Input. After a category write
+  expenses, categories and report keys are invalidated.
+- `/expenses/new`: active, non-LOAN_INTEREST categories sorted by name with a
+  search box once there are more than 8. Amend prefill date fixed: the list
+  now passes `getLagosBusinessDate(new Date(e.expenseDate))` (it used to pass
+  `formatLagosDate`, i.e. `dd/mm/yyyy`); the form also ignores a prefill that
+  is not `YYYY-MM-DD`.
+- Logic lives in `lib/expense-filters.ts` (tests in `expense-filters.test.ts`);
+  exact query strings are `listQuery` / `summaryQuery` in `expenses.real.ts`
+  (tests in `expenses.real.test.ts`).
+- Dev/build isolation: `pnpm --filter @fabtyna/web build:verify` now builds
+  into `apps/web/.next-verify` (env `NEXT_DIST_DIR`, git-ignored) so it can no
+  longer corrupt a running `next dev` that uses `.next`. Run builds that
+  could clash with dev only through `build:verify`.
+- Local URLs: use `http://localhost:3000` (web) and `http://localhost:3001`
+  (API) consistently; `WEB_ORIGIN` and `NEXT_PUBLIC_API_BASE_URL` must use the
+  same host name as the browser address or cookies and CORS fail.
+
 ## 6b. Known limitations
 
+- Expenses summary has no per-channel totals. Without a channel filter a BOTH
+  expense counts in full; the "Retail share" / "Wholesale share" views re-call
+  the summary with `channel`, which makes the server split BOTH. Filtering the
+  summary by account drops LOAN_INTEREST rows (no ledger entry); the page does
+  not offer that filter. The summary ignores the category, search and voided
+  filters (range only).
+- Expense category search and "Show 20 more" are client side because
+  `GET /expense-categories` returns an unpaged array. The older
+  `expensesApi.list` still loops all pages (unbounded) and is no longer used
+  by the expenses page.
+- Mock mode: text search and the categories page are "Not available with demo
+  data"; the demo list and summary (including the share views) keep working.
 - Web sales/purchases: no kobo amount is converted through `Number()`.
   Remaining numeric conversions are validated stock-unit quantities and
   bounded 0–100 accounting percentage-bar values.

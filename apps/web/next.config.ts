@@ -4,6 +4,9 @@ import { PHASE_PRODUCTION_BUILD } from "next/constants";
 const baseConfig: NextConfig = {
   transpilePackages: ["@fabtyna/shared"],
   allowedDevOrigins: ["127.0.0.1"],
+  // `build:verify` sets NEXT_DIST_DIR so it never writes into the folder a running `next dev` uses
+  // (interleaving the two corrupts chunks and causes endless page reloads).
+  ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
 };
 
 /**

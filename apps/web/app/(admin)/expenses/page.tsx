@@ -1,37 +1,49 @@
 "use client";
 
-import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Receipt, Ban } from "lucide-react";
-import Link from "next/link";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  formatLagosDate,
-  getLagosBusinessDate,
-} from "@fabtyna/shared";
-import type { ExpenseCategoryDto, ExpenseRecordDto } from "@/lib/api/expenses.api";
-import { DateFilter } from "@/components/date-filter";
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { Ban, Plus, Receipt, Settings2 } from "lucide-react";
+import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { formatLagosDate, getLagosBusinessDate } from "@fabtyna/shared";
+import type { ExpenseListOptions, ExpenseRecordDto } from "@/lib/api/expenses.api";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
 } from "@/components/responsive-table";
+import { EffectiveRange, ReportRangeFields } from "@/components/reports/report-range";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { FormField } from "@/components/ui/form-field";
+import { Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
-import { Textarea } from "@/components/ui/input";
+import { PageSkeleton } from "@/components/ui/page-skeleton";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
-import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
-import { expensesApi } from "@/lib/api";
-import { isMockApiMode } from "@/lib/api";
-import { toUserMessage } from "@/lib/api/client";
-import { queryKeys } from "@/lib/query-keys";
-import { useWriteFlow } from "@/hooks/use-write-flow";
 import { WriteFlowStatus } from "@/components/write-flow-status";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
+import { useWriteFlow } from "@/hooks/use-write-flow";
+import { expensesApi, isMockApiMode } from "@/lib/api";
+import { toUserMessage } from "@/lib/api/client";
+import {
+  expenseRangePresets,
+  mergeExpensePages,
+  orderCategoryTotals,
+  validateExpenseRange,
+} from "@/lib/expense-filters";
+import { queryKeys } from "@/lib/query-keys";
+import { REPORT_STALE_MS } from "@/lib/report-range";
 
 const CHANNEL_LABELS = {
   RETAIL: "Retail (Fridge)",
@@ -39,38 +51,140 @@ const CHANNEL_LABELS = {
   BOTH: "Both",
 } as const;
 
-export default function ExpensesPage() {
-  const queryClient = useQueryClient();
+const PAGE_SIZE = 50;
 
-  const [filterDate, setFilterDate] = useState(() => getLagosBusinessDate());
+type ChannelFilter = ExpenseListOptions["channel"];
+type SummaryView = "ALL" | "RETAIL" | "WHOLESALE";
+
+function parseChannel(value: string | null): ChannelFilter {
+  return value === "RETAIL" || value === "WHOLESALE" || value === "BOTH" ? value : undefined;
+}
+
+function parseView(value: string | null): SummaryView {
+  return value === "RETAIL" || value === "WHOLESALE" ? value : "ALL";
+}
+
+export default function ExpensesPage() {
+  return (
+    <Suspense fallback={<PageSkeleton variant="list" />}>
+      <ExpensesContent />
+    </Suspense>
+  );
+}
+
+function ExpensesContent() {
+  const queryClient = useQueryClient();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const businessDate = useLagosBusinessDate();
+
+  const urlFrom = searchParams.get("from") ?? businessDate;
+  const urlTo = searchParams.get("to") ?? businessDate;
+  const categoryId = searchParams.get("categoryId") ?? "";
+  const channel = parseChannel(searchParams.get("channel"));
+  const urlQ = searchParams.get("q") ?? "";
+  const showVoided = searchParams.get("voided") !== "0";
+  const summaryView = parseView(searchParams.get("view"));
+
+  // The date inputs keep their own draft so half-typed dates never reach the URL or the API.
+  const [draft, setDraft] = useState<{ from: string; to: string } | null>(null);
+  const from = draft?.from ?? urlFrom;
+  const to = draft?.to ?? urlTo;
+  const rangeError = validateExpenseRange(from, to, businessDate);
+
+  const [qText, setQText] = useState(urlQ);
+  const debouncedQ = useDebouncedValue(qText, 300).trim();
+  const [categorySearch, setCategorySearch] = useState("");
+
+  const setParams = useCallback(
+    (patch: Record<string, string>) => {
+      const params = new URLSearchParams(searchParams.toString());
+      for (const [name, value] of Object.entries(patch)) {
+        if (value === "") params.delete(name);
+        else params.set(name, value);
+      }
+      const qs = params.toString();
+      router.replace(qs === "" ? pathname : `${pathname}?${qs}`, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  useEffect(() => {
+    if (debouncedQ !== urlQ) setParams({ q: debouncedQ });
+  }, [debouncedQ, urlQ, setParams]);
+
+  function changeRange(nextFrom: string, nextTo: string) {
+    setDraft({ from: nextFrom, to: nextTo });
+    if (validateExpenseRange(nextFrom, nextTo, businessDate) === null) {
+      setDraft(null);
+      setParams({ from: nextFrom, to: nextTo });
+    }
+  }
+
+  const listFilters = useMemo(() => {
+    const filters: ExpenseListOptions = { from, to, includeVoided: showVoided };
+    if (categoryId !== "") filters.categoryId = categoryId;
+    if (channel !== undefined) filters.channel = channel;
+    if (debouncedQ !== "" && !isMockApiMode) filters.q = debouncedQ;
+    return filters;
+  }, [from, to, showVoided, categoryId, channel, debouncedQ]);
+
+  const summaryFilters = useMemo(() => {
+    const filters: ExpenseListOptions = { from, to };
+    if (summaryView !== "ALL") filters.channel = summaryView;
+    return filters;
+  }, [from, to, summaryView]);
+
+  const categories = useQuery({
+    queryKey: queryKeys.expenses.categories(true),
+    queryFn: async () => (await expensesApi.listCategories?.(true)) ?? [],
+  });
+
+  const expenses = useInfiniteQuery({
+    queryKey: queryKeys.expenses.pages(listFilters),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      expensesApi.listPage({ ...listFilters, cursor: pageParam, limit: PAGE_SIZE }),
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    enabled: rangeError === null,
+    staleTime: REPORT_STALE_MS,
+  });
+  const loadMoreFailed = expenses.isFetchNextPageError;
+  const listError: unknown = expenses.error;
+  const fetchNext = expenses.fetchNextPage;
+
+  const summary = useQuery({
+    queryKey: queryKeys.expenses.summary(summaryFilters),
+    queryFn: () => expensesApi.summary(summaryFilters),
+    enabled: rangeError === null,
+    staleTime: REPORT_STALE_MS,
+  });
+
+  const rows = useMemo(
+    () => mergeExpensePages(expenses.data?.pages ?? []),
+    [expenses.data],
+  );
+  const firstPage = expenses.data?.pages[0];
+  const categoryList = categories.data ?? [];
+  const categoryById = new Map(categoryList.map((category) => [category.id, category]));
+  const byCategory = orderCategoryTotals(summary.data?.byCategory ?? []);
+
+  const categoryNeedle = categorySearch.trim().toLowerCase();
+  const categoryOptions = [...categoryList]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .filter(
+      (category) =>
+        categoryNeedle === "" ||
+        category.name.toLowerCase().includes(categoryNeedle) ||
+        category.id === categoryId,
+    );
+
+  const writeFlow = useWriteFlow();
   const [voidTarget, setVoidTarget] = useState<ExpenseRecordDto | null>(null);
   const [voidReason, setVoidReason] = useState("");
   const [voidError, setVoidError] = useState("");
-  const businessDate = useLagosBusinessDate();
-  const writeFlow = useWriteFlow();
   const [lastVoid, setLastVoid] = useState<{ id: string; reason: string } | null>(null);
-  const categoryFlow = useWriteFlow();
-  const [categoryName, setCategoryName] = useState("");
-  const [editingCategoryId, setEditingCategoryId] = useState("");
-  const [lastCategoryOperation, setLastCategoryOperation] = useState<
-    { kind: "create"; name: string } |
-    { kind: "rename"; id: string; name: string } |
-    { kind: "active"; id: string; isActive: boolean } | null
-  >(null);
-
-  const expenses = useQuery({
-    queryKey: queryKeys.expenses.list(filterDate, filterDate),
-    queryFn: () => expensesApi.list({ from: filterDate, to: filterDate, includeVoided: true }),
-  });
-  const summary = useQuery({
-    queryKey: [...queryKeys.expenses.list(filterDate, filterDate), "summary"],
-    queryFn: () => expensesApi.summary({ from: filterDate, to: filterDate }),
-  });
-  const categories = useQuery({
-    queryKey: [...queryKeys.expenses.all, "categories"],
-    queryFn: async (): Promise<ExpenseCategoryDto[]> =>
-      (await expensesApi.listCategories?.(true)) ?? [],
-  });
 
   const voidMutation = useMutation({
     mutationFn: async (input: { id: string; reason: string }) => {
@@ -88,36 +202,6 @@ export default function ExpensesPage() {
       setVoidError("");
     },
   });
-  const categoryMutation = useMutation({
-    mutationFn: async (operation: NonNullable<typeof lastCategoryOperation>) => {
-      const isRetry = JSON.stringify(operation) === JSON.stringify(lastCategoryOperation);
-      if (categoryFlow.status === "unknown" && !isRetry) return undefined;
-      if (categoryFlow.status === "failed" && !isRetry) categoryFlow.edit();
-      setLastCategoryOperation(operation);
-      return categoryFlow.run(async (key) => {
-        if (operation.kind === "create") {
-          if (!expensesApi.createCategory) throw new Error("Category creation is unavailable.");
-          return expensesApi.createCategory(operation.name, key);
-        }
-        if (operation.kind === "rename") {
-          if (!expensesApi.renameCategory) throw new Error("Category renaming is unavailable.");
-          return expensesApi.renameCategory(operation.id, operation.name, key);
-        }
-        if (!expensesApi.setCategoryActive) throw new Error("Category activation is unavailable.");
-        return expensesApi.setCategoryActive(operation.id, operation.isActive, key);
-      });
-    },
-    onSuccess: async (result) => {
-      if (!result) return;
-      await queryClient.invalidateQueries({ queryKey: [...queryKeys.expenses.all, "categories"] });
-      setCategoryName("");
-      setEditingCategoryId("");
-    },
-  });
-
-  const rows = expenses.data ?? [];
-  const categoryById = new Map((categories.data ?? []).map((category) => [category.id, category]));
-  const totalKobo = BigInt(summary.data?.totalKobo ?? "0");
 
   function requestVoid(expense: ExpenseRecordDto) {
     setVoidTarget(expense);
@@ -137,22 +221,10 @@ export default function ExpensesPage() {
   }
 
   const columns: ResponsiveTableColumn<ExpenseRecordDto>[] = [
-    {
-      header: "Date",
-      render: (e) => formatLagosDate(e.expenseDate),
-    },
-    {
-      header: "Channel",
-      render: (e) => CHANNEL_LABELS[e.channel],
-    },
-    {
-      header: "Category",
-      render: (e) => e.categoryName,
-    },
-    {
-      header: "Description",
-      render: (e) => e.description,
-    },
+    { header: "Date", render: (e) => formatLagosDate(e.expenseDate) },
+    { header: "Channel", render: (e) => CHANNEL_LABELS[e.channel] },
+    { header: "Category", render: (e) => e.categoryName },
+    { header: "Description", render: (e) => e.description },
     {
       header: "Amount",
       align: "right",
@@ -179,20 +251,23 @@ export default function ExpensesPage() {
           <span className="text-xs text-muted-foreground">Voided</span>
         ) : (
           <div className="flex justify-end gap-2">
-            {!isMockApiMode && <Link
-              href={`/expenses/new?${new URLSearchParams({
-                amendId: e.id,
-                categoryId: e.categoryId,
-                channel: e.channel,
-                description: e.description,
-                amountKobo: e.amountKobo,
-                expenseDate: formatLagosDate(e.expenseDate),
-                accountId: e.accountId ?? "",
-              }).toString()}`}
-              className={buttonClasses({ variant: "secondary", size: "sm" })}
-            >
-              Amend
-            </Link>}
+            {!isMockApiMode && (
+              <Link
+                href={`/expenses/new?${new URLSearchParams({
+                  amendId: e.id,
+                  categoryId: e.categoryId,
+                  channel: e.channel,
+                  description: e.description,
+                  amountKobo: e.amountKobo,
+                  // The form needs YYYY-MM-DD; formatLagosDate gives a display string.
+                  expenseDate: getLagosBusinessDate(new Date(e.expenseDate)),
+                  accountId: e.accountId ?? "",
+                }).toString()}`}
+                className={buttonClasses({ variant: "secondary", size: "sm" })}
+              >
+                Amend
+              </Link>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -203,7 +278,7 @@ export default function ExpensesPage() {
               Void
             </Button>
           </div>
-      ),
+        ),
     },
   ];
 
@@ -213,10 +288,21 @@ export default function ExpensesPage() {
         title="Expenses"
         description="Track operating costs by channel."
         actions={
-          <Link href="/expenses/new" className={buttonClasses()}>
-            <Plus aria-hidden="true" className="h-4 w-4" />
-            Add expense
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            {!isMockApiMode && (
+              <Link
+                href="/expenses/categories"
+                className={buttonClasses({ variant: "secondary" })}
+              >
+                <Settings2 aria-hidden="true" className="h-4 w-4" />
+                Manage categories
+              </Link>
+            )}
+            <Link href="/expenses/new" className={buttonClasses()}>
+              <Plus aria-hidden="true" className="h-4 w-4" />
+              Add expense
+            </Link>
+          </div>
         }
       />
 
@@ -285,167 +371,227 @@ export default function ExpensesPage() {
         )}
       </Modal>
 
-      <StatCard
-        label="Expenses on selected date"
-        value={<Money kobo={totalKobo} tone="neutral" />}
-        icon={Receipt}
-      />
-      {!isMockApiMode && (
-        <Card>
-          <CardBody className="space-y-4">
-            <h2 className="font-semibold">Expense categories</h2>
-            <form
-              className="flex flex-col gap-2 sm:flex-row"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const name = categoryName.trim();
-                if (!name) return;
-                categoryMutation.mutate(
-                  editingCategoryId
-                    ? { kind: "rename", id: editingCategoryId, name }
-                    : { kind: "create", name },
-                );
-              }}
-            >
-              <Textarea
-                aria-label="Category name"
-                value={categoryName}
-                rows={1}
-                maxLength={60}
-                onChange={(event) => {
-                  categoryFlow.edit();
-                  setCategoryName(event.target.value);
-                }}
-                placeholder={editingCategoryId ? "Rename category" : "New category name"}
-              />
-              <div className="flex gap-2">
-                <Button
-                  type="submit"
-                  loading={categoryMutation.isPending}
-                  disabled={categoryMutation.isPending || categoryFlow.status === "unknown"}
-                >
-                  {editingCategoryId ? "Save name" : "Add category"}
-                </Button>
-                {editingCategoryId && (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() => { setEditingCategoryId(""); setCategoryName(""); }}
-                  >
-                    Cancel
-                  </Button>
-                )}
-              </div>
-            </form>
-            {categories.isPending ? (
-              <Skeleton variant="row" count={2} />
-            ) : categories.isError ? (
-              <ErrorState
-                title="Categories could not be loaded"
-                message={toUserMessage(categories.error)}
-                onRetry={() => void categories.refetch()}
-              />
-            ) : (
-              <ul className="divide-y divide-border">
-                {(categories.data ?? []).map((category) => (
-                  <li key={category.id} className="flex flex-wrap items-center justify-between gap-3 py-2">
-                    <span>{category.name}{category.isActive ? "" : " (inactive)"}</span>
-                    <span className="flex gap-2">
-                      {category.code === null && (
-                        <>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            disabled={!category.isActive || categoryMutation.isPending || categoryFlow.status === "unknown"}
-                            onClick={() => {
-                              setEditingCategoryId(category.id);
-                              setCategoryName(category.name);
-                              categoryFlow.edit();
-                            }}
-                          >
-                            Rename
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            disabled={categoryMutation.isPending || categoryFlow.status === "unknown"}
-                            onClick={() => {
-                              categoryFlow.edit();
-                              categoryMutation.mutate({
-                                kind: "active",
-                                id: category.id,
-                                isActive: !category.isActive,
-                              });
-                            }}
-                          >
-                            {category.isActive ? "Deactivate" : "Reactivate"}
-                          </Button>
-                        </>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <WriteFlowStatus
-              flow={categoryFlow}
-              onRetry={() => {
-                if (lastCategoryOperation) categoryMutation.mutate(lastCategoryOperation);
-              }}
-              checkHref="/expenses"
-              checkLabel="Check categories"
-              showFieldErrors
-            />
-            {categoryMutation.isError && (
-              <p role="alert" className="text-sm text-danger">{toUserMessage(categoryMutation.error)}</p>
-            )}
-          </CardBody>
-        </Card>
-      )}
-      {summary.isError && (
-        <ErrorState
-          title="Expense summary could not be loaded"
-          message={toUserMessage(summary.error)}
-          onRetry={() => void summary.refetch()}
-        />
-      )}
-
       <Card>
-        <CardBody className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <DateFilter
-            id="f-date"
-            value={filterDate}
-            onChange={setFilterDate}
-            max={businessDate}
+        <CardBody className="space-y-4">
+          <ReportRangeFields
+            idPrefix="expenses"
+            from={from}
+            to={to}
+            businessDate={businessDate}
+            error={rangeError}
+            presets={expenseRangePresets(businessDate)}
+            onChange={changeRange}
           />
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <FormField id="expenses-category" label="Category">
+              {categoryList.length > 8 && (
+                <Input
+                  aria-label="Search categories"
+                  placeholder="Search categories"
+                  value={categorySearch}
+                  onChange={(event) => setCategorySearch(event.target.value)}
+                />
+              )}
+              <Select
+                id="expenses-category"
+                value={categoryId}
+                onChange={(event) => setParams({ categoryId: event.target.value })}
+              >
+                <option value="">All categories</option>
+                {categoryOptions.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                    {category.isActive ? "" : " (inactive)"}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+            <FormField id="expenses-channel" label="Channel">
+              <Select
+                id="expenses-channel"
+                value={channel ?? ""}
+                onChange={(event) => setParams({ channel: event.target.value })}
+              >
+                <option value="">All channels</option>
+                <option value="RETAIL">Retail (Fridge)</option>
+                <option value="WHOLESALE">Wholesale</option>
+                <option value="BOTH">Both</option>
+              </Select>
+            </FormField>
+            <FormField
+              id="expenses-search"
+              label="Search"
+              hint={isMockApiMode ? "Not available with demo data" : undefined}
+            >
+              <Input
+                id="expenses-search"
+                value={qText}
+                maxLength={100}
+                disabled={isMockApiMode}
+                placeholder="Description"
+                onChange={(event) => setQText(event.target.value)}
+              />
+            </FormField>
+            <label className="flex items-center gap-2 self-end pb-3 text-sm">
+              <input
+                type="checkbox"
+                checked={showVoided}
+                onChange={(event) => setParams({ voided: event.target.checked ? "" : "0" })}
+              />
+              Show voided
+            </label>
+          </div>
         </CardBody>
       </Card>
 
-      {expenses.isPending ? (
-        <Skeleton variant="row" count={5} />
-      ) : expenses.isError ? (
-        <ErrorState
-          title="Expenses could not be loaded"
-          message={toUserMessage(expenses.error)}
-          onRetry={() => void expenses.refetch()}
-        />
-      ) : rows.length === 0 ? (
-        <EmptyState
-          icon={Receipt}
-          title="No expenses yet"
-          description="Add your first expense to start tracking costs."
-          action={
-            <Link
-              href="/expenses/new"
-              className={buttonClasses({ variant: "secondary" })}
-            >
-              Add expense
-            </Link>
-          }
-        />
-      ) : (
-        <ResponsiveTable rows={rows} columns={columns} getKey={(e) => e.id} />
+      {rangeError === null && (
+        <section className="space-y-3" aria-label="Summary">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="max-w-xs flex-1">
+              <FormField
+                id="expenses-summary-view"
+                label="Summary view"
+                hint="Summary covers the date range only (not the filters below). Voided expenses are never counted."
+              >
+                <Select
+                  id="expenses-summary-view"
+                  value={summaryView}
+                  onChange={(event) =>
+                    setParams({ view: event.target.value === "ALL" ? "" : event.target.value })
+                  }
+                >
+                  <option value="ALL">All expenses, as recorded</option>
+                  <option value="RETAIL">Retail share</option>
+                  <option value="WHOLESALE">Wholesale share</option>
+                </Select>
+              </FormField>
+            </div>
+            {summary.data?.from && summary.data.to && (
+              <EffectiveRange from={summary.data.from} to={summary.data.to} />
+            )}
+          </div>
+          {summaryView !== "ALL" && (
+            <p className="text-xs text-muted-foreground">
+              “Both” expenses are split between Retail and Wholesale by the server; this view
+              shows the {summaryView === "RETAIL" ? "retail" : "wholesale"} half.
+            </p>
+          )}
+          {summary.isPending ? (
+            <Skeleton variant="row" count={3} />
+          ) : summary.isError ? (
+            <ErrorState
+              title="Expense summary could not be loaded"
+              message={toUserMessage(summary.error)}
+              onRetry={() => void summary.refetch()}
+            />
+          ) : (
+            <>
+              <StatCard
+                label={`Total expenses (${summary.data.count})`}
+                value={<Money kobo={summary.data.totalKobo} tone="neutral" />}
+                icon={Receipt}
+              />
+              {byCategory.length > 0 && (
+                <Card>
+                  <CardBody>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-muted-foreground">
+                          <th className="py-1 font-medium">Category</th>
+                          <th className="py-1 text-right font-medium">Expenses</th>
+                          <th className="py-1 text-right font-medium">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {byCategory.map((row) => (
+                          <tr
+                            key={row.id}
+                            className="cursor-pointer border-t border-border hover:bg-muted"
+                            onClick={() => setParams({ categoryId: row.id })}
+                          >
+                            <td className="py-2">
+                              <button
+                                type="button"
+                                className="text-left font-medium underline-offset-2 hover:underline"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setParams({ categoryId: row.id });
+                                }}
+                              >
+                                {row.name}
+                              </button>{" "}
+                              {categoryById.get(row.id)?.code === "LOAN_INTEREST" && (
+                                <Badge tone="info">Automatic</Badge>
+                              )}
+                            </td>
+                            <td className="py-2 text-right">{row.count}</td>
+                            <td className="py-2 text-right">
+                              <Money kobo={row.totalKobo} tone="neutral" />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </CardBody>
+                </Card>
+              )}
+            </>
+          )}
+        </section>
       )}
+
+      <section className="space-y-3" aria-label="Expense list">
+        {rangeError !== null ? null : expenses.isPending ? (
+          <Skeleton variant="row" count={5} />
+        ) : expenses.isError && !loadMoreFailed ? (
+          <ErrorState
+            title="Expenses could not be loaded"
+            message={toUserMessage(listError)}
+            onRetry={() => void expenses.refetch()}
+          />
+        ) : rows.length === 0 ? (
+          <EmptyState
+            icon={Receipt}
+            title="No expenses match"
+            description="Change the dates or filters, or add an expense."
+            action={
+              <Link href="/expenses/new" className={buttonClasses({ variant: "secondary" })}>
+                Add expense
+              </Link>
+            }
+          />
+        ) : (
+          <>
+            {firstPage?.from && firstPage.to && (
+              <EffectiveRange from={firstPage.from} to={firstPage.to} />
+            )}
+            <p className="text-sm text-muted-foreground">
+              {expenses.hasNextPage
+                ? `Showing ${rows.length} of the expenses in this range; load more to see the rest.`
+                : `Showing all ${rows.length} expenses in this range.`}
+            </p>
+            <ResponsiveTable rows={rows} columns={columns} getKey={(e) => e.id} />
+            {loadMoreFailed && (
+              <ErrorState
+                title="More expenses could not be loaded"
+                message={toUserMessage(listError)}
+                onRetry={() => void fetchNext()}
+              />
+            )}
+            {expenses.hasNextPage && (
+              <div className="flex justify-center">
+                <Button
+                  variant="secondary"
+                  loading={expenses.isFetchingNextPage}
+                  onClick={() => void fetchNext()}
+                >
+                  Load more
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </section>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { Client } from "pg";
 import { resolveSslConfig } from "../lib/ssl.js";
-import { databaseNameOf, hostOf } from "./verify.js";
+import { databaseNameOf } from "../lib/db-target.js";
 
 /**
  * The database-side half of `db:audit` — the read-only counterpart of
@@ -14,8 +14,8 @@ import { databaseNameOf, hostOf } from "./verify.js";
  * `stock_balances.quantityUnits` can drift, and this script is what catches it.
  *
  * Every query below must return **zero rows** on clean data. It is strictly
- * read-only and never prints the connection string — only the database name
- * and host.
+ * read-only and never prints the connection string or host, only the database
+ * name.
  */
 
 export interface AuditCheck {
@@ -44,7 +44,6 @@ export interface AuditCheckResult {
 export interface AuditResult {
   ok: boolean;
   databaseName: string;
-  host: string;
   checks: AuditCheckResult[];
 }
 
@@ -480,7 +479,6 @@ export async function runDbAudit(connectionString: string): Promise<AuditResult>
     return {
       ok,
       databaseName: databaseNameOf(connectionString),
-      host: hostOf(connectionString),
       checks,
     };
   } finally {

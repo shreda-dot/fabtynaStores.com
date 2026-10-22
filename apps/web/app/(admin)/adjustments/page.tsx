@@ -22,6 +22,7 @@ import { adjustmentsApi } from "@/lib/api";
 import { isMockApiMode } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { invalidateReportsAndBalances } from "@/lib/invalidate-after-write";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
 import { useWriteFlow } from "@/hooks/use-write-flow";
@@ -53,6 +54,7 @@ export default function AdjustmentsPage() {
       if (!result) return;
       void queryClient.invalidateQueries({ queryKey: queryKeys.adjustments.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+      void invalidateReportsAndBalances(queryClient);
     },
     onError: (error) => toast.error(toUserMessage(error)),
   });

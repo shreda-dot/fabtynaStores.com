@@ -9,6 +9,6 @@
     "lint": "pnpm --filter @fabtyna/web lint",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm --filter @fabtyna/web build:verify"
   }
 }

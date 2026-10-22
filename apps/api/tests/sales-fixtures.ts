@@ -6,6 +6,7 @@ import { buildApp } from "../src/app.js";
 import type { Actor } from "../src/auth/actor.js";
 import { hashSessionToken, SESSION_COOKIE_BASE_NAME } from "../src/auth/session.js";
 import { createPrismaClient } from "../src/lib/prisma.js";
+import type { LoggerOption } from "../src/lib/logging.js";
 import { resolveTestConnectionString } from "./test-db.js";
 
 export const connectionString = resolveTestConnectionString();
@@ -32,6 +33,7 @@ export interface HarnessOptions {
   /** Lets one test hand the app a client whose transaction is wrapped (see atomicity test). */
   wrapPrisma?: (prisma: PrismaClient) => PrismaClient;
   now?: () => Date;
+  logger?: boolean | LoggerOption;
   onRoute?: (route: { method: string | string[]; url: string }) => void;
 }
 
@@ -68,6 +70,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       sessionAbsoluteTimeoutDays: 7,
     },
     trustProxy: false,
+    logger: options.logger,
     now: options.now,
     onTransaction: (entry) => txLog.push(entry),
     onRoute: (route) => {

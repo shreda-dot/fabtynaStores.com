@@ -1,25 +1,15 @@
 "use client";
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { createAppQueryClient } from "@/lib/create-query-client";
 import {
   setMockStoreInvalidator,
   setupMockStoreStorageListener,
 } from "@/lib/api/mock-store";
 
 export function QueryProvider({ children }: { children: React.ReactNode }) {
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            retry: 1,
-            staleTime: 15_000,
-            refetchOnWindowFocus: false,
-          },
-        },
-      }),
-  );
+  const [queryClient] = useState(createAppQueryClient);
 
   useEffect(() => {
     setMockStoreInvalidator(() => {

@@ -32,6 +32,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { accountingApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { invalidateReportsAndBalances } from "@/lib/invalidate-after-write";
 import { useWriteFlow } from "@/hooks/use-write-flow";
 import { WriteFlowStatus } from "@/components/write-flow-status";
 import { isMockApiMode } from "@/lib/api";
@@ -313,6 +314,7 @@ export default function AccountsPage() {
       setEntryReversalTarget(null);
       await queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
       await queryClient.invalidateQueries({ queryKey: queryKeys.accounting.accounts });
+      void invalidateReportsAndBalances(queryClient);
     },
   });
 

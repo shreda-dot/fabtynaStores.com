@@ -5,6 +5,7 @@ import { startSessionCleanup } from "./auth/session.js";
 import { startIdempotencyCleanup } from "./lib/idempotency.js";
 import type { RuntimeEnv } from "./lib/env.js";
 import { createPrismaClient } from "./lib/prisma.js";
+import { buildLoggerOptions, type LoggerOption } from "./lib/logging.js";
 
 export interface StartedServer {
   app: FastifyInstance;
@@ -17,7 +18,7 @@ export interface StartedServer {
  */
 export async function startServer(
   env: RuntimeEnv,
-  overrides: { port?: number; logger?: boolean } = {},
+  overrides: { port?: number; logger?: boolean | LoggerOption } = {},
 ): Promise<StartedServer> {
   const prisma = createPrismaClient(env.apiDatabaseUrl, { maxConnections: env.dbPoolMax });
   try {
@@ -31,7 +32,7 @@ export async function startServer(
         sessionAbsoluteTimeoutDays: env.sessionAbsoluteTimeoutDays,
       },
       trustProxy: env.trustProxy,
-      logger: overrides.logger ?? true,
+      logger: overrides.logger ?? buildLoggerOptions(),
       txTimeouts: env.txTimeouts,
       maxDateRangeDays: env.maxDateRangeDays,
     });

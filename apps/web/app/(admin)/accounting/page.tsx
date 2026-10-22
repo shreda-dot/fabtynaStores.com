@@ -92,13 +92,17 @@ export default function AccountingOverviewPage() {
       scenario: null,
       ...options,
     }),
-    queryFn: () =>
-      accountingApi.position({
+    queryFn: async () => ({
+      position: await accountingApi.position({
         stockDiscountBps: options.stockDiscountBps ?? undefined,
         receivablesCollectibleBps: options.receivablesCollectibleBps ?? undefined,
         includeReceivables,
         includeCash,
       }),
+      // The assumptions these numbers were computed for, so the page can name them.
+      appliedDiscountBps: options.stockDiscountBps,
+      appliedCollectibleBps: options.receivablesCollectibleBps,
+    }),
     enabled: assumptionsValid,
     placeholderData: keepPreviousData,
     staleTime: REPORT_STALE_MS,
@@ -167,7 +171,15 @@ export default function AccountingOverviewPage() {
     );
   }
 
-  const result = positionQuery.data;
+  const result = positionQuery.data?.position;
+  const appliedDiscountBps = positionQuery.data?.appliedDiscountBps ?? null;
+  const appliedCollectibleBps = positionQuery.data?.appliedCollectibleBps ?? null;
+  const typedMatchesShown =
+    discountParsed.ok &&
+    collectibleParsed.ok &&
+    discountParsed.bps === appliedDiscountBps &&
+    collectibleParsed.bps === appliedCollectibleBps &&
+    !positionQuery.isFetching;
   if (result === undefined) {
     return (
       <div className="space-y-6">
@@ -375,10 +387,19 @@ export default function AccountingOverviewPage() {
               Percentages may have up to 2 decimals (for example 87.5). Discount
               applies to stock only. Debts are scaled by the collectible
               percentage.
-              {!inputsValid && " Showing the last valid result until the input is fixed."}
+              {!inputsValid && " Fix the input to update the results."}
               {positionQuery.isFetching && " Updating…"}
             </span>
           </div>
+          {!typedMatchesShown && (
+            <p
+              role="status"
+              className="text-sm font-medium text-foreground sm:col-span-2 lg:col-span-4"
+            >
+              Showing results for stock discount {formatBps(appliedDiscountBps)} / debtors
+              collectible {formatBps(appliedCollectibleBps)}.
+            </p>
+          )}
         </CardBody>
       </Card>
 

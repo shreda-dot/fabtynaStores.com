@@ -31,6 +31,7 @@ import { accountingApi, isMockApiMode, loansApi } from "@/lib/api";
 import type { LoanDetailDto, SavedRepaymentDto } from "@/lib/api/loans.api";
 import { ApiError, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { invalidateReportsAndBalances } from "@/lib/invalidate-after-write";
 import { confirm } from "@/stores/confirm-store";
 
 type RepaymentInput = {
@@ -161,6 +162,7 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
     void queryClient.invalidateQueries({ queryKey: queryKeys.loans.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.expenses.all });
+    void invalidateReportsAndBalances(queryClient);
   }
 
   const repayMutation = useMutation({

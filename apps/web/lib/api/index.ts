@@ -1,4 +1,5 @@
 import { productsMockApi } from "./products.mock";
+import { productionApiModeProblem } from "./mode-guard";
 import { suppliersMockApi } from "./suppliers.mock";
 import { customersMockApi } from "./customers.mock";
 import { purchasesMockApi } from "./purchases.mock";
@@ -46,6 +47,15 @@ const cashRealApi: CashApi = {
 };
 
 const apiMode = process.env.NEXT_PUBLIC_API_MODE ?? "mock";
+
+const productionProblem = productionApiModeProblem(
+  process.env.NODE_ENV,
+  process.env.NEXT_PUBLIC_API_MODE,
+  process.env.NEXT_PUBLIC_API_BASE_URL,
+);
+if (productionProblem !== null) {
+  throw new Error(productionProblem);
+}
 
 if (apiMode !== "mock" && apiMode !== "real") {
   throw new Error(`Unsupported NEXT_PUBLIC_API_MODE '${apiMode}'.`);

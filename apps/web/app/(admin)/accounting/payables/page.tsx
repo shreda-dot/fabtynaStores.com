@@ -21,6 +21,7 @@ import {
   formatNaira,
 } from "@fabtyna/shared";
 import { DateFilter } from "@/components/date-filter";
+import { invalidateReportsAndBalances } from "@/lib/invalidate-after-write";
 import { MoneyInput } from "@/components/money-input";
 import { AccountSelect, defaultAccountId } from "@/components/accounting/account-select";
 import { StatusBadge } from "@/components/ui/badge";
@@ -225,6 +226,7 @@ export default function PayablesPage() {
         void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
         void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
         void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+        void invalidateReportsAndBalances(queryClient);
         setPayingPurchaseId(null);
         setPaymentKobo("");
         setAccountId("");

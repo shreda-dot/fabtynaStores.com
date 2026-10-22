@@ -233,7 +233,7 @@ export const expensesMockApi: ExpensesApi = {
       }
       if (expense.loanRepaymentId !== null) {
         throw new RangeError(
-          "A loan-interest expense cannot be voided separately from its repayment.",
+          "Loan interest expenses are created automatically by a repayment and cannot be voided. Loan repayment reversal is not available yet.",
         );
       }
       const before = toExpenseDto(expense);

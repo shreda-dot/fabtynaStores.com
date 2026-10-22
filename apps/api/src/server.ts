@@ -1,8 +1,10 @@
 import { loadRuntimeEnv } from "./lib/env.js";
+import { assertProductionTimeZone } from "./lib/timezone.js";
 import { startServer } from "./start.js";
 
 async function main(): Promise<void> {
   const env = loadRuntimeEnv();
+  assertProductionTimeZone(env.nodeEnv);
   const { app } = await startServer(env);
 
   const shutdown = async (signal: string): Promise<void> => {

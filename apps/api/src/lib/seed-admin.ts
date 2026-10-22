@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { databaseNameOf } from "../db/verify.js";
+import { databaseNameOf } from "./db-target.js";
 import { createPrismaClient, type PrismaClient } from "./prisma.js";
 import { isArgon2idHash } from "./password.js";
 

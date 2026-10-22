@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
 import { runDbVerify, type VerifyResult } from "../db/verify.js";
+import { describeDatabase, parseTargetArgs, resolveConnectionString } from "../lib/db-target.js";
 
 // Prisma 7 and tsx do not load `.env` for us, so load it from the package root
 // before any value is read (same pattern as src/lib/env.ts).
@@ -9,12 +10,12 @@ config({ path: fileURLToPath(new URL("../../.env", import.meta.url)) });
 /**
  * `pnpm --filter @fabtyna/api db:verify`
  *
- * Read-only. Connects to the database in `DATABASE_URL` (or the one named by
+ * Read-only. Connects to the database in `DIRECT_URL` (or the one named by
  * `--url`), then proves that every migration, CHECK constraint, trigger and
  * partial index listed in `src/db/expected-schema.ts` is present, applied and
  * unmodified. Prints one PASS/FAIL line per item and exits non-zero if anything
- * is missing. It never prints the connection string — only the database name
- * and host.
+ * is missing. It never prints the connection string or host — only the
+ * database name and its class (dev, test or prod).
  *
  * Usage:
  *   pnpm --filter @fabtyna/api db:verify
@@ -22,59 +23,8 @@ config({ path: fileURLToPath(new URL("../../.env", import.meta.url)) });
  *   pnpm --filter @fabtyna/api db:verify -- --url "<postgres://...>"
  */
 
-interface CliOptions {
-  /** Either an env var name (e.g. DATABASE_URL) or a literal connection string. */
-  url: string;
-}
-
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { url: "DATABASE_URL" };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-
-    if (arg === "--url") {
-      const value = argv[index + 1];
-      if (value === undefined || value === "") {
-        throw new Error("--url requires a value: an environment variable name or a connection string.");
-      }
-      options.url = value;
-      index += 1;
-      continue;
-    }
-
-    if (arg.startsWith("--url=")) {
-      const value = arg.slice("--url=".length);
-      if (value === "") {
-        throw new Error("--url requires a value: an environment variable name or a connection string.");
-      }
-      options.url = value;
-      continue;
-    }
-
-    throw new Error(`Unknown argument "${arg}". Supported: --url <NAME|VALUE>.`);
-  }
-
-  return options;
-}
-
-/** Resolves `--url` to a connection string: a literal URL, or an env var name. */
-function resolveConnectionString(requested: string): { connectionString: string; source: string } {
-  if (/^postgres(ql)?:\/\//.test(requested)) {
-    return { connectionString: requested, source: "--url (literal)" };
-  }
-
-  const value = (process.env[requested] ?? "").trim();
-  if (value === "") {
-    throw new Error(
-      `${requested} is empty or not set. Refusing to run db:verify without a target database.`,
-    );
-  }
-  return { connectionString: value, source: requested };
-}
-
 function report(result: VerifyResult, source: string): void {
-  console.log(`Target: ${result.databaseName} (host ${result.host})`);
+  console.log(`Target: ${describeDatabase(result.databaseName)}`);
   console.log(`Connection from: ${source}`);
   console.log("");
 
@@ -130,8 +80,8 @@ function report(result: VerifyResult, source: string): void {
 }
 
 async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  const { connectionString, source } = resolveConnectionString(options.url);
+  const options = parseTargetArgs(process.argv.slice(2));
+  const { connectionString, source } = resolveConnectionString(options.url, "DIRECT_URL", "db:verify");
 
   const result = await runDbVerify(connectionString);
   report(result, source);

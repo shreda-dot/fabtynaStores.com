@@ -39,7 +39,7 @@ dev --create-only` diffs the schema against the database. The one surviving
 | Table names        | `snake_case` via `@@map`.                                                                                                                                                         |
 | Column names       | **camelCase** — Prisma maps table names only. Raw SQL must double-quote them (`"paidKobo"`).                                                                                      |
 | Ledgers            | Append-only. A correction is a **new** row whose `reversesEntryId` points at the original.                                                                                        |
-| Connection strings | Migrations/schema commands use `DIRECT_URL` (direct Neon host, no pooler) declared in `prisma.config.ts`. **The API process also uses `DIRECT_URL`**, with a small pool (`DB_POOL_MAX`, max 10): the pooled endpoint dropped connections during long transactional work, and a sale is one interactive transaction with `FOR UPDATE` row locks. Revisit at deployment. Tests use `TEST_DATABASE_URL` (direct; a `-pooler` host is refused). `DATABASE_URL` (pooled) is optional and unused by the API for now. |
+| Connection strings | Migrations/schema commands use `DIRECT_URL` (direct Neon host, no pooler) declared in `prisma.config.ts`. **The API process also uses `DIRECT_URL`**, with a small pool (`DB_POOL_MAX`, max 10): the pooled endpoint dropped connections during long transactional work, and a sale is one interactive transaction with `FOR UPDATE` row locks. Revisit at deployment. Tests use `TEST_DIRECT_URL` first (direct Neon test branch; a `-pooler` host is refused), falling back to `TEST_DATABASE_URL`. `db:verify`, `db:audit` and `db:seed:admin` default to `DIRECT_URL` when `--url` is omitted. See `docs/AI_CONTEXT.md` (URL variable table) and `docs/DEPLOY.md`. `DATABASE_URL` (pooled) is optional and unused by the API for now. |
 
 ---
 
@@ -476,7 +476,7 @@ proves the *data* obeys them.
 
 ```bash
 pnpm --filter @fabtyna/api db:audit
-pnpm --filter @fabtyna/api db:audit -- --url TEST_DATABASE_URL
+pnpm --filter @fabtyna/api db:audit -- --url TEST_DIRECT_URL
 ```
 
 It runs every query below, prints the offending rows, and **exits non-zero if

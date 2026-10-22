@@ -62,21 +62,27 @@ phone on slow networks, so the web app is mobile-first with a network status bar
 ## 3. Commands that actually exist
 
 Root (`package.json`):
-- `pnpm verify` = `pnpm typecheck && pnpm lint && pnpm test && pnpm build`
+- `pnpm verify` = `pnpm typecheck && pnpm lint && pnpm test && pnpm --filter @fabtyna/web build:verify`
+  (`build:verify` runs `next build` with PLACEHOLDER `NEXT_PUBLIC_API_MODE=real` and
+  `NEXT_PUBLIC_API_BASE_URL` so the production-build guard passes; its output is never deployed)
 - `pnpm typecheck` = `pnpm -r typecheck`; `pnpm test` = `pnpm -r test`
   (runs shared tests, then API tests — the API suite needs a test DB, §4)
 - `pnpm dev` / `pnpm build` / `pnpm lint` target `@fabtyna/web` only.
 
 API (`pnpm --filter @fabtyna/api …`):
-- `db:verify` → `tsx src/scripts/db-verify.ts`. Accepts
-  `-- --url TEST_DATABASE_URL` (an env-var name, or a literal URL).
+- `db:verify` → `tsx src/scripts/db-verify.ts`. Defaults to `DIRECT_URL`; accepts
+  `-- --url TEST_DIRECT_URL` (an env-var name, or a literal URL).
 - `db:audit` → `tsx src/scripts/db-audit.ts` (same `--url` handling).
-- `db:seed:admin` → `tsx src/scripts/seed-admin.ts`, flag `-- --additional`.
+- `db:whoami`, `db:migrate:deploy` (needs `--confirm-db <name>`).
+- `db:seed:admin` → `tsx src/scripts/seed-admin.ts`, needs `-- --confirm-db <name>`; flag `--additional`.
 - `hash-password` → `tsx src/scripts/hash-password.ts` (interactive, no args).
 - `test` (vitest run), `typecheck`, `build`, `prisma:format`, `prisma:validate`.
-- `dev`/`start` run `src/server.ts` / `dist/server.js`. `dev` (tsx) is verified;
-  `start` runs the compiled output, which imports the shared package as
-  TypeScript source, so use `dev` until a deployment build exists.
+- `build` → `node scripts/build.mjs`: runs `prisma generate` (placeholder `DIRECT_URL`
+  if unset) then bundles `src/server.ts` with esbuild into `dist/server.js` (ESM, node20;
+  `@fabtyna/shared` is bundled, every other dependency stays external and must be installed).
+  `start` → `node dist/server.js`. Proven from a clean copy with a frozen,
+  production-only install (see `docs/DEPLOY.md`). `engines.node` is `>=20.19.0 <21`; `.node-version` is 20.19.6.
+- `dev` (tsx) runs `src/server.ts`.
 
 Shared: `pnpm --filter @fabtyna/shared test` (vitest run) and `typecheck`.
 (`pnpm --filter @fabtyna/shared exec vitest run` also works, but the script is
@@ -781,21 +787,43 @@ run `pnpm --filter @fabtyna/api db:audit` on dev: expect zero rows.
 - Money flow dates a payment reversal on its own day, while the sales summary
   excludes a reversed payment entirely, so cash received can differ between
   the two reports for a period containing a reversal (the web shows a note).
-- Money flow and the other reports can be up to 60 s stale after writes made
-  on account pages (staleTime); the Refresh button refetches.
+- Money flow and the other reports are marked stale after every successful write
+  (see above); only plain tab switching uses the 60 s staleTime. Writes made from
+  another device/tab are not seen until the Refresh button or the staleTime expires.
 - Old mock data with a paid balance but no payment rows shows no cash received.
 - Report real-mode fixtures from a live API were NOT recorded (dev API not
   reachable during the 7D build); tests use hand-built API-shaped fixtures.
 - Loan repayment reversal does not exist: a mistaken repayment cannot be
-  corrected, and its linked LOAN_INTEREST expense cannot be voided (the void
-  guard message "Reverse the loan repayment instead" is misleading for now).
+  corrected, and its linked LOAN_INTEREST expense cannot be voided or amended.
+  Both guard messages say so ("...created automatically by a repayment and
+  cannot be voided/amended. Loan repayment reversal is not available yet.").
 - Average cost on purchase void or amend recomputes from the already-rounded
   unit cost, so it can differ by 1 kobo from the receive result. A later fix
   should recompute from the stored `lineTotalKobo`, with a differential test.
 - Loan list totals in the web cards cover only the loaded rows (keyset pages);
   the cards now say so.
-- Raw connection errors (ENOTFOUND, ECONNRESET) reach the API's 500 handler;
-  only Prisma/PG codes P2028, P1001, P1017, 55P03, 40P01, 40001 map to 503.
+- Connection-level database errors (ENOTFOUND, EAI_AGAIN, ECONNRESET, ECONNREFUSED,
+  ETIMEDOUT, "Connection terminated unexpectedly", "timeout expired", plus Prisma/PG
+  codes P2028, P1001, P1017, 55P03, 40P01, 40001) map to 503 UNAVAILABLE with
+  `Retry-After: 2` (`lib/errors.ts` `isConnectionError`). A write that fails this way
+  rolls back together with its idempotency key, so retrying with the same key is safe
+  (proved in `tests/connection-errors-http.test.ts`).
+- Logs redact cookie/authorization request headers, `set-cookie` response headers and
+  body fields `password`, `currentPassword`, `newPassword`, `passwordHash`
+  (`lib/logging.ts`, `tests/log-redaction.test.ts`). `TRUST_PROXY` is configurable.
+- Production requires an effective timezone of UTC (`lib/timezone.ts`, checked in
+  `server.ts`; the process refuses to start otherwise). Measured on the test DB:
+  idempotency `expiresAt` is stored in UTC whatever `TZ` is and cleanup fires correctly,
+  so this is a consistency rule, not a bug fix.
+- The web `next build` FAILS unless `NEXT_PUBLIC_API_MODE=real` and a valid
+  `NEXT_PUBLIC_API_BASE_URL` are set (`next.config.ts`); `lib/api/index.ts` also throws
+  at runtime in a production build that is not real mode. `next dev` is unaffected, mock mode still works.
+- Every successful write marks report and account-balance queries stale
+  (`lib/invalidate-after-write.ts`, `lib/create-query-client.ts` mutation safety net;
+  explicit calls on direct-call write flows). The 60 s report staleTime still applies to tab switches.
+- Empty-database `prisma migrate deploy` has NOT been verified (the local test server
+  login failed and the owner chose to skip it). `db:migrate:deploy` against the existing
+  test database reported "No pending migrations". To verify once: run it on the first fresh database.
 - Dev records are immutable and cannot be deleted; use clearly named test data.
 - Database SSL: one helper, `apps/api/src/lib/ssl.ts` (`resolveSslConfig`), is
   used by `db/verify.ts`, `db/audit.ts` and `lib/prisma.ts`; `tests/test-db.ts`
@@ -809,11 +837,23 @@ run `pnpm --filter @fabtyna/api db:audit` on dev: expect zero rows.
   must use: `pnpm db:verify -- --url TEST_DIRECT_URL`. `TEST_DATABASE_URL` is a
   local server without SSL; to target it add `?sslmode=disable` to that URL.
   Last results (dev and test, direct URLs): db:verify PASS, db:audit PASS.
-- `db:verify` / `db:audit` print the database host in their report header; do
-  not paste that output into shared places.
-- The void message for LOAN_INTEREST expenses now says repayment reversal is not
-  available yet. The amend message (`expenses.service.ts` ~359) still says
-  "Reverse the loan repayment instead" and is misleading for the same reason.
+- `db:verify` / `db:audit` print only the database NAME and a class label
+  (`dev`, `test` or `prod`, decided by the name: contains "test" is test,
+  contains "dev" is dev, anything else is prod). They never print the host.
+- Database URL variables (never commit values):
+  | Variable | What it is | Read by |
+  |---|---|---|
+  | `DATABASE_URL` | pooled URL; the API does NOT use it; no script defaults to it any more | only when named explicitly: `--url DATABASE_URL` |
+  | `DIRECT_URL` | direct URL; the API runtime and migrations use it | API (`env.ts`, `prisma.ts`), `prisma.config.ts`; DEFAULT for `db:verify`, `db:audit`, `db:seed:admin`, `db:migrate:deploy`, `db:whoami` when `--url` is omitted |
+  | `TEST_DIRECT_URL` | direct URL of the hosted test database | tests, `global-setup.ts` drift check |
+  | `TEST_DATABASE_URL` | local server URL; the tests do not use it when `TEST_DIRECT_URL` is set | `assertNotATestDatabase` in `db:seed:admin`; `--url TEST_DATABASE_URL` |
+  `--url` takes a variable NAME or a literal URL. Use `--url DIRECT_URL` to be explicit.
+- `db:whoami` (read-only) prints only the database name and class.
+  `db:seed:admin` and `db:migrate:deploy` REFUSE unless `--confirm-db <name>`
+  equals the name the server reports (`current_database()`); shared helper:
+  `apps/api/src/lib/db-target.ts` (unit-tested without a database).
+- The void message for LOAN_INTEREST expenses and the amend message now use the
+  same wording (see Known limitations).
 - Account names are NOT unique on the server: `POST /accounts` and
   `PATCH /accounts/:id` do not check names and `accounts` has no unique name
   constraint. The web form checks existing names only, so two simultaneous

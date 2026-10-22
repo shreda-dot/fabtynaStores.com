@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import {
   ArrowLeftRight,
+  ArrowRightLeft,
   BarChart3,
   Banknote,
   Boxes,
@@ -11,6 +12,7 @@ import {
   Landmark,
   LayoutDashboard,
   Package,
+  PackageSearch,
   Receipt,
   Refrigerator,
   ShoppingCart,
@@ -45,6 +47,8 @@ export const navItems: NavItem[] = [
   { label: "Adjustments", href: "/adjustments", icon: ClipboardList, enabled: true },
   { label: "Expenses", href: "/expenses", icon: Receipt, enabled: true },
   { label: "Reports", href: "/reports/sales", icon: BarChart3, enabled: true },
+  { label: "Product sales", href: "/reports/product-sales", icon: PackageSearch, enabled: true },
+  { label: "Money flow", href: "/reports/money-flow", icon: ArrowRightLeft, enabled: true },
   { label: "Overview", href: "/accounting", icon: Calculator, enabled: true, group: "Accounting", exact: true },
   { label: "Accounts", href: "/accounting/accounts", icon: Banknote, enabled: true, group: "Accounting" },
   { label: "Payables", href: "/accounting/payables", icon: FileText, enabled: true, group: "Accounting" },

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import { resolveSslConfig } from "../lib/ssl.js";
+import { databaseNameOf } from "../lib/db-target.js";
 import {
   EXPECTED_CHECK_CONSTRAINTS,
   EXPECTED_FOREIGN_KEYS,
@@ -24,8 +25,8 @@ import {
  *      exist?
  *   3. Are there none we did not expect of those same four kinds?
  *
- * It never prints or returns the connection string; callers only ever see the
- * database name and host.
+ * It never prints or returns the connection string or host; callers only ever
+ * see the database name.
  */
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("../../prisma/migrations", import.meta.url));
@@ -57,9 +58,8 @@ export interface MigrationHistoryEntry {
 
 export interface VerifyResult {
   ok: boolean;
-  /** Database name only (never the connection string). */
+  /** Database name only (never the connection string or host). */
   databaseName: string;
-  host: string;
   items: VerifyItem[];
   /** Raw `_prisma_migrations` state, for the printed audit trail. */
   migrationHistory: MigrationHistoryEntry[];
@@ -82,16 +82,6 @@ interface MigrationRow {
   rolled_back_at: Date | null;
   logs: string | null;
   checksum: string;
-}
-
-/** Reads just the database name out of a connection string. */
-export function databaseNameOf(connectionString: string): string {
-  return new URL(connectionString).pathname.replace(/^\//, "");
-}
-
-/** Reads just the host out of a connection string. */
-export function hostOf(connectionString: string): string {
-  return new URL(connectionString).host;
 }
 
 /** sha256 of a migration file — the value Prisma records in `checksum`. */
@@ -310,7 +300,6 @@ export async function runDbVerify(connectionString: string): Promise<VerifyResul
     return {
       ok: failures.length === 0,
       databaseName: databaseNameOf(connectionString),
-      host: hostOf(connectionString),
       items,
       migrationHistory,
       found: {

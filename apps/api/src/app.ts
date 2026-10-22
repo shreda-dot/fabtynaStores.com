@@ -8,6 +8,7 @@ import { registerAuthRoutes } from "./auth/auth.routes.js";
 import type { SessionConfig } from "./auth/session.js";
 import { authenticateRequest, csrfOriginError } from "./auth/session.js";
 import { AppError, mapKnownError } from "./lib/errors.js";
+import type { LoggerOption } from "./lib/logging.js";
 import type { TxTimeouts } from "./lib/tx-options.js";
 import { registerPurchasesRoutes } from "./modules/purchases/purchases.routes.js";
 import { createPurchasesService } from "./modules/purchases/purchases.service.js";
@@ -37,7 +38,7 @@ export interface BuildAppOptions {
   prisma: PrismaClient;
   auth: SessionConfig;
   trustProxy: boolean;
-  logger?: boolean;
+  logger?: boolean | LoggerOption;
   now?: () => Date;
   /** Defaults to DEFAULT_TX_TIMEOUTS. */
   txTimeouts?: TxTimeouts;
@@ -230,6 +231,9 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     if (known !== null) {
       if (known.status >= 500) {
         request.log.error({ err: error }, "request failed");
+      }
+      if (known.status === 503) {
+        reply.header("retry-after", "2");
       }
       return reply.status(known.status).send(known.toEnvelope());
     }

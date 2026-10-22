@@ -1,13 +1,40 @@
 import type { NextConfig } from "next";
+import { PHASE_PRODUCTION_BUILD } from "next/constants";
 
-const nextConfig: NextConfig = {
+const baseConfig: NextConfig = {
   transpilePackages: ["@fabtyna/shared"],
-  // Allow cross-origin dev requests from your local network IP
-  experimental: {
-    // Note: If you are using an older Next.js 14 version, 'allowedDevOrigins' lives under 'experimental'.
-    // If you are on Next.js 15+, it can be defined directly at the root level as `allowedDevOrigins: ["192.168.43.120"]`
-  },
   allowedDevOrigins: ["127.0.0.1"],
 };
 
-export default nextConfig;
+/**
+ * `next build` fails unless the app is built for the real API. The default mode
+ * is "mock" (the demo login, which accepts any email and password, and
+ * browser-only data), and NEXT_PUBLIC_* values are inlined at build time, so a
+ * wrong build cannot be corrected on the host afterwards. `next dev` and
+ * `next start` are not affected. Keep the rules in step with lib/api/mode-guard.ts.
+ */
+export default function config(phase: string): NextConfig {
+  if (phase === PHASE_PRODUCTION_BUILD) {
+    const problems: string[] = [];
+    if (process.env.NEXT_PUBLIC_API_MODE !== "real") {
+      problems.push('NEXT_PUBLIC_API_MODE must be "real" (it is unset or "mock").');
+    }
+    const baseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").trim();
+    if (baseUrl === "") {
+      problems.push("NEXT_PUBLIC_API_BASE_URL must be set to the API's public origin.");
+    } else {
+      try {
+        new URL(baseUrl);
+      } catch {
+        problems.push("NEXT_PUBLIC_API_BASE_URL must be a valid absolute URL.");
+      }
+    }
+    if (problems.length > 0) {
+      throw new Error(
+        `Refusing to build the web app for production:\n  - ${problems.join("\n  - ")}\n` +
+          "See docs/DEPLOY.md. (For the local verify build use `pnpm --filter @fabtyna/web build:verify`.)",
+      );
+    }
+  }
+  return baseConfig;
+}

@@ -7,10 +7,9 @@ import { runDbVerify } from "../src/db/verify.js";
 // explicitly (resolved from this file, not from the current working directory).
 config({ path: fileURLToPath(new URL("../.env", import.meta.url)) });
 
-/** Reads just the database name out of a connection string. */
-export function databaseNameOf(connectionString: string): string {
-  return new URL(connectionString).pathname.replace(/^\//, "");
-}
+import { databaseNameOf } from "../src/lib/db-target.js";
+
+export { databaseNameOf };
 
 /**
  * Refuses to run unless a dedicated test database is configured:

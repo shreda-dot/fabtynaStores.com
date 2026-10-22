@@ -26,6 +26,7 @@ import { useNetworkStatus } from "@/hooks/use-network-status";
 import { accountingApi, isMockApiMode, loansApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { invalidateReportsAndBalances } from "@/lib/invalidate-after-write";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
 
@@ -75,6 +76,7 @@ export default function NewLoanPage() {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.accounting.all,
       });
+      void invalidateReportsAndBalances(queryClient);
       toast.success(
         `${loan.lenderName} loan recorded — ${formatNaira(principal)} borrowed.`,
       );

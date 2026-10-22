@@ -87,6 +87,49 @@ export function pgErrorInfo(error: unknown): PgErrorInfo {
   };
 }
 
+const CONNECTION_ERROR_CODES = new Set([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+]);
+
+// Message-only shapes: node-postgres raises these without a `code`.
+const CONNECTION_ERROR_MESSAGES: readonly RegExp[] = [
+  /\b(ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT)\b/,
+  /Connection terminated( unexpectedly| due to connection timeout)?/i,
+  /timeout expired/i,
+  /timeout exceeded when trying to connect/i,
+];
+
+/**
+ * True when the error means the database could not be reached or the connection
+ * died, as raised by node-postgres or wrapped by Prisma / the driver adapter.
+ * Walks `cause`, `meta.driverAdapterError` and `errors[]` (AggregateError, as
+ * thrown for ECONNREFUSED on dual-stack hosts) to a small depth.
+ */
+export function isConnectionError(error: unknown, depth = 0): boolean {
+  const record = asRecord(error);
+  if (record === null || depth > 4) {
+    return false;
+  }
+  const code = asString(record.code);
+  if (code !== null && CONNECTION_ERROR_CODES.has(code)) {
+    return true;
+  }
+  const message = asString(record.message);
+  if (message !== null && CONNECTION_ERROR_MESSAGES.some((pattern) => pattern.test(message))) {
+    return true;
+  }
+  const meta = asRecord(record.meta);
+  const nested: unknown[] = [record.cause, meta?.driverAdapterError];
+  if (Array.isArray(record.errors)) {
+    nested.push(...record.errors);
+  }
+  return nested.some((item) => isConnectionError(item, depth + 1));
+}
+
 /** Deadlock (40P01) and serialization failure (40001) are safe to retry. */
 export function isRetryableError(error: unknown): boolean {
   const info = pgErrorInfo(error);
@@ -120,6 +163,9 @@ export function mapKnownError(error: unknown): AppError | null {
     return new AppError(503, "UNAVAILABLE", "The system is busy. Please try again.", null);
   }
   if (info.prismaCode === "P2028" || info.prismaCode === "P1001" || info.prismaCode === "P1017") {
+    return new AppError(503, "UNAVAILABLE", "The database is temporarily unavailable. Please try again.", null);
+  }
+  if (isConnectionError(error)) {
     return new AppError(503, "UNAVAILABLE", "The database is temporarily unavailable. Please try again.", null);
   }
   if (info.sqlState === "23505") {

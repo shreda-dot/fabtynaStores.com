@@ -1,11 +1,13 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { QueryProvider } from "@/components/providers/query-provider";
+import { RegisterServiceWorker } from "@/components/pwa/register-sw";
 import { ToastViewport } from "@/components/ui/toast";
 import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
 import { NetworkStatusBar } from "@/components/ui/network-status-bar";
 import { NetworkMonitor } from "@/components/ui/network-monitor";
+import { SITE, SITE_URL } from "@/lib/site-info";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -19,8 +21,27 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Fabtyna Stores",
-  description: "Stock and store management for Fabtyna Stores",
+  metadataBase: new URL(SITE_URL),
+  title: SITE.name,
+  description: SITE.description,
+  // Everything is private by default. Only /about overrides this to be indexable.
+  robots: { index: false, follow: false },
+  applicationName: SITE.name,
+  icons: {
+    icon: [{ url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+  appleWebApp: {
+    capable: true,
+    title: SITE.shortName,
+    statusBarStyle: "default",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: SITE.themeColor,
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -29,6 +50,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body
         className={`${geistSans.variable} ${geistMono.variable} min-h-dvh bg-background text-foreground antialiased`}
       >
+        <RegisterServiceWorker />
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
           <QueryProvider>
             <NetworkStatusBar />

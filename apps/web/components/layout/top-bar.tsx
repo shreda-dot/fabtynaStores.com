@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { KeyRound, LogOut, Menu, Moon, Sun } from "lucide-react";
 import Link from "next/link";
@@ -8,6 +8,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useUIStore } from "@/stores/ui-store";
 import { navItems } from "./nav-items";
 import { DemoDataReset } from "./demo-data-reset";
+import { InstallButton } from "@/components/pwa/install-button";
 import { authApi, isMockApiMode } from "@/lib/api";
 import { clearAllDrafts, setDraftUser } from "@/lib/form-draft";
 import { toast } from "@/stores/toast-store";
@@ -18,9 +19,37 @@ export function TopBar() {
   const pathname = usePathname();
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const isDark = resolvedTheme === "dark";
   const pageTitle =
     navItems.find((item) => item.href === pathname)?.label ?? "Fabtyna Stores";
+
+  // Close the account menu when the page changes.
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
+
+  // Close the account menu on outside tap or Escape.
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPointerDown(event: MouseEvent | TouchEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("touchstart", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("touchstart", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
 
   async function logout() {
     if (loggingOut) return;
@@ -51,24 +80,8 @@ export function TopBar() {
         {pageTitle}
       </h1>
 
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 items-center gap-3">
         {isMockApiMode && <DemoDataReset />}
-        <Link
-          href="/change-password"
-          className="inline-flex h-10 items-center gap-2 rounded-md px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          <KeyRound aria-hidden="true" className="h-4 w-4" />
-          <span className="hidden sm:inline">Change password</span>
-        </Link>
-        <button
-          type="button"
-          onClick={() => void logout()}
-          disabled={loggingOut}
-          className="inline-flex h-10 items-center gap-2 rounded-md px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50"
-        >
-          <LogOut aria-hidden="true" className="h-4 w-4" />
-          <span className="hidden sm:inline">{loggingOut ? "Signing out…" : "Sign out"}</span>
-        </button>
         <button
           type="button"
           onClick={() => setTheme(isDark ? "light" : "dark")}
@@ -83,11 +96,47 @@ export function TopBar() {
           )}
         </button>
 
-        <div
-          aria-label="Admin account"
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary text-sm font-semibold text-secondary-foreground"
-        >
-          A
+        <div ref={menuRef} className="relative">
+          <button
+            type="button"
+            aria-label="Account menu"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+            className="flex h-11 w-11 items-center justify-center rounded-full bg-secondary text-sm font-semibold text-secondary-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            A
+          </button>
+          {menuOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 top-12 z-40 w-56 rounded-md border border-border bg-card p-1 text-card-foreground shadow-lg"
+            >
+              <Link
+                role="menuitem"
+                href="/change-password"
+                onClick={() => setMenuOpen(false)}
+                className="flex h-11 items-center gap-2 rounded-md px-3 text-sm font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <KeyRound aria-hidden="true" className="h-4 w-4" />
+                Change password
+              </Link>
+              <div className="px-3 py-2 empty:hidden">
+                <InstallButton />
+              </div>
+              <div role="separator" className="my-1 h-px bg-border" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => void logout()}
+                disabled={loggingOut}
+                className="flex h-11 w-full items-center gap-2 rounded-md px-3 text-sm font-medium text-danger hover:bg-danger/10 focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+              >
+                <LogOut aria-hidden="true" className="h-4 w-4" />
+                {loggingOut ? "Signing out…" : "Sign out"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </header>

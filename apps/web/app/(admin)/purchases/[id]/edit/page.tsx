@@ -31,6 +31,8 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WriteFlowStatus } from "@/components/write-flow-status";
 import { useWriteFlow } from "@/hooks/use-write-flow";
+import { useFormDraft } from "@/hooks/use-form-draft";
+import { DraftBanner } from "@/components/draft-banner";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { accountingApi, productsApi, purchasesApi, suppliersApi } from "@/lib/api";
@@ -310,6 +312,42 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
     renewKey();
   }, [formSnapshot, renewKey]);
 
+  // Dirty = differs from what the server gave us, so an untouched edit form saves nothing.
+  const [pristineSnapshot] = useState(formSnapshot);
+  const draft = useFormDraft({
+    form: `purchase-edit:${purchase.id}`,
+    dirty: formSnapshot !== pristineSnapshot,
+    state: {
+      supplierId,
+      location,
+      purchasedAt,
+      reference,
+      notes,
+      lines,
+      amountPaidNow,
+      paymentMethod,
+      accountId,
+      dueDate,
+    },
+    onRestore: (saved) => {
+      setSupplierId(saved.supplierId);
+      setLocation(saved.location);
+      setPurchasedAt(saved.purchasedAt);
+      setReference(saved.reference);
+      setNotes(saved.notes);
+      // Fresh ids: useId repeats after a reload and could collide with new lines.
+      setLines(
+        saved.lines.length > 0
+          ? saved.lines.map((line, index) => ({ ...line, id: `${uid}-r${index}` }))
+          : [{ id: `${uid}-r0`, productId: "", unit: "PACK", quantity: "", pricePerUnitKobo: "" }],
+      );
+      setAmountPaidNow(saved.amountPaidNow);
+      setPaymentMethod(saved.paymentMethod);
+      setAccountId(saved.accountId);
+      setDueDate(saved.dueDate);
+    },
+  });
+
   function afterAmended(
     updated: { id: string; totalKobo: string },
     previewTotal: bigint,
@@ -330,6 +368,7 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
     void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
     toast.success("Purchase amended — a new purchase was recorded and the original voided.");
+    draft.clear();
     router.push(`/purchases/${updated.id}?replaced=${purchase.id}`);
   }
 
@@ -606,6 +645,8 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
           }}
         />
       )}
+
+      <DraftBanner draft={draft} />
 
       <form onSubmit={submit} className="space-y-6" noValidate>
         {errorCount > 0 && (

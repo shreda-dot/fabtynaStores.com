@@ -804,8 +804,38 @@ run `pnpm --filter @fabtyna/api db:audit` on dev: expect zero rows.
   (API) consistently; `WEB_ORIGIN` and `NEXT_PUBLIC_API_BASE_URL` must use the
   same host name as the browser address or cookies and CORS fail.
 
+### Form draft protection (web only)
+
+- Purpose: an accidental refresh must not wipe a long form. Files:
+  `lib/form-draft.ts` (pure storage helpers, tested), `hooks/use-form-draft.ts`,
+  `components/draft-banner.tsx`.
+- Storage is `sessionStorage` (survives refresh, dies with the tab). Key
+  `fabtyna:draft:<userId>:<form>`; `AuthGuard` sets the user id after
+  `authApi.me()`. Envelope has a version stamp (`DRAFT_VERSION`; mismatch or
+  corrupt JSON is deleted) and `savedAt`. TTL is 2 hours (`DRAFT_TTL_MS`);
+  expired drafts are deleted on load.
+- Autosave is debounced 500 ms, only while the form is dirty, never while a
+  restore choice is pending. A returning user sees a Restore / Discard banner;
+  nothing is auto-filled. A `beforeunload` warning shows while dirty.
+- Cleared on successful save, on Cancel (expense), on Discard, and for every
+  user on logout (`top-bar.tsx`). A 401 expiry keeps drafts so the same user
+  gets them back after signing in.
+- Forms covered: purchase new (`purchase-new`), purchase edit
+  (`purchase-edit:<id>`), sale new (`sale-new`), sale edit (`sale-edit:<id>`),
+  expense new (`expense-new`, not when amending, not in mock mode), loan new
+  (`loan-new`, not in mock mode). Edit forms count as dirty only when they
+  differ from the server values. Not covered: transfers, adjustments, other
+  small dialogs.
+- Restored line ids are regenerated (`<uid>-r<i>`) because `useId` repeats
+  after reload. A restored supplier/product/customer that no longer exists is
+  caught by the normal submit validation, not at restore time.
+- Money in drafts stays kobo strings; no bigint is stored.
+
 ## 6b. Known limitations
 
+- Form drafts are per browser tab (sessionStorage) and best-effort: a closed
+  tab, private-mode storage failure or a draft older than 2 hours is lost.
+  Drafts are not validated against server data at restore time.
 - Expenses summary has no per-channel totals. Without a channel filter a BOTH
   expense counts in full; the "Retail share" / "Wholesale share" views re-call
   the summary with `channel`, which makes the server split BOTH. Filtering the

@@ -9,6 +9,7 @@ import { useUIStore } from "@/stores/ui-store";
 import { navItems } from "./nav-items";
 import { DemoDataReset } from "./demo-data-reset";
 import { authApi, isMockApiMode } from "@/lib/api";
+import { clearAllDrafts, setDraftUser } from "@/lib/form-draft";
 import { toast } from "@/stores/toast-store";
 
 export function TopBar() {
@@ -26,6 +27,8 @@ export function TopBar() {
     setLoggingOut(true);
     try {
       await authApi.logout();
+      clearAllDrafts();
+      setDraftUser(null);
       router.replace("/login");
     } catch {
       toast.error("Could not sign out. Check your connection and try again.");

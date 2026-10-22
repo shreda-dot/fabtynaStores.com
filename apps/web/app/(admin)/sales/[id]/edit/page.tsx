@@ -24,6 +24,8 @@ import {
 } from "@/components/accounting/account-select";
 import { WriteFlowStatus } from "@/components/write-flow-status";
 import { useWriteFlow } from "@/hooks/use-write-flow";
+import { useFormDraft } from "@/hooks/use-form-draft";
+import { DraftBanner } from "@/components/draft-banner";
 import { MoneyInput } from "@/components/money-input";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -315,6 +317,42 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
     renewKey();
   }, [formSnapshot, renewKey]);
 
+  // Dirty = differs from what the server gave us, so an untouched edit form saves nothing.
+  const [pristineSnapshot] = useState(formSnapshot);
+  const draft = useFormDraft({
+    form: `sale-edit:${sale.id}`,
+    dirty: formSnapshot !== pristineSnapshot,
+    state: {
+      channel,
+      customerId,
+      soldAt,
+      reference,
+      notes,
+      paidKobo,
+      paymentMethod,
+      accountId,
+      retailLocation,
+      lines,
+    },
+    onRestore: (saved) => {
+      setChannel(saved.channel);
+      setCustomerId(saved.customerId);
+      setSoldAt(saved.soldAt);
+      setReference(saved.reference);
+      setNotes(saved.notes);
+      setPaidKobo(saved.paidKobo);
+      setPaymentMethod(saved.paymentMethod);
+      setAccountId(saved.accountId);
+      setRetailLocation(saved.retailLocation);
+      // Fresh ids: useId repeats after a reload and could collide with new lines.
+      setLines(
+        saved.lines.length > 0
+          ? saved.lines.map((line, index) => ({ ...line, id: `${uid}-r${index}` }))
+          : [{ id: `${uid}-r0`, productId: "", quantity: "", unitPriceKobo: "" }],
+      );
+    },
+  });
+
   function updateLine(id: string, patch: Partial<SaleLineDraft>) {
     setLines((prev) =>
       prev.map((line) => (line.id === id ? { ...line, ...patch } : line)),
@@ -554,6 +592,7 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
           `${originalReference} was voided and replaced by ${updated.reference ?? "a new sale"}.`,
         );
         const voidedId = updated.voidedSaleId;
+        draft.clear();
         router.push(
           voidedId
             ? `/sales/${updated.id}?replaced=${encodeURIComponent(voidedId)}`
@@ -605,6 +644,8 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
           }}
         />
       )}
+
+      <DraftBanner draft={draft} />
 
       <form onSubmit={submit} className="space-y-6" noValidate>
         {errorCount > 0 && (

@@ -30,6 +30,8 @@ import { accountingApi, expensesApi, isMockApiMode } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { selectableCategories } from "@/lib/expense-filters";
+import { useFormDraft } from "@/hooks/use-form-draft";
+import { DraftBanner } from "@/components/draft-banner";
 import { toast } from "@/stores/toast-store";
 import { useWriteFlow } from "@/hooks/use-write-flow";
 import { WriteFlowStatus } from "@/components/write-flow-status";
@@ -130,6 +132,21 @@ export default function NewExpensePage() {
     allSelectable[0]?.id ||
     "";
 
+  const draft = useFormDraft({
+    form: "expense-new",
+    enabled: !amendId && !isMockApiMode,
+    dirty: description.trim() !== "" || amountKobo !== "",
+    state: { channel, category, description, amountKobo, expenseDate, accountId },
+    onRestore: (saved) => {
+      setChannel(saved.channel);
+      setCategory(saved.category);
+      setDescription(saved.description);
+      setAmountKobo(saved.amountKobo);
+      setExpenseDate(saved.expenseDate);
+      setAccountId(saved.accountId);
+    },
+  });
+
   const submitting = useRef(false);
 
   const createMutation = useMutation({
@@ -156,6 +173,7 @@ export default function NewExpensePage() {
           ? `Expense amended; original ${result.voidedExpenseId} was voided.`
           : `Expense of ${formatNaira(amountKobo)} recorded.`,
       );
+      draft.clear();
       router.push("/expenses");
     },
   });
@@ -244,6 +262,8 @@ export default function NewExpensePage() {
           </Link>
         }
       />
+
+      <DraftBanner draft={draft} />
 
       <form onSubmit={submit} className="space-y-6" noValidate>
         {errorCount > 0 && (
@@ -442,6 +462,7 @@ export default function NewExpensePage() {
           <CardFooter>
             <Link
               href="/expenses"
+              onClick={draft.clear}
               className={buttonClasses({ variant: "secondary" })}
             >
               Cancel

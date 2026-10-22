@@ -29,6 +29,8 @@ import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { WriteFlowStatus } from "@/components/write-flow-status";
 import { useWriteFlow } from "@/hooks/use-write-flow";
+import { useFormDraft } from "@/hooks/use-form-draft";
+import { DraftBanner } from "@/components/draft-banner";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { accountingApi, productsApi, purchasesApi, suppliersApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
@@ -149,6 +151,45 @@ export default function NewPurchasePage() {
       ? BigInt(selectedAccount.balanceKobo)
       : null;
 
+  const draft = useFormDraft({
+    form: "purchase-new",
+    dirty:
+      supplierId !== "" ||
+      reference.trim() !== "" ||
+      notes.trim() !== "" ||
+      amountPaidNow !== "" ||
+      lines.some((l) => l.productId !== "" || l.quantity !== "" || l.pricePerUnitKobo !== ""),
+    state: {
+      supplierId,
+      location,
+      purchasedAt,
+      reference,
+      notes,
+      lines,
+      amountPaidNow,
+      paymentMethod,
+      accountId,
+      dueDate,
+    },
+    onRestore: (saved) => {
+      setSupplierId(saved.supplierId);
+      setLocation(saved.location);
+      setPurchasedAt(saved.purchasedAt);
+      setReference(saved.reference);
+      setNotes(saved.notes);
+      // Fresh ids: useId repeats after a reload and could collide with new lines.
+      setLines(
+        saved.lines.length > 0
+          ? saved.lines.map((line, index) => ({ ...line, id: `${uid}-r${index}` }))
+          : [{ id: `${uid}-r0`, productId: "", unit: "PACK", quantity: "", pricePerUnitKobo: "" }],
+      );
+      setAmountPaidNow(saved.amountPaidNow);
+      setPaymentMethod(saved.paymentMethod);
+      setAccountId(saved.accountId);
+      setDueDate(saved.dueDate);
+    },
+  });
+
   // Any form change is a new intent: it must get a new idempotency key.
   const formSnapshot = JSON.stringify([
     supplierId,
@@ -189,6 +230,7 @@ export default function NewPurchasePage() {
     toast.success(
       `Purchase ${purchase.reference ?? purchase.id.slice(0, 8)} received — ${formatNaira(BigInt(purchase.totalKobo))}.`,
     );
+    draft.clear();
     router.push(`/purchases/${purchase.id}`);
   }
 
@@ -469,6 +511,8 @@ export default function NewPurchasePage() {
           }}
         />
       )}
+
+      <DraftBanner draft={draft} />
 
       <form onSubmit={submit} className="space-y-6" noValidate>
         {errorCount > 0 && (

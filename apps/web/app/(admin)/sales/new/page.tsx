@@ -29,6 +29,8 @@ import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { WriteFlowStatus } from "@/components/write-flow-status";
 import { useWriteFlow } from "@/hooks/use-write-flow";
+import { useFormDraft } from "@/hooks/use-form-draft";
+import { DraftBanner } from "@/components/draft-banner";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { accountingApi, customersApi, productsApi, salesApi, stockApi } from "@/lib/api";
@@ -163,6 +165,48 @@ export default function NewSalePage() {
       : 0n;
   const balanceOwed = totalKobo - paid;
 
+  const draft = useFormDraft({
+    form: "sale-new",
+    dirty:
+      customerId !== "" ||
+      reference.trim() !== "" ||
+      notes.trim() !== "" ||
+      paidInFull ||
+      (paidKobo !== "" && paidKobo !== "0") ||
+      lines.some((l) => l.productId !== "" || l.quantity !== "" || l.unitPriceKobo !== ""),
+    state: {
+      channel,
+      customerId,
+      soldAt,
+      reference,
+      notes,
+      paidKobo,
+      paidInFull,
+      retailLocation,
+      paymentMethod,
+      accountId,
+      lines,
+    },
+    onRestore: (saved) => {
+      setChannel(saved.channel);
+      setCustomerId(saved.customerId);
+      setSoldAt(saved.soldAt);
+      setReference(saved.reference);
+      setNotes(saved.notes);
+      setPaidKobo(saved.paidKobo);
+      setPaidInFull(saved.paidInFull);
+      setRetailLocation(saved.retailLocation);
+      setPaymentMethod(saved.paymentMethod);
+      setAccountId(saved.accountId);
+      // Fresh ids: useId repeats after a reload and could collide with new lines.
+      setLines(
+        saved.lines.length > 0
+          ? saved.lines.map((line, index) => ({ ...line, id: `${uid}-r${index}` }))
+          : [{ id: `${uid}-r0`, productId: "", quantity: "", unitPriceKobo: "" }],
+      );
+    },
+  });
+
   // Any change to the form is a new intent: it must get a new idempotency key.
   const formSnapshot = JSON.stringify([
     channel,
@@ -200,6 +244,7 @@ export default function NewSalePage() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
     toast.success(`Sale recorded — ${sale.reference ?? sale.id.slice(0, 8)}.`);
+    draft.clear();
     router.push(`/sales/${sale.id}`);
   }
 
@@ -461,6 +506,8 @@ export default function NewSalePage() {
           }}
         />
       )}
+
+      <DraftBanner draft={draft} />
 
       <form onSubmit={submit} className="space-y-6" noValidate>
         {errorCount > 0 && (

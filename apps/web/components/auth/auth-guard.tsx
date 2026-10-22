@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authApi } from "@/lib/api";
+import { setDraftUser } from "@/lib/form-draft";
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -11,7 +12,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
     void authApi.me().then(
-      () => {
+      (user) => {
+        setDraftUser(user.id);
         if (mounted) setAllowed(true);
       },
       () => {

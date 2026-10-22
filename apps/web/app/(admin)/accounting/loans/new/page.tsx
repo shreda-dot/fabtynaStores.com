@@ -21,6 +21,8 @@ import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { WriteFlowStatus } from "@/components/write-flow-status";
 import { useWriteFlow } from "@/hooks/use-write-flow";
+import { useFormDraft } from "@/hooks/use-form-draft";
+import { DraftBanner } from "@/components/draft-banner";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { accountingApi, isMockApiMode, loansApi } from "@/lib/api";
@@ -47,6 +49,22 @@ export default function NewLoanPage() {
   const [note, setNote] = useState("");
   const [accountId, setAccountId] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const draft = useFormDraft({
+    form: "loan-new",
+    enabled: !isMockApiMode,
+    dirty: lenderName.trim() !== "" || principalKobo !== "" || note.trim() !== "",
+    state: { lenderName, principalKobo, interestKobo, disbursedAt, dueDate, note, accountId },
+    onRestore: (saved) => {
+      setLenderName(saved.lenderName);
+      setPrincipalKobo(saved.principalKobo);
+      setInterestKobo(saved.interestKobo);
+      setDisbursedAt(saved.disbursedAt);
+      setDueDate(saved.dueDate);
+      setNote(saved.note);
+      setAccountId(saved.accountId);
+    },
+  });
 
   const submitting = useRef(false);
   const network = useNetworkStatus();
@@ -80,6 +98,7 @@ export default function NewLoanPage() {
       toast.success(
         `${loan.lenderName} loan recorded — ${formatNaira(principal)} borrowed.`,
       );
+      draft.clear();
       router.push(`/accounting/loans/${loan.id}`);
     },
   });
@@ -197,6 +216,8 @@ export default function NewLoanPage() {
           </Link>
         }
       />
+
+      <DraftBanner draft={draft} />
 
       <form onSubmit={submit} className="space-y-6" noValidate>
         <WriteFlowStatus

@@ -31,6 +31,8 @@ export type LoanRepaymentRecordDto = LoanRepaymentDto & {
   accountId?: string | null;
   accountName?: string | null;
   reversed?: boolean;
+  /** Real mode: the LOAN_INTEREST expense the API linked to this repayment, if any. */
+  linkedExpense?: { id: string; amountKobo: string; categoryCode: string | null } | null;
 };
 
 export type LoanDetailDto = LoanDto & {

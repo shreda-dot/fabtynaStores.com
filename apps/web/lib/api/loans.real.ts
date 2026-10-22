@@ -48,6 +48,7 @@ type ApiLoanDetail = {
     accountId: string | null;
     accountName: string | null;
     reversed: boolean;
+    linkedExpense: { id: string; amountKobo: string; categoryCode: string | null } | null;
   }>;
 };
 
@@ -112,6 +113,7 @@ function mapDetail(data: ApiLoanDetail): LoanDetailDto {
       accountId: r.accountId,
       accountName: r.accountName,
       reversed: r.reversed,
+      linkedExpense: r.linkedExpense,
     })),
   };
 }

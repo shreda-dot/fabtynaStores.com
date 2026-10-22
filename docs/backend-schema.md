@@ -516,7 +516,15 @@ The first four queries were previously only a comment at the bottom of
 >   source column for all source-backed types.
 > - `LOAN_INTEREST` expenses intentionally have no account entry. The full
 >   repayment amount, including interest, is the single `LOAN_REPAYMENT`
->   outflow.
+>   outflow. `GET /expenses` and `/expenses/summary` LEFT JOIN account entries so
+>   these rows are listed (`systemManaged`, account fields null) and counted in
+>   expense totals and profit; Money Flow, balances and financial-position cash
+>   never count them as cash. `GET /loans/:id` returns each repayment's
+>   `linkedExpense`.
+> - Known limitations: no loan repayment reversal exists (a mistaken repayment
+>   and its interest expense cannot be corrected); purchase void/amend average
+>   cost recomputes from the rounded unit cost and can differ by 1 kobo from the
+>   receive result.
 
 ---
 

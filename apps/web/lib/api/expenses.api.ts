@@ -13,8 +13,12 @@ export type ExpenseRecordDto = {
   id: string;
   categoryId: string;
   categoryName: string;
-  accountId: string;
-  accountName: string;
+  accountId: string | null;
+  accountName: string | null;
+  /** Set by the real API: true for LOAN_INTEREST rows created by a loan repayment. */
+  systemManaged?: boolean;
+  categoryCode?: string | null;
+  loanRepaymentId?: string | null;
   channel: SaleChannel;
   description: string;
   amountKobo: string;

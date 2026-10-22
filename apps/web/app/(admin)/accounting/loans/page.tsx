@@ -197,6 +197,11 @@ export default function LoansPage() {
           />
         </div>
       )}
+      {hasAny && (
+        <p className="text-xs text-muted-foreground">
+          These totals cover the loans loaded below only. Use &quot;Load more&quot; to include older loans.
+        </p>
+      )}
 
       <Card className="grid gap-3 p-4 sm:grid-cols-3">
         <FormField id="loan-status" label="Status">

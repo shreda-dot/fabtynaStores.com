@@ -16,8 +16,9 @@ interface ExpenseRow {
   categoryId: string;
   categoryName: string;
   categoryCode: string | null;
-  accountId: string;
-  accountName: string;
+  accountId: string | null;
+  accountName: string | null;
+  loanRepaymentId: string | null;
   channel: "RETAIL" | "WHOLESALE" | "BOTH";
   description: string;
   amountKobo: string;
@@ -27,11 +28,12 @@ interface ExpenseRow {
 }
 
 export interface ExpenseListPage {
-  items: Array<Omit<ExpenseRow, "expenseDate" | "voidedAt" | "amountKobo" | "categoryCode"> & {
+  items: Array<Omit<ExpenseRow, "expenseDate" | "voidedAt" | "amountKobo"> & {
     expenseDate: string;
     amountKobo: string;
     voided: boolean;
     voidedAt: string | null;
+    systemManaged: boolean;
   }>;
   nextCursor: string | null;
   from: string | null;
@@ -54,12 +56,12 @@ function expenseBaseQuery(where: Prisma.Sql) {
     SELECT e.id, e."categoryId", ec.name AS "categoryName", ec.code AS "categoryCode",
            ale."accountId", a.name AS "accountName", e.channel::text AS channel,
            e.description, e."amountKobo"::text AS "amountKobo", e."expenseDate",
-           e."voidedAt", e."voidReason"
+           e."voidedAt", e."voidReason", e."loanRepaymentId"
       FROM expenses e
       JOIN expense_categories ec ON ec.id = e."categoryId"
-      JOIN account_ledger_entries ale
+      LEFT JOIN account_ledger_entries ale
         ON ale."expenseId" = e.id AND ale."reversesEntryId" IS NULL
-      JOIN accounts a ON a.id = ale."accountId"
+      LEFT JOIN accounts a ON a.id = ale."accountId"
       ${where}`;
 }
 
@@ -102,6 +104,9 @@ export async function listExpenses(
       id: row.id,
       categoryId: row.categoryId,
       categoryName: row.categoryName,
+      categoryCode: row.categoryCode,
+      loanRepaymentId: row.loanRepaymentId,
+      systemManaged: row.loanRepaymentId !== null,
       accountId: row.accountId,
       accountName: row.accountName,
       channel: row.channel,

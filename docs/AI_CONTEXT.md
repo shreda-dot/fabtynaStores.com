@@ -562,7 +562,7 @@ include the mode.
 | Sales: list, detail, new, add/reverse payment, void, amend (7B) | Connected |
 | Purchases: list, detail, new, supplier payment/reverse, void, amend (7B) | Connected |
 | Accounts, paginated statements, expenses/categories, stock transfers, stock adjustments (7C Parts 1–4) | Connected |
-| Loans (7C Part 5) | Not connected; not started |
+| Loans: list, detail, create, charge, repayment (7C Part 5) | Connected (web checks run; no browser click-through yet) |
 | Reports, money flow, dashboard (7D) | Not connected |
 
 Mapping notes (7A and 7B):
@@ -656,7 +656,48 @@ Additional 7C notes:
   reference is shown in detail.
 - Stock transfers have no void route. Detail explicitly instructs owners to
   make an opposite transfer to correct one.
-- Loans, reports, dashboard and manual cash-snapshot UI remain unconnected.
+- Reports, dashboard, position, money flow and manual cash-snapshot UI remain
+  unconnected (7D).
+
+### 7C Part 5 loan contract mapping
+
+| Route | Request | Response | Web mapping | Status |
+|---|---|---|---|---|
+| `POST /loans` | lenderName, principalKobo, agreedInterestKobo, disbursedAt, dueDate, note (key required), accountId (service requires it) | `{id, lenderName, principalKobo, agreedInterestKobo, disbursedAt, dueDate, note}` | Adapter refetches `GET /loans/:id` to build `LoanDetailDto`; `createdAt` filled from `disbursedAt` | MAPPABLE |
+| `POST /loans/:id/charges` | amountKobo, reason, occurredAt | `{id, loanId, type, amountKobo, note, occurredAt}` | Refetch detail | MAPPABLE |
+| `POST /loans/:id/repayments` | amountKobo, interestPortionKobo, paidAt, note?, accountId | `{id, loanId, amountKobo, interestPortionKobo, paidAt, note, accountId}` | Refetch detail; the saved row is returned as `savedRepayment` and shown | MAPPABLE |
+| `GET /loans` | status (ACTIVE/PAID/OVERDUE), q, dueBefore, limit, cursor | `{items, nextCursor}`; items have `totalToRepayKobo`, no note/agreedInterest/createdAt | `totalToRepayKobo` -> `totalRepayableKobo`; list DTO makes the three missing fields optional | MAPPABLE |
+| `GET /loans/:id` | - | `{summary, ledgerEntries, charges, repayments}` | `loanId` filled on ledger/repayments; repayments carry accountName and reversed | MAPPABLE |
+
+Loan rules for the web:
+- The interest portion is sent by the client (`interestPortionKobo`); the
+  shared `recordLoanRepayment` only validates `0 <= interest <= amount`. The
+  browser does not calculate it: the form posts what the owner typed and shows
+  the API's saved amount and interest after saving.
+- One account outflow of the full amount; the LOAN_INTEREST expense is created
+  by the domain with no account entry of its own.
+- The API has no repayment reversal. The form and confirmation say so plainly.
+- Default list (no status) is ACTIVE + OVERDUE; PAID needs the filter.
+- The linked LOAN_INTEREST expense comes from the API: `GET /loans/:id`
+  returns `repayments[].linkedExpense` (`{id, amountKobo, categoryCode}` or
+  null), and `GET /expenses` / `/expenses/summary` now LEFT JOIN account
+  entries, so interest rows are listed with `systemManaged: true`,
+  `accountId`/`accountName` null, `categoryCode`, `loanRepaymentId`. The web
+  labels them "Automatic" with no void or amend. (Fixed in the LOAN_INTEREST
+  visibility task; the earlier "derived in the UI" workaround is removed.)
+- Friendly messages added for "exceeds the outstanding balance" (naira) and
+  "already fully repaid".
+
+Report definitions: LOAN_INTEREST is an EXPENSE (counts in expense totals,
+category breakdowns and net profit) and NEVER cash. The full repayment is the
+only account outflow, so account balances, Money Flow and financial-position
+cash do not count interest a second time. Sales summary/dashboard read
+`expenses` directly (no join to account entries) and already included it; Money
+Flow reads expenses only through account entries, so it correctly excludes it.
+
+7C Part 5 web checks: typecheck PASS; lint 0 errors / 3 warnings (old files);
+web Vitest 33/33; production build PASS. API and shared tests not run (no
+changes there).
 
 Gate 0 evidence for 7C:
 - 0a: `parseQuantityText`, `quantityToWholeUnits`, and
@@ -692,8 +733,16 @@ tests, so the actual result is from `pnpm --filter @fabtyna/web test`.
 - Web sales/purchases: no kobo amount is converted through `Number()`.
   Remaining numeric conversions are validated stock-unit quantities and
   bounded 0–100 accounting percentage-bar values.
-- Real mode: loans, reports and the dashboard are not connected (7C Part 5
-  and 7D have not started).
+- Real mode: reports, the dashboard, position and money flow are not connected
+  (7D).
+- Loan repayment reversal does not exist: a mistaken repayment cannot be
+  corrected, and its linked LOAN_INTEREST expense cannot be voided (the void
+  guard message "Reverse the loan repayment instead" is misleading for now).
+- Average cost on purchase void or amend recomputes from the already-rounded
+  unit cost, so it can differ by 1 kobo from the receive result. A later fix
+  should recompute from the stored `lineTotalKobo`, with a differential test.
+- Loan list totals in the web cards cover only the loaded rows (keyset pages);
+  the cards now say so.
 - Raw connection errors (ENOTFOUND, ECONNRESET) reach the API's 500 handler;
   only Prisma/PG codes P2028, P1001, P1017, 55P03, 40P01, 40001 map to 503.
 - Dev records are immutable and cannot be deleted; use clearly named test data.

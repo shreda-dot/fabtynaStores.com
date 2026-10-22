@@ -161,18 +161,22 @@ export default function ExpensesPage() {
     {
       header: "Status",
       render: (expense) =>
-        !expense.voided ? "Active" : `Voided: ${expense.voidReason}`,
+        expense.systemManaged
+          ? "Automatic"
+          : !expense.voided
+            ? "Active"
+            : `Voided: ${expense.voidReason}`,
     },
     {
       header: "Actions",
       align: "right",
       render: (e) =>
-        e.voided ? (
-          <span className="text-xs text-muted-foreground">Voided</span>
-        ) : categoryById.get(e.categoryId)?.code === "LOAN_INTEREST" ? (
+        e.systemManaged || categoryById.get(e.categoryId)?.code === "LOAN_INTEREST" ? (
           <span className="text-xs text-muted-foreground">
-            Managed with loan repayment
+            Automatic — managed with the loan repayment
           </span>
+        ) : e.voided ? (
+          <span className="text-xs text-muted-foreground">Voided</span>
         ) : (
           <div className="flex justify-end gap-2">
             {!isMockApiMode && <Link
@@ -183,7 +187,7 @@ export default function ExpensesPage() {
                 description: e.description,
                 amountKobo: e.amountKobo,
                 expenseDate: formatLagosDate(e.expenseDate),
-                accountId: e.accountId,
+                accountId: e.accountId ?? "",
               }).toString()}`}
               className={buttonClasses({ variant: "secondary", size: "sm" })}
             >

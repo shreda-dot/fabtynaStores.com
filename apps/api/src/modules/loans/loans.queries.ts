@@ -124,6 +124,22 @@ export async function getLoanDetail(prisma: PrismaClient, loanId: string, todayL
           orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
         });
 
+  const interestExpenses =
+    repaymentIds.length === 0
+      ? []
+      : await prisma.expense.findMany({
+          where: { loanRepaymentId: { in: repaymentIds } },
+          select: {
+            id: true,
+            amountKobo: true,
+            loanRepaymentId: true,
+            category: { select: { code: true } },
+          },
+        });
+  const expenseByRepayment = new Map(
+    interestExpenses.map((expense) => [expense.loanRepaymentId as string, expense]),
+  );
+
   const chargeIds = new Set(
     ledgerEntries.filter((entry) => entry.type === "CHARGE").map((entry) => entry.id),
   );
@@ -204,6 +220,16 @@ export async function getLoanDetail(prisma: PrismaClient, loanId: string, todayL
       accountId: accountEntryByRepayment.get(repayment.id)?.accountId ?? null,
       accountName: accountEntryByRepayment.get(repayment.id)?.account.name ?? null,
       reversed: reversedRepaymentIds.has(repayment.id),
+      linkedExpense: (() => {
+        const expense = expenseByRepayment.get(repayment.id);
+        return expense === undefined
+          ? null
+          : {
+              id: expense.id,
+              amountKobo: expense.amountKobo.toString(),
+              categoryCode: expense.category.code,
+            };
+      })(),
     })),
   };
 }

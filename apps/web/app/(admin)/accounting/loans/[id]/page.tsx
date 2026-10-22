@@ -369,7 +369,7 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
     <div className="mx-auto max-w-4xl space-y-6">
       <PageHeader
         title={loan.lenderName}
-        description={`Loan recorded ${formatLagosDate(loan.disbursedAt)}.`}
+        description={`Money received ${formatLagosDate(loan.disbursedAt)}.`}
         actions={
           <Link
             href="/accounting/loans"
@@ -707,14 +707,22 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
                             tone="neutral"
                           />
                         </p>
-                        <p className="text-xs text-muted-foreground">
-                          Linked expense: Loan interest{" "}
-                          <Money
-                            kobo={repayment.interestPortionKobo}
-                            tone="neutral"
-                          />{" "}
-                          (automatic, read-only)
-                        </p>
+                        {repayment.linkedExpense ? (
+                          <p className="text-xs text-muted-foreground">
+                            Linked expense: Loan interest{" "}
+                            <Money
+                              kobo={repayment.linkedExpense.amountKobo}
+                              tone="neutral"
+                            />{" "}
+                            (automatic, read-only)
+                          </p>
+                        ) : (
+                          !isMockApiMode && (
+                            <p className="text-xs text-muted-foreground">
+                              Linked expense not found.
+                            </p>
+                          )
+                        )}
                       </>
                     )}
                     {repayment.reversed && <Badge tone="warning">Reversed</Badge>}

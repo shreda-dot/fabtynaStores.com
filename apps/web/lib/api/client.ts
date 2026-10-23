@@ -15,6 +15,18 @@ export type ApiErrorKind =
   | "unknown";
 
 /**
+ * How a write that the client stopped waiting for finally ended.
+ *
+ * The client timeout is a UI decision, not a cancellation: a write is never
+ * aborted when it times out, because the API transaction may already have
+ * committed. `lateOutcome` is that request's real ending, reported whenever it
+ * arrives, so the UI can replace "we are not sure" with the truth.
+ */
+export type LateWriteOutcome =
+  | { ok: true; value: unknown }
+  | { ok: false; cause: unknown };
+
+/**
  * Every failure surfaced by the API layer is normalised into this type so the
  * UI can show a user-readable message and decide whether to retry.
  */
@@ -27,6 +39,8 @@ export class ApiError extends Error {
   readonly details: unknown;
   readonly retryAfterSeconds: number | undefined;
   readonly retryable: boolean;
+  /** Only set for a write the client stopped waiting for; never rejects. */
+  readonly lateOutcome: Promise<LateWriteOutcome> | undefined;
 
   constructor(
     kind: ApiErrorKind,
@@ -39,6 +53,7 @@ export class ApiError extends Error {
       details?: unknown;
       retryAfterSeconds?: number;
       retryable?: boolean;
+      lateOutcome?: Promise<LateWriteOutcome>;
     },
   ) {
     super(userMessage, { cause: options?.cause });
@@ -51,6 +66,7 @@ export class ApiError extends Error {
     this.details = options?.details;
     this.retryAfterSeconds = options?.retryAfterSeconds;
     this.retryable = options?.retryable ?? false;
+    this.lateOutcome = options?.lateOutcome;
   }
 }
 
@@ -239,11 +255,15 @@ function emitUnauthorized(): void {
   }
 }
 
-function unknownWriteOutcome(cause: unknown, hasIdempotencyKey: boolean): ApiError {
+function unknownWriteOutcome(
+  cause: unknown,
+  hasIdempotencyKey: boolean,
+  lateOutcome?: Promise<LateWriteOutcome>,
+): ApiError {
   const userMessage = hasIdempotencyKey
     ? "We could not confirm whether this change completed. Check the page before retrying; a retry will reuse the same request key."
     : "We could not confirm whether this change completed. Check its result before trying again.";
-  return new ApiError("unknown-outcome", userMessage, { cause });
+  return new ApiError("unknown-outcome", userMessage, { cause, lateOutcome });
 }
 
 function networkError(cause: unknown, write: boolean, hasIdempotencyKey: boolean): ApiError {
@@ -261,15 +281,20 @@ async function fetchOnce<T>(
 ): Promise<T> {
   const method = options.method ?? "GET";
   const isWrite = method !== "GET";
+  const hasKey = options.idempotencyKey !== undefined;
   const url = `${apiBaseUrl()}${path}`;
   const controller = new AbortController();
   const timeoutMs =
     options.timeoutMs ??
     (isWrite ? DEFAULT_WRITE_TIMEOUT_MS : DEFAULT_READ_TIMEOUT_MS);
   const startedAt = Date.now();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  try {
+  /**
+   * The whole request, started exactly once. A write is never aborted by the
+   * client timeout: the API transaction may already be committing, so the
+   * timeout only stops the UI from waiting (see `ApiError.lateOutcome`).
+   */
+  const pipeline = (async (): Promise<T> => {
     let response: Response;
     try {
       response = await fetch(url, {
@@ -286,11 +311,9 @@ async function fetchOnce<T>(
       });
     } catch (cause) {
       if (controller.signal.aborted) {
-        throw isWrite
-          ? unknownWriteOutcome(cause, options.idempotencyKey !== undefined)
-          : new ApiError("timeout", "The request took too long. Please try again.", { cause });
+        throw new ApiError("timeout", "The request took too long. Please try again.", { cause });
       }
-      throw networkError(cause, isWrite, options.idempotencyKey !== undefined);
+      throw networkError(cause, isWrite, hasKey);
     }
 
     if (response.status === 401) {
@@ -378,18 +401,47 @@ async function fetchOnce<T>(
     }
     recordHealthy(Date.now() - startedAt);
     return payload as T;
-  } catch (cause) {
-    if (cause instanceof ApiError) {
-      if (cause.kind === "network" || cause.kind === "timeout" || cause.kind === "unknown-outcome") {
-        recordFailure();
+  })();
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      if (!isWrite) {
+        reject(new ApiError("timeout", "The request took too long. Please try again."));
+        return;
       }
-      if (cause.kind === "unauthorized") emitUnauthorized();
-      throw cause;
+      reject(
+        unknownWriteOutcome(new TimeoutError("Request timed out."), hasKey, lateOutcomeOf(pipeline)),
+      );
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([pipeline, timedOut]);
+  } catch (cause) {
+    // A read that timed out has nothing to reconcile, so free the socket. A
+    // write may already be recorded, so it keeps running and reports later.
+    if (!isWrite) controller.abort();
+    const error =
+      cause instanceof ApiError
+        ? cause
+        : new ApiError("unknown", "Something went wrong. Please try again.", { cause });
+    if (error.kind === "network" || error.kind === "timeout" || error.kind === "unknown-outcome") {
+      recordFailure();
     }
-    throw new ApiError("unknown", "Something went wrong. Please try again.", { cause });
+    if (error.kind === "unauthorized") emitUnauthorized();
+    throw error;
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+/** Never rejects: reports how a request the client stopped waiting for ended. */
+function lateOutcomeOf<T>(pipeline: Promise<T>): Promise<LateWriteOutcome> {
+  return pipeline.then(
+    (value) => ({ ok: true as const, value }),
+    (cause) => ({ ok: false as const, cause }),
+  );
 }
 
 export async function requestJson<T>(

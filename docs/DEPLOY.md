@@ -37,6 +37,8 @@ So Alpine (musl) and arm64 hosts also work, but glibc x64 is the one that was re
 | `DB_POOL_MAX` | no (10, range 1–10) | run | |
 | `SESSION_IDLE_TIMEOUT_HOURS` | no (12) | run | |
 | `SESSION_ABSOLUTE_TIMEOUT_DAYS` | no (7) | run | |
+| `RESEND_API_KEY` | no | run | Resend API key that sends the password-reset email. Set it together with `MAIL_FROM` or leave both empty: with both empty the API still starts, logs a warning, and "forgot password" answers 503 (no other endpoint is affected). Secret |
+| `MAIL_FROM` | no | run | verified Resend sender, `no-reply@example.com` or `Fabtyna Stores <no-reply@example.com>`. Must be a domain verified in Resend or the send is rejected |
 | `API_TX_TIMEOUT_MS`, `API_TX_MAX_WAIT_MS`, `API_LOCK_TIMEOUT_MS` | no | run | transaction/lock limits |
 | `API_MAX_DATE_RANGE_DAYS` | no (366) | run | report date-range cap |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH` | only for `db:seed:admin` | operator machine, one-off | hash from `hash-password`; never the plain password |
@@ -128,6 +130,9 @@ test rows stay forever.
 - [ ] `GET /products` without a cookie returns 401.
 - [ ] A POST with a wrong `Origin` header is rejected (403 CSRF_ORIGIN).
 - [ ] Login succeeds; the cookie has `HttpOnly`, `Secure`, `SameSite=Lax`, `__Host-` prefix.
+- [ ] Password reset (needs `RESEND_API_KEY` + `MAIL_FROM`): "Forgot password?" accepts the address, the email arrives, its link opens `/reset-password`, the new password signs in exactly once, and the old password is rejected.
+- [ ] The reset link is single-use: opening it a second time reports the link is invalid or expired, and sessions that were already signed in are no longer accepted.
+- [ ] With `RESEND_API_KEY`/`MAIL_FROM` unset, `POST /auth/forgot-password` answers 503 and the API still starts (the log warns once).
 - [ ] Create a product.
 - [ ] Record a purchase (stock goes up; supplier balance as expected).
 - [ ] Record a sale (stock goes down; the chosen account balance rises by the amount received).

@@ -5,10 +5,12 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { registerAuthRoutes } from "./auth/auth.routes.js";
+import { registerPasswordResetRoutes } from "./auth/password-reset.routes.js";
 import type { SessionConfig } from "./auth/session.js";
 import { authenticateRequest, csrfOriginError } from "./auth/session.js";
 import { AppError, mapKnownError } from "./lib/errors.js";
 import type { LoggerOption } from "./lib/logging.js";
+import type { Mailer } from "./lib/mailer.js";
 import type { TxTimeouts } from "./lib/tx-options.js";
 import { registerPurchasesRoutes } from "./modules/purchases/purchases.routes.js";
 import { createPurchasesService } from "./modules/purchases/purchases.service.js";
@@ -40,6 +42,8 @@ export interface BuildAppOptions {
   trustProxy: boolean;
   logger?: boolean | LoggerOption;
   now?: () => Date;
+  /** Password-reset email delivery. `null`/omitted disables self-service reset. */
+  mailer?: Mailer | null;
   /** Defaults to DEFAULT_TX_TIMEOUTS. */
   txTimeouts?: TxTimeouts;
   maxDateRangeDays?: number;
@@ -47,6 +51,12 @@ export interface BuildAppOptions {
   onTransaction?: (entry: Record<string, unknown>) => void;
   onRoute?: (route: { method: string | string[]; url: string }) => void;
 }
+
+const PUBLIC_AUTH_POST_PATHS = new Set([
+  "/auth/login",
+  "/auth/forgot-password",
+  "/auth/reset-password",
+]);
 
 export function buildApp(options: BuildAppOptions): FastifyInstance {
   const app = Fastify({
@@ -87,9 +97,13 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     }
 
     const path = request.url.split("?")[0];
+    // The only routes reachable without a session: liveness, sign-in, and the
+    // two password-reset endpoints (a locked-out admin has no session by
+    // definition). Everything else, including both new routes' CSRF check,
+    // is unchanged.
     if (
       (request.method === "GET" && path === "/health") ||
-      (request.method === "POST" && path === "/auth/login") ||
+      (request.method === "POST" && PUBLIC_AUTH_POST_PATHS.has(path)) ||
       request.method === "OPTIONS"
     ) {
       return;
@@ -106,6 +120,12 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   registerAuthRoutes(app, {
     prisma: options.prisma,
     config: options.auth,
+    now: options.now,
+  });
+  registerPasswordResetRoutes(app, {
+    prisma: options.prisma,
+    config: options.auth,
+    mailer: options.mailer ?? null,
     now: options.now,
   });
 

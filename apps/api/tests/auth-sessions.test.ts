@@ -64,7 +64,14 @@ async function login(email = h.actor.email, password = PASSWORD): Promise<string
 }
 
 describe("server-side admin sessions", () => {
-  it("protects every registered route except GET /health and POST /auth/login", async () => {
+  /**
+   * The routes a signed-out browser must reach: liveness, sign-in, and the two
+   * password-reset endpoints (someone locked out has no session by definition).
+   * Everything else answers 401.
+   */
+  const PUBLIC_POSTS = new Set(["/auth/login", "/auth/forgot-password", "/auth/reset-password"]);
+
+  it("protects every registered route except GET /health and the public POST endpoints", async () => {
     expect(h.routes.length).toBeGreaterThan(0);
     for (const route of h.routes) {
       const methods = Array.isArray(route.method) ? route.method : [route.method];
@@ -73,7 +80,7 @@ describe("server-side admin sessions", () => {
         const response = await request(method, route.url, { origin: WEB_ORIGIN });
         if (method === "GET" && route.url === "/health") {
           expect(response.statusCode).toBe(200);
-        } else if (method === "POST" && route.url === "/auth/login") {
+        } else if (method === "POST" && PUBLIC_POSTS.has(route.url)) {
           expect(response.statusCode).not.toBe(401);
         } else {
           expect(response.statusCode, `${method} ${route.url}`).toBe(401);

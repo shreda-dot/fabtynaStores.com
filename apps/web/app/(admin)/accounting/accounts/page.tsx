@@ -33,6 +33,7 @@ import { accountingApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { invalidateReportsAndBalances } from "@/lib/invalidate-after-write";
+import { transferDraftError } from "@/lib/account-transfer";
 import { useWriteFlow } from "@/hooks/use-write-flow";
 import { WriteFlowStatus } from "@/components/write-flow-status";
 import { isMockApiMode } from "@/lib/api";
@@ -157,7 +158,7 @@ export default function AccountsPage() {
   const [openingAmount, setOpeningAmount] = useState("");
   const [reconcileCount, setReconcileCount] = useState("");
   const [reconcileReason, setReconcileReason] = useState("");
-  const [transferFromId, setTransferFromId] = useState("");
+  const [transferFromChoice, setTransferFromChoice] = useState("");
   const [transferToId, setTransferToId] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
   const [transferNote, setTransferNote] = useState("");
@@ -205,6 +206,18 @@ export default function AccountsPage() {
     null;
   const selectedBalance = selectedAccount
     ? displayedAccountBalance(selectedAccount, entries)
+    : 0n;
+  // The From selector shows the account whose statement is open until the
+  // operator chooses another one. The same expression feeds the payload, so what
+  // the operator sees and what is submitted cannot drift apart.
+  const transferFromId = transferFromChoice || selectedAccount?.id || "";
+  const transferFromAccount =
+    accounts.find((account) => account.id === transferFromId) ?? null;
+  const transferFromBalance = transferFromAccount
+    ? displayedAccountBalance(transferFromAccount, entries)
+    : 0n;
+  const transferAmountKobo = /^[0-9]+$/.test(transferAmount)
+    ? BigInt(transferAmount)
     : 0n;
   const statementQuery = useInfiniteQuery({
     queryKey: ["accounting", "statement", selectedAccount?.id ?? "", fromDate, toDate],
@@ -407,8 +420,13 @@ export default function AccountsPage() {
   function submitTransfer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionError("");
-    if (!/^[0-9]+$/.test(transferAmount) || BigInt(transferAmount) <= 0n) {
-      setActionError("Enter an amount greater than zero.");
+    const problem = transferDraftError({
+      fromAccountId: transferFromId,
+      toAccountId: transferToId,
+      amountKobo: transferAmount,
+    });
+    if (problem !== null) {
+      setActionError(problem);
       return;
     }
     operationMutation.mutate({
@@ -914,15 +932,31 @@ export default function AccountsPage() {
                       <form onSubmit={submitTransfer} className="space-y-3">
                         <div className="grid gap-3 sm:grid-cols-2">
                           <FormField id="transfer-from" label="From">
-                            <Select
-                              id="transfer-from"
-                              value={transferFromId || selectedAccount.id}
-                              onChange={(event) => { writeFlow.edit(); setTransferFromId(event.target.value); }}
-                            >
-                              {activeAccounts.map((account) => (
-                                <option key={account.id} value={account.id}>{account.name}</option>
-                              ))}
-                            </Select>
+                            <>
+                              <Select
+                                id="transfer-from"
+                                value={transferFromId}
+                                onChange={(event) => { writeFlow.edit(); setTransferFromChoice(event.target.value); }}
+                              >
+                                {activeAccounts.map((account) => (
+                                  <option key={account.id} value={account.id}>{account.name}</option>
+                                ))}
+                              </Select>
+                              <p className="text-xs text-muted-foreground">
+                                {transferFromAccount === null ? (
+                                  "Choose the account the money leaves."
+                                ) : (
+                                  <>
+                                    Balance:{" "}
+                                    <Money
+                                      kobo={transferFromBalance}
+                                      tone="neutral"
+                                      className="font-medium"
+                                    />
+                                  </>
+                                )}
+                              </p>
+                            </>
                           </FormField>
                           <FormField id="transfer-to" label="To">
                             <Select
@@ -931,8 +965,17 @@ export default function AccountsPage() {
                               onChange={(event) => { writeFlow.edit(); setTransferToId(event.target.value); }}
                             >
                               <option value="">Select account</option>
-                              {activeAccounts.filter((account) => account.id !== (transferFromId || selectedAccount.id)).map((account) => (
-                                <option key={account.id} value={account.id}>{account.name}</option>
+                              {activeAccounts.map((account) => (
+                                // The From account stays in the list but cannot be
+                                // picked, so a chosen option never vanishes from
+                                // under the selection.
+                                <option
+                                  key={account.id}
+                                  value={account.id}
+                                  disabled={account.id === transferFromId}
+                                >
+                                  {account.name}
+                                </option>
                               ))}
                             </Select>
                           </FormField>
@@ -943,6 +986,13 @@ export default function AccountsPage() {
                           defaultValueKobo="0"
                           onKoboChange={(value) => { writeFlow.edit(); setTransferAmount(value); }}
                         />
+                        {transferFromAccount !== null && transferAmountKobo > transferFromBalance && (
+                          <p role="status" className="text-sm text-warning">
+                            More than the {transferFromAccount.name} balance of{" "}
+                            <Money kobo={transferFromBalance} tone="neutral" className="font-medium" />
+                            . Check the amount before you transfer.
+                          </p>
+                        )}
                         <FormField id="transfer-note" label="Note (optional)">
                           <Input
                             id="transfer-note"

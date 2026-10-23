@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { buildApp } from "./app.js";
+import { startPasswordResetCleanup } from "./auth/password-reset.routes.js";
 import { startSessionCleanup } from "./auth/session.js";
 import { startIdempotencyCleanup } from "./lib/idempotency.js";
+import { mailerFromEnv } from "./lib/mailer.js";
 import type { RuntimeEnv } from "./lib/env.js";
 import { createPrismaClient } from "./lib/prisma.js";
 import { buildLoggerOptions, type LoggerOption } from "./lib/logging.js";
@@ -22,6 +24,10 @@ export async function startServer(
 ): Promise<StartedServer> {
   const prisma = createPrismaClient(env.apiDatabaseUrl, { maxConnections: env.dbPoolMax });
   try {
+    const mailer = mailerFromEnv({
+      resendApiKey: env.resendApiKey,
+      mailFrom: env.mailFrom,
+    });
     const app = buildApp({
       prisma,
       auth: {
@@ -35,7 +41,13 @@ export async function startServer(
       logger: overrides.logger ?? buildLoggerOptions(),
       txTimeouts: env.txTimeouts,
       maxDateRangeDays: env.maxDateRangeDays,
+      mailer,
     });
+    if (mailer === null) {
+      app.log.warn(
+        "RESEND_API_KEY and MAIL_FROM are not set: self-service password reset is disabled (POST /auth/forgot-password answers 503).",
+      );
+    }
 
     const stopCleanup = startIdempotencyCleanup(prisma, {
       onError: (error) => app.log.error({ err: error }, "idempotency cleanup failed"),
@@ -52,9 +64,16 @@ export async function startServer(
         if (count > 0) app.log.info({ count }, "purged expired admin sessions");
       },
     });
+    const stopResetCleanup = startPasswordResetCleanup(prisma, {
+      onError: (error) => app.log.error({ err: error }, "password reset token cleanup failed"),
+      onPurged: (count) => {
+        if (count > 0) app.log.info({ count }, "purged password reset tokens");
+      },
+    });
     app.addHook("onClose", async () => {
       stopCleanup();
       stopSessionCleanup();
+      stopResetCleanup();
       await prisma.$disconnect();
     });
 

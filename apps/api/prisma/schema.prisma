@@ -205,6 +205,7 @@ model AdminUser {
   auditLogs        AuditLog[]
   sessions         AdminSession[]
   idempotencyKeys  IdempotencyKey[]
+  resetTokens      PasswordResetToken[]
 
   @@map("admin_users")
 }
@@ -224,6 +225,27 @@ model AdminSession {
   @@index([adminUserId])
   @@index([expiresAt])
   @@map("admin_sessions")
+}
+
+/// Self-service "forgot password" tokens (migration
+/// `20261023000000_password_reset_tokens`). Operational, not a ledger: the raw
+/// token only ever exists in the email we sent, and `tokenHash` is its SHA-256 —
+/// the same treatment `AdminSession.tokenHash` gets. A row is single-use
+/// (`usedAt`), dies after 30 minutes (`expiresAt`), and a new request retires
+/// every earlier live token for that admin.
+model PasswordResetToken {
+  id          String    @id @default(cuid())
+  adminUserId String
+  tokenHash   String    @unique
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt   DateTime  @db.Timestamptz(3)
+  usedAt      DateTime? @db.Timestamptz(3)
+  requestedIp String?
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Restrict, map: "fk_password_reset_tokens_admin_user")
+
+  @@index([adminUserId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
 }
 
 model AuditLog {

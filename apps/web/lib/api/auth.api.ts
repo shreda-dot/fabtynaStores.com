@@ -5,6 +5,7 @@ export interface AuthUser {
 
 export type AuthFailureKind =
   | "invalid-credentials"
+  | "invalid-token"
   | "rate-limited"
   | "network"
   | "timeout"
@@ -27,4 +28,7 @@ export interface AuthApi {
   logout(): Promise<void>;
   me(): Promise<AuthUser>;
   changePassword(currentPassword: string, newPassword: string): Promise<void>;
+  /** Asks for a reset link. Resolves even for an unknown address (no enumeration). */
+  requestPasswordReset(email: string): Promise<void>;
+  resetPassword(token: string, newPassword: string): Promise<void>;
 }

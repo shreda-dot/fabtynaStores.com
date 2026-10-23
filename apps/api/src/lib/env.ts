@@ -25,6 +25,13 @@ export interface RuntimeEnv {
   cookieDomain: string | null;
   sessionIdleTimeoutHours: number;
   sessionAbsoluteTimeoutDays: number;
+  /**
+   * Resend credentials for the self-service password reset email. Both are
+   * `null` when unset, which disables "forgot password" (the endpoint answers
+   * 503) — the API still starts, so a missing mail key is never an outage.
+   */
+  resendApiKey: string | null;
+  mailFrom: string | null;
   /** Transaction timing for write endpoints (see lib/tx-options.ts). */
   txTimeouts: TxTimeouts;
   /** Maximum inclusive date range accepted by list and statement endpoints. */
@@ -142,6 +149,18 @@ export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): Runtime
     90,
   );
 
+  // Self-service password reset email (Resend). Optional as a pair: without
+  // both, "forgot password" is disabled rather than half-configured.
+  const rawResendApiKey = source.RESEND_API_KEY?.trim() ?? "";
+  const rawMailFrom = source.MAIL_FROM?.trim() ?? "";
+  if ((rawResendApiKey === "") !== (rawMailFrom === "")) {
+    problems.push(
+      "RESEND_API_KEY and MAIL_FROM must be set together (password reset email) or both left empty.",
+    );
+  } else if (rawMailFrom !== "" && !rawMailFrom.includes("@")) {
+    problems.push("MAIL_FROM must be a sender address, e.g. Fabtyna Stores <no-reply@example.com>.");
+  }
+
   const rawPoolMax = source.DB_POOL_MAX?.trim() ?? "";
   let dbPoolMax = 10;
   if (rawPoolMax !== "") {
@@ -192,6 +211,8 @@ export function loadRuntimeEnv(source: NodeJS.ProcessEnv = process.env): Runtime
     cookieDomain: rawCookieDomain === "" ? null : rawCookieDomain,
     sessionIdleTimeoutHours,
     sessionAbsoluteTimeoutDays,
+    resendApiKey: rawResendApiKey === "" ? null : rawResendApiKey,
+    mailFrom: rawMailFrom === "" ? null : rawMailFrom,
     txTimeouts,
     maxDateRangeDays,
   };

@@ -73,6 +73,7 @@ export const EXPECTED_MIGRATIONS = [
   "20261020000900_transfer_reference_sequence",
   "20261020001000_admin_sessions",
   "20261020001100_idempotency_actor_scope",
+  "20261023000000_password_reset_tokens",
 ] as const;
 
 /**
@@ -92,6 +93,8 @@ export const EXPECTED_TABLES = [
   "expense_categories",
   // 20261020001000_admin_sessions
   "admin_sessions",
+  // 20261023000000_password_reset_tokens
+  "password_reset_tokens",
 ] as const;
 
 /**
@@ -121,6 +124,10 @@ export const EXPECTED_INDEXES = [
   "admin_sessions_tokenHash_key",
   "admin_sessions_adminUserId_idx",
   "admin_sessions_expiresAt_idx",
+  // 20261023000000_password_reset_tokens
+  "password_reset_tokens_tokenHash_key",
+  "password_reset_tokens_adminUserId_idx",
+  "password_reset_tokens_expiresAt_idx",
 ] as const;
 
 /**
@@ -397,4 +404,7 @@ export const EXPECTED_FOREIGN_KEYS = [
 
   // 20261020001100_idempotency_actor_scope
   "fk_idempotency_keys_admin_user",
+
+  // 20261023000000_password_reset_tokens
+  "fk_password_reset_tokens_admin_user",
 ] as const;

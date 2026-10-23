@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState, type FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { formatNaira, parseMoneyInputToKobo } from "@fabtyna/shared";
 import { QuickAddCustomerDialog } from "@/components/customers/quick-add-customer-dialog";
@@ -9,8 +9,9 @@ import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { WriteFlowStatus } from "@/components/write-flow-status";
+import { useWriteFlow } from "@/hooks/use-write-flow";
 import { customersApi, productsApi, salesApi } from "@/lib/api";
-import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { toast } from "@/stores/toast-store";
 
@@ -45,6 +46,8 @@ type DebtorInput = {
 export function RecordDebtorDialog({ open, onClose }: Props) {
   const queryClient = useQueryClient();
   const submitting = useRef(false);
+  const writeFlow = useWriteFlow();
+  const retrySubmit = useRef<(() => Promise<void>) | null>(null);
 
   const [customerId, setCustomerId] = useState("");
   const [addingCustomer, setAddingCustomer] = useState(false);
@@ -69,48 +72,13 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
     return (customers.data ?? []).filter((c) => c.type === "RETAIL");
   }, [customers.data]);
 
-  const mutation = useMutation({
-    mutationFn: (input: DebtorInput) =>
-      salesApi.create({
-        customerId: input.customerId,
-        customerName: null,
-        channel: "RETAIL",
-        location: "RETAIL_SHELF",
-        soldAt: new Date().toISOString(),
-        notes: null,
-        reference: null,
-        paidKobo: "0",
-        lines: [
-          {
-            productId: input.productId,
-            unit: "UNIT",
-            quantity: input.quantity,
-            unitPriceKobo: input.unitPriceKobo,
-          },
-        ],
-      }),
-    onSuccess: (_result, input) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.customers.all,
-      });
-      const total = BigInt(input.unitPriceKobo) * BigInt(input.quantity);
-      const name =
-        retailCustomers.find((c) => c.id === input.customerId)?.name ??
-        "customer";
-      toast.success(`Debt of ${formatNaira(total)} recorded for ${name}.`);
-      close();
-    },
-    onError: (err) => {
-      setError(toUserMessage(err));
-      toast.error(toUserMessage(err));
-    },
-    onSettled: () => {
-      submitting.current = false;
-    },
-  });
+  /** Any edit renews the idempotency key, so a changed form is never replayed. */
+  function edited<T>(set: (value: T) => void) {
+    return (value: T) => {
+      writeFlow.edit();
+      set(value);
+    };
+  }
 
   function resetForm() {
     setCustomerId("");
@@ -119,6 +87,7 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
     setPrice("");
     setError("");
     submitting.current = false;
+    writeFlow.reset();
   }
 
   function close() {
@@ -127,9 +96,53 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
     onClose();
   }
 
+  async function submit(input: DebtorInput): Promise<void> {
+    const run = async () => {
+      // One key for this submission: a retry after an unknown outcome replays
+      // the first request instead of recording a second debt.
+      const sale = await writeFlow.run((idempotencyKey) =>
+        salesApi.create(
+          {
+            customerId: input.customerId,
+            customerName: null,
+            channel: "RETAIL",
+            location: "RETAIL_SHELF",
+            soldAt: new Date().toISOString(),
+            notes: null,
+            reference: null,
+            paidKobo: "0",
+            lines: [
+              {
+                productId: input.productId,
+                unit: "UNIT",
+                quantity: input.quantity,
+                unitPriceKobo: input.unitPriceKobo,
+              },
+            ],
+          },
+          idempotencyKey,
+        ),
+      );
+      if (sale === undefined) return;
+
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+      const total = BigInt(input.unitPriceKobo) * BigInt(input.quantity);
+      const name =
+        retailCustomers.find((c) => c.id === input.customerId)?.name ??
+        "customer";
+      toast.success(`Debt of ${formatNaira(total)} recorded for ${name}.`);
+      close();
+    };
+    retrySubmit.current = run;
+    await run();
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitting.current || mutation.isPending) return;
+    if (submitting.current || writeFlow.pending) return;
     setError("");
 
     if (customerId === "") {
@@ -154,7 +167,9 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
     }
 
     submitting.current = true;
-    mutation.mutate({ customerId, productId, quantity, unitPriceKobo });
+    void submit({ customerId, productId, quantity, unitPriceKobo }).finally(() => {
+      submitting.current = false;
+    });
   }
 
   // Live total so the amount that will be owed is visible before saving.
@@ -165,7 +180,7 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
       ? BigInt(previewKobo) * BigInt(previewQty)
       : null;
 
-  const networkBusy = mutation.isPending;
+  const networkBusy = writeFlow.pending;
 
   return (
     <>
@@ -186,7 +201,9 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
                 <Select
                   id="debtor-customer"
                   value={customerId}
-                  onChange={(event) => setCustomerId(event.target.value)}
+                  onChange={(event) =>
+                    edited(setCustomerId)(event.target.value)
+                  }
                 >
                   <option value="">Select customer</option>
                   {retailCustomers.map((customer) => (
@@ -217,7 +234,7 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
             <Select
               id="debtor-product"
               value={productId}
-              onChange={(event) => setProductId(event.target.value)}
+              onChange={(event) => edited(setProductId)(event.target.value)}
             >
               <option value="">
                 {products.isPending ? "Loading products…" : "Select product"}
@@ -239,7 +256,7 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
                 min={1}
                 step={1}
                 value={qty}
-                onChange={(e) => setQty(e.target.value)}
+                onChange={(e) => edited(setQty)(e.target.value)}
                 placeholder="e.g. 6"
               />
             </FormField>
@@ -249,7 +266,7 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
                 type="text"
                 inputMode="decimal"
                 value={price}
-                onChange={(e) => setPrice(e.target.value)}
+                onChange={(e) => edited(setPrice)(e.target.value)}
                 placeholder="e.g. 1,200"
                 autoComplete="off"
               />
@@ -271,6 +288,15 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
             </p>
           )}
 
+          {writeFlow.status !== "idle" && (
+            <WriteFlowStatus
+              flow={writeFlow}
+              onRetry={() => void retrySubmit.current?.()}
+              checkHref="/debtors"
+              checkLabel="Check debtors"
+            />
+          )}
+
           <div className="flex justify-end gap-2">
             <Button
               type="button"
@@ -280,7 +306,7 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
             >
               Cancel
             </Button>
-            <Button type="submit" loading={mutation.isPending}>
+            <Button type="submit" loading={networkBusy}>
               Record debtor
             </Button>
           </div>
@@ -291,7 +317,10 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
         open={addingCustomer}
         defaultType="RETAIL"
         onClose={() => setAddingCustomer(false)}
-        onCreated={(customer) => setCustomerId(customer.id)}
+        onCreated={(customer) => {
+          writeFlow.edit();
+          setCustomerId(customer.id);
+        }}
       />
     </>
   );

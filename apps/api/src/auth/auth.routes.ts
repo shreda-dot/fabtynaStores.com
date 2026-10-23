@@ -78,7 +78,8 @@ function invalidCredentials(): AppError {
   return new AppError(401, "INVALID_CREDENTIALS", "Email or password is incorrect.");
 }
 
-function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
+/** Shared with the password-reset routes so both refuse a body the same way. */
+export function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
     throw new AppError(400, "VALIDATION", "The request could not be read as valid JSON.", parsed.error.issues);

@@ -27,4 +27,10 @@ export const authMockApi: AuthApi = {
   async changePassword() {
     throw new Error("Password changes are available only with real authentication.");
   },
+  async requestPasswordReset() {
+    throw new Error("Password reset is available only with real authentication.");
+  },
+  async resetPassword() {
+    throw new Error("Password reset is available only with real authentication.");
+  },
 };

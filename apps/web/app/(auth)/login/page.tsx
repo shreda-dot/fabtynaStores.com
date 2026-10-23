@@ -2,12 +2,12 @@
 
 import { Suspense, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
-import { Eye, EyeOff, Info } from "lucide-react";
+import Link from "next/link";
+import { CheckCircle2, Eye, EyeOff, Info } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AuthApiError, authApi, isMockApiMode } from "@/lib/api";
-import { toast } from "@/stores/toast-store";
 
 const DEFAULT_DESTINATION = "/dashboard";
 
@@ -49,6 +49,8 @@ function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const destination = safeDestination(searchParams.get("next"));
+  // The reset page sends people back here with ?reset=1 after a successful reset.
+  const justReset = searchParams.get("reset") === "1";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -71,16 +73,28 @@ function LoginForm() {
       router.replace(destination);
       // Stay in the loading state while the next page loads.
     } catch (cause) {
-      if (cause instanceof AuthApiError && cause.kind === "invalid-credentials") {
+      if (
+        cause instanceof AuthApiError &&
+        cause.kind === "invalid-credentials"
+      ) {
         setError("Email or password is incorrect.");
-      } else if (cause instanceof AuthApiError && cause.kind === "rate-limited") {
+      } else if (
+        cause instanceof AuthApiError &&
+        cause.kind === "rate-limited"
+      ) {
         setError(cause.message);
       } else if (cause instanceof AuthApiError && cause.kind === "network") {
-        setError("Could not reach the sign-in service. Check your connection and try again.");
+        setError(
+          "Could not reach the sign-in service. Check your connection and try again.",
+        );
       } else if (cause instanceof AuthApiError && cause.kind === "timeout") {
-        setError("The sign-in request timed out. Check your connection and try again.");
+        setError(
+          "The sign-in request timed out. Check your connection and try again.",
+        );
       } else if (cause instanceof AuthApiError && cause.kind === "server") {
-        setError("The sign-in service is unavailable. Please try again shortly.");
+        setError(
+          "The sign-in service is unavailable. Please try again shortly.",
+        );
       } else {
         setError("Unable to sign in. Please try again.");
       }
@@ -121,6 +135,16 @@ function LoginForm() {
           </p>
         )}
 
+        {justReset && (
+          <p
+            role="status"
+            className="mt-3 flex items-center gap-2 rounded-md border border-success/30 bg-success-surface px-3 py-2 text-xs font-medium text-success"
+          >
+            <CheckCircle2 aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+            Password updated. Sign in with your new password.
+          </p>
+        )}
+
         <form onSubmit={submit} className="mt-4 space-y-3">
           <div className="space-y-1.5">
             <label htmlFor="email" className="block text-sm font-medium">
@@ -147,17 +171,12 @@ function LoginForm() {
                 Password
               </label>
               {/* Negative margins keep the row compact while the tap area stays large. */}
-              <button
-                type="button"
-                onClick={() =>
-                  toast.info(
-                    "Password reset is not ready yet. Please contact the store owner.",
-                  )
-                }
+              <Link
+                href="/forgot-password"
                 className="-my-2.5 rounded-md px-1 py-2.5 text-sm font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               >
                 Forgot password?
-              </button>
+              </Link>
             </div>
             <div className="relative">
               <Input

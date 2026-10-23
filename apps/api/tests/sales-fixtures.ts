@@ -7,6 +7,7 @@ import type { Actor } from "../src/auth/actor.js";
 import { hashSessionToken, SESSION_COOKIE_BASE_NAME } from "../src/auth/session.js";
 import { createPrismaClient } from "../src/lib/prisma.js";
 import type { LoggerOption } from "../src/lib/logging.js";
+import type { Mailer } from "../src/lib/mailer.js";
 import { resolveTestConnectionString } from "./test-db.js";
 
 export const connectionString = resolveTestConnectionString();
@@ -35,6 +36,8 @@ export interface HarnessOptions {
   now?: () => Date;
   logger?: boolean | LoggerOption;
   onRoute?: (route: { method: string | string[]; url: string }) => void;
+  /** Password-reset email delivery; omitted means self-service reset is off. */
+  mailer?: Mailer | null;
 }
 
 /** One app, one Prisma client (pool of 10, like the API) and one raw pg client for seeding and counting. */
@@ -72,6 +75,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     trustProxy: false,
     logger: options.logger,
     now: options.now,
+    mailer: options.mailer ?? null,
     onTransaction: (entry) => txLog.push(entry),
     onRoute: (route) => {
       routes.push(route);

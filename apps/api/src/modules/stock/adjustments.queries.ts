@@ -4,6 +4,7 @@ import {
   toStockAdjustmentLineDto,
   toStockMovementDto,
 } from "@fabtyna/shared";
+import type { StockAdjustment } from "@fabtyna/shared";
 import { AppError } from "../../lib/errors.js";
 import {
   addOneDay,
@@ -16,13 +17,12 @@ import {
 } from "../../lib/list-helpers.js";
 import type { ListAdjustmentsQuery } from "./stock.schemas.js";
 
-interface AdjustmentListRow {
-  id: string;
-  reason: string;
-  status: string;
-  adjustedAt: Date;
-  lineCount: number;
-}
+/**
+ * A list row is the public entity `StockAdjustmentDto` itself, as the web and
+ * mock adapters expect. (It previously omitted `createdById`/`createdAt` and
+ * added a `lineCount` that the strict DTO schema rejects.)
+ */
+type AdjustmentListRow = StockAdjustment;
 
 export async function listAdjustments(
   prisma: PrismaClient,
@@ -71,8 +71,7 @@ export async function listAdjustments(
   }
   const where = conditions.length > 0 ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}` : Prisma.empty;
   const rows = await prisma.$queryRaw<AdjustmentListRow[]>`
-    SELECT a.id, a.reason, a.status::text AS status, a."adjustedAt",
-           (SELECT count(*)::int FROM stock_adjustment_lines al WHERE al."adjustmentId" = a.id) AS "lineCount"
+    SELECT a.id, a."createdById", a.reason, a.status::text AS status, a."adjustedAt", a."createdAt"
       FROM stock_adjustments a
       ${where}
      ORDER BY a."adjustedAt" DESC, a.id DESC
@@ -80,7 +79,7 @@ export async function listAdjustments(
   const page = rows.slice(0, query.limit);
   const last = page[page.length - 1];
   return {
-    items: page.map((row) => ({ ...row, adjustedAt: row.adjustedAt.toISOString() })),
+    items: page.map((row) => toStockAdjustmentDto(row)),
     nextCursor:
       rows.length > query.limit && last !== undefined
         ? encodeCursor({ at: last.adjustedAt.toISOString(), id: last.id })
@@ -109,5 +108,8 @@ export async function getAdjustmentDetail(prisma: PrismaClient, id: string) {
     productName: product.name,
   }));
   const movements = adjustment.lines.flatMap((line) => line.stockMovements.map(toStockMovementDto));
-  return { ...toStockAdjustmentDto(adjustment), lines, movements };
+  // The Prisma row still carries the `lines` relation; strip it so the strict
+  // DTO schema sees only the adjustment's own columns.
+  const { lines: _lines, ...adjustmentRow } = adjustment;
+  return { ...toStockAdjustmentDto(adjustmentRow), lines, movements };
 }

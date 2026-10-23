@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  stockAdjustmentDtoSchema,
+  stockAdjustmentLineDtoSchema,
+  stockMovementDtoSchema,
+  stockTransferDtoSchema,
+  stockTransferLegDtoSchema,
+  stockTransferLineDtoSchema,
+} from "@fabtyna/shared";
+import {
   averageCostOf,
   call,
   createHarness,
@@ -212,3 +220,102 @@ describe("stock adjustments API", () => {
     expect(await stockOf(h.pg, product.id, "MARKET")).toBe(0);
   });
 });
+
+/**
+ * Regression: the transfer and adjustment VIEW screens failed in production
+ * because both read endpoints answered 500 (the query spread the Prisma row's
+ * `lines`/`stockMovements` relations into a `.strict()` DTO schema) and the
+ * list rows did not match `StockTransferDto`/`StockAdjustmentDto` at all. The
+ * create/void paths then failed too, because the web adapters re-read the
+ * detail after every write. These tests parse every response with the exact
+ * shared schemas the web contract is built on.
+ */
+describe("stock read endpoints satisfy the shared DTO contract", () => {
+  it("serves a transfer list and detail the shared schemas accept", async () => {
+    const product = await seedProduct(h.pg, {
+      stock: 8,
+      location: "WAREHOUSE",
+      averageCostKobo: 4000n,
+    });
+    const created = await call(h.app, "POST", "/transfers", {
+      from: "WAREHOUSE",
+      to: "RETAIL_SHELF",
+      reason: "Read contract",
+      transferredAt: isoNowMinusMinutes(1),
+      lines: [{ productId: product.id, quantityUnits: 2 }],
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+
+    const list = await call(h.app, "GET", "/transfers?limit=200");
+    expect(list.status).toBe(200);
+    const items = list.body.items as unknown[];
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(() => stockTransferDtoSchema.parse(item)).not.toThrow();
+    }
+
+    const detail = await call(h.app, "GET", `/transfers/${id}`);
+    expect(detail.status).toBe(200);
+    const { lines, legs, movements, ...base } = detail.body as Record<string, unknown>;
+    expect(() => stockTransferDtoSchema.parse(base)).not.toThrow();
+
+    expect(Array.isArray(lines)).toBe(true);
+    for (const line of lines as Record<string, unknown>[]) {
+      const { productName, legs: lineLegs, ...lineBase } = line;
+      expect(typeof productName).toBe("string");
+      expect(() => stockTransferLineDtoSchema.parse(lineBase)).not.toThrow();
+      for (const leg of (lineLegs ?? []) as unknown[]) {
+        expect(() => stockTransferLegDtoSchema.parse(leg)).not.toThrow();
+      }
+    }
+    for (const leg of legs as unknown[]) {
+      expect(() => stockTransferLegDtoSchema.parse(leg)).not.toThrow();
+    }
+    for (const movement of movements as unknown[]) {
+      expect(() => stockMovementDtoSchema.parse(movement)).not.toThrow();
+    }
+  });
+
+  it("serves an adjustment list and detail the shared schemas accept", async () => {
+    const product = await seedBlankProduct(h.pg, { unitsPerPack: 12 });
+    const created = await call(h.app, "POST", "/adjustments", {
+      reason: "Read contract",
+      adjustedAt: isoNowMinusMinutes(1),
+      lines: [
+        {
+          productId: product.id,
+          location: "WAREHOUSE",
+          quantityDeltaUnits: 3,
+          unitCostKobo: "5000",
+        },
+      ],
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+
+    const list = await call(h.app, "GET", "/adjustments?limit=200");
+    expect(list.status).toBe(200);
+    const items = list.body.items as unknown[];
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(() => stockAdjustmentDtoSchema.parse(item)).not.toThrow();
+    }
+
+    const detail = await call(h.app, "GET", `/adjustments/${id}`);
+    expect(detail.status).toBe(200);
+    const { lines, movements, ...base } = detail.body as Record<string, unknown>;
+    expect(() => stockAdjustmentDtoSchema.parse(base)).not.toThrow();
+
+    expect(Array.isArray(lines)).toBe(true);
+    for (const line of lines as Record<string, unknown>[]) {
+      const { productName, ...lineBase } = line;
+      expect(typeof productName).toBe("string");
+      expect(() => stockAdjustmentLineDtoSchema.parse(lineBase)).not.toThrow();
+    }
+    for (const movement of movements as unknown[]) {
+      expect(() => stockMovementDtoSchema.parse(movement)).not.toThrow();
+    }
+  });
+});
+

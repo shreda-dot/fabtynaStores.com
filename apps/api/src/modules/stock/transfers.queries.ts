@@ -5,6 +5,7 @@ import {
   toStockTransferLegDto,
   toStockTransferLineDto,
 } from "@fabtyna/shared";
+import type { StockTransfer, StockTransferDto } from "@fabtyna/shared";
 import { AppError } from "../../lib/errors.js";
 import {
   addOneDay,
@@ -17,18 +18,17 @@ import {
 } from "../../lib/list-helpers.js";
 import type { ListTransfersQuery } from "./stock.schemas.js";
 
-interface TransferListRow {
-  id: string;
-  reference: string | null;
-  from: string;
-  to: string;
-  reason: string | null;
-  transferredAt: Date;
-  lineCount: number;
-}
+/**
+ * A list row is the public entity itself. The web adapters, the mock adapter
+ * and the docs all expect `StockTransferDto[]`, so the query selects exactly
+ * the fields of that DTO and runs each row through the same converter the
+ * detail endpoint uses. (It previously omitted `createdById`/`createdAt` and
+ * added a `lineCount` that the strict DTO schema rejects.)
+ */
+type TransferListRow = StockTransfer;
 
 export interface TransferListPage {
-  items: Array<Omit<TransferListRow, "transferredAt"> & { transferredAt: string }>;
+  items: StockTransferDto[];
   nextCursor: string | null;
   from: string | null;
   to: string | null;
@@ -69,9 +69,8 @@ export async function listTransfers(
   }
   const where = conditions.length > 0 ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}` : Prisma.empty;
   const rows = await prisma.$queryRaw<TransferListRow[]>`
-    SELECT t.id, t.reference, t."from"::text AS "from", t."to"::text AS "to",
-           t.reason, t."transferredAt",
-           (SELECT count(*)::int FROM stock_transfer_lines tl WHERE tl."transferId" = t.id) AS "lineCount"
+    SELECT t.id, t."createdById", t.reference, t."from"::text AS "from", t."to"::text AS "to",
+           t.reason, t."transferredAt", t."createdAt"
       FROM stock_transfers t
       ${where}
      ORDER BY t."transferredAt" DESC, t.id DESC
@@ -79,7 +78,7 @@ export async function listTransfers(
   const page = rows.slice(0, query.limit);
   const last = page[page.length - 1];
   return {
-    items: page.map((row) => ({ ...row, transferredAt: row.transferredAt.toISOString() })),
+    items: page.map((row) => toStockTransferDto(row)),
     nextCursor:
       rows.length > query.limit && last !== undefined
         ? encodeCursor({ at: last.transferredAt.toISOString(), id: last.id })
@@ -113,9 +112,14 @@ export async function getTransferDetail(prisma: PrismaClient, id: string) {
     productName: product.name,
     legs: movementLegs.map(({ stockMovements: _movements, ...leg }) => toStockTransferLegDto(leg)),
   }));
-  const legs = transfer.lines.flatMap((line) => line.movementLegs.map(toStockTransferLegDto));
+  const legs = transfer.lines.flatMap((line) =>
+    line.movementLegs.map(({ stockMovements: _movements, ...leg }) => toStockTransferLegDto(leg)),
+  );
   const movements = transfer.lines.flatMap((line) =>
     line.movementLegs.flatMap((leg) => leg.stockMovements.map(toStockMovementDto)),
   );
-  return { ...toStockTransferDto(transfer), lines, legs, movements };
+  // The Prisma row still carries the `lines` relation; strip it so the strict
+  // DTO schema sees only the transfer's own columns.
+  const { lines: _lines, ...transferRow } = transfer;
+  return { ...toStockTransferDto(transferRow), lines, legs, movements };
 }

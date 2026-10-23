@@ -24,8 +24,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: SITE.name,
   description: SITE.description,
-  // Everything is private by default. Only /about overrides this to be indexable.
-  robots: { index: false, follow: false },
+  robots: { index: true, follow: true },
   applicationName: SITE.name,
   icons: {
     icon: [{ url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],

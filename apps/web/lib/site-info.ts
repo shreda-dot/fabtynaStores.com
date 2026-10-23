@@ -1,4 +1,4 @@
-export const SITE_URL = "https://app.fabtyna.com";
+export const SITE_URL = "https://fabtyna.com";
 
 export const SITE = {
   name: "Fabtyna Stores",

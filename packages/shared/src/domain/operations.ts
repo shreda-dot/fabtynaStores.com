@@ -1888,6 +1888,24 @@ export function splitExpenseByChannel(
   return { retailKobo, wholesaleKobo: amountKobo - retailKobo };
 }
 
+type SaleLineWithCostSnapshot = SaleLine & { costPerUnitKobo?: bigint | null };
+
+/**
+ * Daily sales summary. Definitions:
+ *
+ * - Supposed revenue: the billed total of non-voided sales made that day.
+ * - Revenue gotten: cash received that day (by payment date), net of reversed
+ *   payments, on live sales. It includes payments on older sales.
+ * - Revenue / COGS / Gross profit: attributed to the day the SALE was made and
+ *   limited to the part of the sale that has been paid so far. Revenue is the
+ *   paid amount; COGS is the cost of that paid share (cost x paid / total,
+ *   rounded half up). An unpaid sale adds no profit and no cost until paid, and
+ *   an old debt collected today never adds to today's profit.
+ * - Cost per unit is the cost captured on the sale line when present, else the
+ *   product's current average cost.
+ *
+ * `paidKobo` on a live sale already reflects reversed payments.
+ */
 export function salesSummary(
   from: Date,
   to: Date,
@@ -1957,7 +1975,9 @@ export function salesSummary(
     let standardRevenue = 0n;
     for (const line of lines) {
       const product = productById.get(line.productId);
-      const costPerUnit = product?.averageCostKobo ?? 0n;
+      const snapshot = (line as SaleLineWithCostSnapshot).costPerUnitKobo;
+      const costPerUnit =
+        typeof snapshot === "bigint" ? snapshot : (product?.averageCostKobo ?? 0n);
       cogs += costPerUnit * BigInt(line.quantityUnits);
       if (sale.channel === "RETAIL") {
         standardRevenue +=
@@ -1971,21 +1991,35 @@ export function salesSummary(
         );
       }
     }
-    day.totalSupposedRevenueKobo += sale.totalKobo;
+
+    // Only the paid share of the sale counts towards profit.
+    const total = sale.totalKobo;
+    let paid = sale.paidKobo;
+    if (paid < 0n) paid = 0n;
+    if (paid > total) paid = total;
+    const revenueRecognised = paid;
+    const costRecognised = total === 0n ? cogs : roundHalfUp(cogs * paid, total);
+
+    day.totalSupposedRevenueKobo += total;
     day.totalStandardRevenueKobo += standardRevenue;
-    day.totalCogsKobo += cogs;
+    day.totalRevenueKobo += revenueRecognised;
+    day.totalCogsKobo += costRecognised;
     if (sale.channel === "RETAIL") {
-      day.retailSupposedRevenueKobo += sale.totalKobo;
+      day.retailSupposedRevenueKobo += total;
       day.retailStandardRevenueKobo += standardRevenue;
-      day.retailCogsKobo += cogs;
+      day.retailRevenueKobo += revenueRecognised;
+      day.retailCogsKobo += costRecognised;
     } else {
-      day.wholesaleSupposedRevenueKobo += sale.totalKobo;
+      day.wholesaleSupposedRevenueKobo += total;
       day.wholesaleStandardRevenueKobo += standardRevenue;
-      day.wholesaleCogsKobo += cogs;
+      day.wholesaleRevenueKobo += revenueRecognised;
+      day.wholesaleCogsKobo += costRecognised;
     }
     days.set(date, day);
   }
 
+  // Cash actually received in the period, by payment date. This is the
+  // "Revenue gotten" figure; it does not feed profit.
   const salesById = new Map(existingSales.map((s) => [s.id, s]));
   for (const payment of existingSalePayments) {
     if (reversedSalePayments.has(payment.id)) {
@@ -2000,17 +2034,13 @@ export function salesSummary(
     if (!sale || sale.status === "VOIDED") {
       continue;
     }
-    const channel = sale.channel;
     const date = getLagosBusinessDate(payment.paidAt);
     const day = days.get(date) ?? emptyDay(date);
     day.totalRevenueGottenKobo += payment.amountKobo;
-    day.totalRevenueKobo += payment.amountKobo;
-    if (channel === "RETAIL") {
+    if (sale.channel === "RETAIL") {
       day.retailRevenueGottenKobo += payment.amountKobo;
-      day.retailRevenueKobo += payment.amountKobo;
     } else {
       day.wholesaleRevenueGottenKobo += payment.amountKobo;
-      day.wholesaleRevenueKobo += payment.amountKobo;
     }
     days.set(date, day);
   }

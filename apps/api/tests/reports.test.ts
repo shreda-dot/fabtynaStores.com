@@ -365,7 +365,49 @@ describe("read-only reports", () => {
     expect(await accountBalanceOf(h.pg, account.id)).toBe(7000n);
     expect(product.id).not.toBe("");
   });
+      it("does not add old-debt collections to today's profit", async () => {
+    type SummaryBody = { days?: Array<Record<string, string>> };
+    const range = `from=${yesterday}&to=${today}`;
+    const baseline = await reportCall("sales-summary-old-debt-baseline", `/reports/sales-summary?${range}`);
+    expect(baseline.status).toBe(200);
+    const product = await seedProduct(h.pg, { stock: 5, averageCostKobo: 6000n });
+    const customer = await seedCustomer(h.pg);
+    const account = await seedAccount(h.pg);
+    // One unit sold on credit yesterday: price 10000, cost 6000, so margin 4000.
+    const sale = await postSale(
+      h.app,
+      saleBody({
+        productId: product.id,
+        quantity: 1,
+        customerId: customer.id,
+        soldAt: `${yesterday}T08:00:00.000Z`,
+        reference: newId("report-old-debt"),
+      }),
+    );
+    expect(sale.status).toBe(201);
+    // The customer pays the whole debt today.
+    const paid = await call(h.app, "POST", `/sales/${sale.body.id}/payments`, {
+      amountKobo: "10000",
+      accountId: account.id,
+      paidAt: `${today}T09:00:00.000Z`,
+    });
+    expect(paid.status).toBe(201);
 
+    const summary = await reportCall("sales-summary-old-debt", `/reports/sales-summary?${range}`);
+    expect(summary.status).toBe(200);
+    const value = (body: SummaryBody, date: string, key: string): bigint =>
+      BigInt(body.days?.find((day) => day.date === date)?.[key] ?? "0");
+    const gained = (date: string, key: string): bigint =>
+      value(summary.body as SummaryBody, date, key) -
+      value(baseline.body as SummaryBody, date, key);
+
+    // Yesterday's sale is now fully paid: its margin (10000 - 6000) belongs to yesterday.
+    expect(gained(yesterday, "totalGrossProfitKobo")).toBe(4000n);
+    expect(gained(yesterday, "totalRevenueGottenKobo")).toBe(0n);
+    // Today gets the cash but no profit from it.
+    expect(gained(today, "totalGrossProfitKobo")).toBe(0n);
+    expect(gained(today, "totalRevenueGottenKobo")).toBe(10000n);
+  });
   it("rejects reversed and overlong date ranges", async () => {
     const reversed = await call(
       h.app,

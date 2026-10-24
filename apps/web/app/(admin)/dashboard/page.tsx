@@ -110,8 +110,10 @@ export default function DashboardPage() {
 
   const totalRetailWorth = dash
     ? BigInt(dash.stock.worthAtRetailKobo)
-    : (stock.data?.reduce((sum, row) => sum + BigInt(row.retailWorthKobo), 0n) ??
-      0n);
+    : (stock.data?.reduce(
+        (sum, row) => sum + BigInt(row.retailWorthKobo),
+        0n,
+      ) ?? 0n);
   const totalWholesaleWorth = dash
     ? BigInt(dash.stock.worthAtWholesaleKobo)
     : (stock.data?.reduce(
@@ -171,7 +173,9 @@ export default function DashboardPage() {
   const wholesaleDebt = dash
     ? big(dash.channels.WHOLESALE.debtKobo)
     : outstandingDebt.wholesale;
-  const totalDebt = dash ? big(dash.metrics.debtKobo.value) : retailDebt + wholesaleDebt;
+  const totalDebt = dash
+    ? big(dash.metrics.debtKobo.value)
+    : retailDebt + wholesaleDebt;
 
   const totalGotten = dash
     ? big(dash.metrics.revenueGottenKobo.value)
@@ -263,10 +267,7 @@ export default function DashboardPage() {
       )}
 
       {isError ? (
-        <ErrorState
-          message={toUserMessage(activeError)}
-          onRetry={refetchAll}
-        />
+        <ErrorState message={toUserMessage(activeError)} onRetry={refetchAll} />
       ) : isLoading ? (
         <div className="space-y-6">
           <Skeleton variant="stat" count={4} />
@@ -292,8 +293,8 @@ export default function DashboardPage() {
                 trend={trendFor(totalGotten, yTotalGotten)}
                 hint={
                   <InfoHint label="Explain revenue collected">
-                    Cash actually received on this business date, retail and
-                    wholesale together.
+                    Cash actually received on this business date, including
+                    payments on older sales. Retail and wholesale together
                   </InfoHint>
                 }
               />
@@ -310,8 +311,9 @@ export default function DashboardPage() {
                 trend={trendFor(todayNetProfit, yNetProfit)}
                 hint={
                   <InfoHint label="Explain net profit">
-                    Only cash actually received counts towards profit — unpaid
-                    debts are excluded.
+                    Profit on the sales made on this date, counting only the
+                    part customers have paid. Payments received today for older
+                    sales are not counted here
                   </InfoHint>
                 }
               />
@@ -338,7 +340,9 @@ export default function DashboardPage() {
                   />
                 }
                 hint="Unpaid balance for sales made on this date. It clears once those sales are paid."
-                trend={yDebt === null ? undefined : trendFor(totalDebt, yDebt, false)}
+                trend={
+                  yDebt === null ? undefined : trendFor(totalDebt, yDebt, false)
+                }
               />
             </div>
           </section>
@@ -353,8 +357,8 @@ export default function DashboardPage() {
                     Gotten is the cash received on this date.
                   </span>
                   <span className="mt-2 block">
-                    Outstanding debt is the current unpaid balance of sales made on
-                    this date, so the rows will not always add up.
+                    Outstanding debt is the current unpaid balance of sales made
+                    on this date, so the rows will not always add up.
                   </span>
                 </InfoHint>
               }
@@ -363,16 +367,28 @@ export default function DashboardPage() {
               <table className="w-full min-w-[360px] text-sm">
                 <thead>
                   <tr className="border-b border-border text-muted-foreground">
-                    <th scope="col" className="py-2.5 pl-4 pr-2 text-left font-medium sm:pl-0">
+                    <th
+                      scope="col"
+                      className="py-2.5 pl-4 pr-2 text-left font-medium sm:pl-0"
+                    >
                       {isToday ? "Today" : viewDate}
                     </th>
-                    <th scope="col" className="px-2 py-2.5 text-right font-medium">
+                    <th
+                      scope="col"
+                      className="px-2 py-2.5 text-right font-medium"
+                    >
                       Retail
                     </th>
-                    <th scope="col" className="px-2 py-2.5 text-right font-medium">
+                    <th
+                      scope="col"
+                      className="px-2 py-2.5 text-right font-medium"
+                    >
                       Wholesale
                     </th>
-                    <th scope="col" className="py-2.5 pl-2 pr-4 text-right font-medium sm:pr-0">
+                    <th
+                      scope="col"
+                      className="py-2.5 pl-2 pr-4 text-right font-medium sm:pr-0"
+                    >
                       Total
                     </th>
                   </tr>
@@ -425,8 +441,8 @@ export default function DashboardPage() {
               title="Stock on hand"
               action={
                 <InfoHint label="Explain stock worth">
-                  Current value of the stock on hand right now. It does not change
-                  with the date picker above.
+                  Current value of the stock on hand right now. It does not
+                  change with the date picker above.
                 </InfoHint>
               }
             />
@@ -444,13 +460,17 @@ export default function DashboardPage() {
                   </div>
                 )}
                 <div className="flex items-center justify-between gap-4">
-                  <dt className="text-muted-foreground">Retail (fridge) worth</dt>
+                  <dt className="text-muted-foreground">
+                    Retail (fridge) worth
+                  </dt>
                   <dd className="font-medium">
                     <Money kobo={totalRetailWorth} tone="neutral" />
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-4">
-                  <dt className="text-muted-foreground">Wholesale (warehouse) worth</dt>
+                  <dt className="text-muted-foreground">
+                    Wholesale (warehouse) worth
+                  </dt>
                   <dd className="font-medium">
                     <Money kobo={totalWholesaleWorth} tone="neutral" />
                   </dd>

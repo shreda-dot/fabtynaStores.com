@@ -5,6 +5,7 @@ import { ArrowLeft, Receipt, ScrollText } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { formatLagosDate } from "@fabtyna/shared";
+import { CustomerSalesTotals } from "@/components/customers/customer-sales-totals";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
@@ -133,6 +134,7 @@ export default function CustomerDetailPage() {
         <StatCard label="Credit limit" value={<Money kobo={c.creditLimitKobo} tone="neutral" />} />
         <StatCard label="Unpaid sales" value={unpaidSales.length} />
       </div>
+      <CustomerSalesTotals customerId={id} />
       <Card>
         <CardHeader title="Contact" />
         <CardBody>

@@ -3,7 +3,7 @@
 import { Suspense, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { CheckCircle2, Eye, EyeOff, Info } from "lucide-react";
+import { Eye, EyeOff, Info } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,8 +49,6 @@ function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const destination = safeDestination(searchParams.get("next"));
-  // The reset page sends people back here with ?reset=1 after a successful reset.
-  const justReset = searchParams.get("reset") === "1";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -73,28 +71,16 @@ function LoginForm() {
       router.replace(destination);
       // Stay in the loading state while the next page loads.
     } catch (cause) {
-      if (
-        cause instanceof AuthApiError &&
-        cause.kind === "invalid-credentials"
-      ) {
+      if (cause instanceof AuthApiError && cause.kind === "invalid-credentials") {
         setError("Email or password is incorrect.");
-      } else if (
-        cause instanceof AuthApiError &&
-        cause.kind === "rate-limited"
-      ) {
+      } else if (cause instanceof AuthApiError && cause.kind === "rate-limited") {
         setError(cause.message);
       } else if (cause instanceof AuthApiError && cause.kind === "network") {
-        setError(
-          "Could not reach the sign-in service. Check your connection and try again.",
-        );
+        setError("Could not reach the sign-in service. Check your connection and try again.");
       } else if (cause instanceof AuthApiError && cause.kind === "timeout") {
-        setError(
-          "The sign-in request timed out. Check your connection and try again.",
-        );
+        setError("The sign-in request timed out. Check your connection and try again.");
       } else if (cause instanceof AuthApiError && cause.kind === "server") {
-        setError(
-          "The sign-in service is unavailable. Please try again shortly.",
-        );
+        setError("The sign-in service is unavailable. Please try again shortly.");
       } else {
         setError("Unable to sign in. Please try again.");
       }
@@ -135,16 +121,6 @@ function LoginForm() {
           </p>
         )}
 
-        {justReset && (
-          <p
-            role="status"
-            className="mt-3 flex items-center gap-2 rounded-md border border-success/30 bg-success-surface px-3 py-2 text-xs font-medium text-success"
-          >
-            <CheckCircle2 aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-            Password updated. Sign in with your new password.
-          </p>
-        )}
-
         <form onSubmit={submit} className="mt-4 space-y-3">
           <div className="space-y-1.5">
             <label htmlFor="email" className="block text-sm font-medium">
@@ -156,7 +132,7 @@ function LoginForm() {
               inputMode="email"
               required
               autoComplete="username"
-              placeholder="admin@fabtynastores.com"
+              placeholder="you@example.com"
               value={email}
               onChange={(event) => {
                 setEmail(event.target.value);
@@ -222,6 +198,12 @@ function LoginForm() {
             Sign in
           </Button>
         </form>
+
+        <p className="mt-4 text-center text-xs text-muted-foreground">
+          <Link href="/about" className="underline hover:text-foreground">
+            About Fabtyna Stores
+          </Link>
+        </p>
       </section>
     </main>
   );

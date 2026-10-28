@@ -29,10 +29,17 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
   if (!allowed) {
     return (
-      <div className="grid min-h-dvh place-items-center px-4">
-        <p className="text-sm text-muted-foreground">Checking your session…</p>
+      <div className="grid min-h-dvh place-items-center bg-background px-4">
+        <div className="flex flex-col items-center gap-3">
+          {/* Animated Spinner */}
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <p className="text-sm text-muted-foreground animate-pulse">
+            Verifying access…
+          </p>
+        </div>
       </div>
     );
   }
+
   return children;
 }

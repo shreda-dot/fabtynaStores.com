@@ -131,6 +131,7 @@ function LoginForm() {
               type="email"
               inputMode="email"
               required
+              disabled={pending}
               autoComplete="username"
               placeholder="you@example.com"
               value={email}
@@ -149,7 +150,11 @@ function LoginForm() {
               {/* Negative margins keep the row compact while the tap area stays large. */}
               <Link
                 href="/forgot-password"
-                className="-my-2.5 rounded-md px-1 py-2.5 text-sm font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                aria-disabled={pending}
+                tabIndex={pending ? -1 : undefined}
+                className={`-my-2.5 rounded-md px-1 py-2.5 text-sm font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+                  pending ? "pointer-events-none opacity-50" : ""
+                }`}
               >
                 Forgot password?
               </Link>
@@ -159,6 +164,7 @@ function LoginForm() {
                 id="password"
                 type={showPassword ? "text" : "password"}
                 required
+                disabled={pending}
                 autoComplete="current-password"
                 placeholder="••••••••"
                 className="pr-12"
@@ -170,10 +176,11 @@ function LoginForm() {
               />
               <button
                 type="button"
+                disabled={pending}
                 onClick={() => setShowPassword((visible) => !visible)}
                 aria-label={showPassword ? "Hide password" : "Show password"}
                 aria-pressed={showPassword}
-                className="absolute right-1 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className="absolute right-1 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50"
               >
                 {showPassword ? (
                   <EyeOff aria-hidden="true" className="h-4 w-4" />
@@ -194,6 +201,7 @@ function LoginForm() {
             type="submit"
             className="min-h-11 w-full text-base"
             loading={pending}
+            disabled={pending}
           >
             Sign in
           </Button>

@@ -13,8 +13,14 @@ import { authApi, isMockApiMode } from "@/lib/api";
 import { clearAllDrafts, setDraftUser } from "@/lib/form-draft";
 import { toast } from "@/stores/toast-store";
 
+const THEME_CHOICES = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "system", label: "Device" },
+] as const;
+
 export function TopBar() {
-  const { resolvedTheme, setTheme } = useTheme();
+  const { theme, resolvedTheme, setTheme } = useTheme();
   const toggleMobileNav = useUIStore((s) => s.toggleMobileNav);
   const pathname = usePathname();
   const router = useRouter();
@@ -110,7 +116,7 @@ export function TopBar() {
           {menuOpen && (
             <div
               role="menu"
-              className="absolute right-0 top-12 z-40 w-56 rounded-md border border-border bg-card p-1 text-card-foreground shadow-lg"
+              className="absolute right-0 top-12 z-40 w-60 rounded-md border border-border bg-card p-1 text-card-foreground shadow-lg"
             >
               <Link
                 role="menuitem"
@@ -123,6 +129,30 @@ export function TopBar() {
               </Link>
               <div className="px-3 py-2 empty:hidden">
                 <InstallButton />
+              </div>
+              <div role="separator" className="my-1 h-px bg-border" />
+              <div className="px-3 py-2">
+                <p className="mb-1.5 text-xs font-medium text-muted-foreground">Theme</p>
+                <div role="group" aria-label="Theme" className="flex gap-1">
+                  {THEME_CHOICES.map((choice) => {
+                    const active = (theme ?? "system") === choice.value;
+                    return (
+                      <button
+                        key={choice.value}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => setTheme(choice.value)}
+                        className={`h-9 flex-1 rounded-md border px-2 text-xs font-medium focus-visible:outline-2 focus-visible:outline-ring ${
+                          active
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-border hover:bg-muted"
+                        }`}
+                      >
+                        {choice.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               <div role="separator" className="my-1 h-px bg-border" />
               <button

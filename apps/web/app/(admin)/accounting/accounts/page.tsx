@@ -168,6 +168,15 @@ export default function AccountsPage() {
   const [actionError, setActionError] = useState("");
   const [deactivateTarget, setDeactivateTarget] = useState<AccountDto | null>(null);
   const [deactivateReason, setDeactivateReason] = useState("");
+  // MoneyInput keeps its own text, so clearing the page state is not enough to
+  // clear what the box shows. Each form has its own counter; bumping one
+  // remounts only that form's money box, so the other forms keep what you typed.
+  const [resetKeys, setResetKeys] = useState({
+    opening: 0,
+    reconcile: 0,
+    transfer: 0,
+    manual: 0,
+  });
 
   const accountsQuery = useQuery({
     queryKey: queryKeys.accounting.accounts,
@@ -263,6 +272,53 @@ export default function AccountsPage() {
   const statementRows = statementQuery.data?.pages.flatMap((page) => page.entries) ?? [];
   const statementSummary = statementQuery.data?.pages[0];
 
+  function bumpResetKey(form: keyof typeof resetKeys) {
+    setResetKeys((current) => ({ ...current, [form]: current[form] + 1 }));
+  }
+
+  // Runs only after the server accepted the operation, so a refused or
+  // unconfirmed submit keeps everything the operator typed.
+  function resetFormAfter(operation: AccountOperation) {
+    switch (operation.kind) {
+      case "create":
+        setCreateName("");
+        setCreateNote("");
+        break;
+      case "update":
+        setEditingId("");
+        break;
+      case "opening":
+        setOpeningAmount("");
+        bumpResetKey("opening");
+        break;
+      case "reconcile":
+        setReconcileCount("");
+        setReconcileReason("");
+        bumpResetKey("reconcile");
+        break;
+      case "transfer":
+        setTransferFromChoice("");
+        setTransferToId("");
+        setTransferAmount("");
+        setTransferNote("");
+        bumpResetKey("transfer");
+        break;
+      case "manual":
+        setManualAmount("");
+        setManualNote("");
+        bumpResetKey("manual");
+        break;
+      case "reverseTransfer":
+        setTransferReversalReason("");
+        break;
+      case "reverseEntry":
+        setEntryReversalReason("");
+        break;
+      default:
+        break;
+    }
+  }
+
   const operationMutation = useMutation({
     mutationFn: async (operation: AccountOperation): Promise<unknown | null> => {
       const isRetry = JSON.stringify(operation) === JSON.stringify(lastOperation);
@@ -321,13 +377,17 @@ export default function AccountsPage() {
       if (operation.kind === "reverseTransfer") setLastTransferId("");
       return result.value ?? true;
     },
-    onSuccess: async (result) => {
+    onSuccess: async (result, operation) => {
       if (result === null) return;
       setActionError("");
       setEntryReversalTarget(null);
+      resetFormAfter(operation);
       await queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
       await queryClient.invalidateQueries({ queryKey: queryKeys.accounting.accounts });
       void invalidateReportsAndBalances(queryClient);
+      // The reconcile box starts at the ledger balance, so remount it once the
+      // new balance has loaded.
+      if (operation.kind === "reconcile") bumpResetKey("reconcile");
     },
   });
 
@@ -346,8 +406,6 @@ export default function AccountsPage() {
         note: createNote.trim() || null,
       },
     });
-    setCreateName("");
-    setCreateNote("");
   }
 
   function startEdit(account: AccountDto) {
@@ -368,7 +426,6 @@ export default function AccountsPage() {
       id: account.id,
       input: { name: editName.trim(), note: editNote.trim() || null },
     });
-    setEditingId("");
   }
 
   function submitOpening(event: FormEvent<HTMLFormElement>) {
@@ -384,7 +441,6 @@ export default function AccountsPage() {
         occurredAt: createLagosDateTime(businessDate).toISOString(),
       },
     });
-    setOpeningAmount("");
   }
 
   function submitReconcile(event: FormEvent<HTMLFormElement>) {
@@ -413,8 +469,6 @@ export default function AccountsPage() {
         occurredAt: createLagosDateTime(businessDate).toISOString(),
       },
     });
-    setReconcileCount("");
-    setReconcileReason("");
   }
 
   function submitTransfer(event: FormEvent<HTMLFormElement>) {
@@ -439,8 +493,6 @@ export default function AccountsPage() {
         occurredAt: createLagosDateTime(businessDate).toISOString(),
       },
     });
-    setTransferAmount("");
-    setTransferNote("");
   }
 
   function submitManual(event: FormEvent<HTMLFormElement>) {
@@ -465,8 +517,6 @@ export default function AccountsPage() {
         occurredAt: createLagosDateTime(businessDate).toISOString(),
       },
     });
-    setManualAmount("");
-    setManualNote("");
   }
 
   function submitDeactivation(event: FormEvent<HTMLFormElement>) {
@@ -874,6 +924,7 @@ export default function AccountsPage() {
                     <CardBody>
                       <form onSubmit={submitOpening} className="space-y-3">
                         <MoneyInput
+                          key={`opening-${resetKeys.opening}`}
                           id="opening-balance"
                           label="Opening balance"
                           defaultValueKobo="0"
@@ -901,6 +952,7 @@ export default function AccountsPage() {
                     <CardBody>
                       <form onSubmit={submitReconcile} className="space-y-3">
                         <MoneyInput
+                          key={`reconcile-${resetKeys.reconcile}`}
                           id="reconcile-count"
                           label="Counted amount"
                           defaultValueKobo={selectedBalance.toString()}
@@ -981,6 +1033,7 @@ export default function AccountsPage() {
                           </FormField>
                         </div>
                         <MoneyInput
+                          key={`transfer-${resetKeys.transfer}`}
                           id="transfer-amount"
                           label="Amount"
                           defaultValueKobo="0"
@@ -1023,6 +1076,7 @@ export default function AccountsPage() {
                           </Select>
                         </FormField>
                         <MoneyInput
+                          key={`manual-${resetKeys.manual}`}
                           id="manual-amount"
                           label="Amount"
                           defaultValueKobo="0"

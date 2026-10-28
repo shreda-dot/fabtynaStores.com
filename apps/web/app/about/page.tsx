@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ABOUT_TITLE, ABOUT_URL, OG_IMAGE_URL, SITE, SITE_URL } from "@/lib/site-info";
+import { ABOUT_TITLE, ABOUT_URL, OG_IMAGE_URL, SITE } from "@/lib/site-info";
 
 export const metadata: Metadata = {
   title: ABOUT_TITLE,
@@ -22,6 +22,50 @@ export const metadata: Metadata = {
     images: [OG_IMAGE_URL],
   },
 };
+
+const LAST_UPDATED = "October 2026";
+
+const FEATURES = [
+  {
+    title: "Stock across locations",
+    text: "Track stock in the fridge, the warehouse and the market, count in packs and units, and move stock between locations with a full history.",
+  },
+  {
+    title: "Sales and purchases",
+    text: "Record retail and wholesale sales, paid or on credit, and supplier purchases. Payments, voids and corrections never erase history.",
+  },
+  {
+    title: "Customer and supplier balances",
+    text: "See who owes the business and who the business owes, with a statement for every customer and supplier.",
+  },
+  {
+    title: "Money and accounts",
+    text: "Keep cash, bank and POS accounts, record transfers, expenses and loans, and reconcile each account against a physical count.",
+  },
+  {
+    title: "Daily reports",
+    text: "See sales, expenses and profit for each business day in Lagos time, plus product sales and the overall financial position.",
+  },
+  {
+    title: "Exact money",
+    text: "Every amount is stored in whole kobo, so totals add up exactly however many entries there are.",
+  },
+] as const;
+
+const STEPS = [
+  {
+    title: "Set up",
+    text: "Add products, customers, suppliers and accounts, then enter opening stock and balances.",
+  },
+  {
+    title: "Record the day",
+    text: "Buy stock, sell it, take payments and record expenses from a phone or a computer.",
+  },
+  {
+    title: "Review",
+    text: "Check the day's profit, the money in each account, and who still owes what.",
+  },
+] as const;
 
 const jsonLd = {
   "@context": "https://schema.org",
@@ -76,95 +120,132 @@ export default function AboutPage() {
       />
 
       <article className="space-y-10">
-        {/* Header Section */}
         <header className="space-y-3 border-b border-border pb-6">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
-              Internal Enterprise Platform
-            </span>
-          </div>
+          <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+            Private business app
+          </span>
           <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">{SITE.name}</h1>
-          <p className="text-lg text-muted-foreground leading-relaxed">
-            {SITE.description || "A comprehensive, high-throughput retail and wholesale inventory management system optimized for multi-location distribution operations."}
-          </p>
+          <p className="text-lg leading-relaxed text-muted-foreground">{SITE.description}</p>
         </header>
 
-        {/* Feature Overview Grid */}
-        <section className="space-y-4">
-          <h2 className="text-xl font-semibold tracking-tight">Core System Capabilities</h2>
+        <section aria-labelledby="features-heading" className="space-y-4">
+          <h2 id="features-heading" className="text-xl font-semibold tracking-tight">
+            What it does
+          </h2>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-lg border border-border p-4 bg-card shadow-sm">
-              <h3 className="font-medium text-card-foreground">Inventory & Stock Ledger</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Real-time tracking of warehouse and retail shelf stock balances, unit conversions, and batch movements.
-              </p>
-            </div>
-            <div className="rounded-lg border border-border p-4 bg-card shadow-sm">
-              <h3 className="font-medium text-card-foreground">Sales & Purchases</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Automated cost calculations, margin analysis, and multi-channel wholesale order processing.
-              </p>
-            </div>
-            <div className="rounded-lg border border-border p-4 bg-card shadow-sm">
-              <h3 className="font-medium text-card-foreground">Expenses & Cash Flow</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Granular ledger entry and tracking across cash drawers, store expenses, and bank accounts.
-              </p>
-            </div>
-            <div className="rounded-lg border border-border p-4 bg-card shadow-sm">
-              <h3 className="font-medium text-card-foreground">Financial Reporting</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                End-of-day sales reconciliation, profit summaries, and operational analytics.
-              </p>
-            </div>
+            {FEATURES.map((feature) => (
+              <div
+                key={feature.title}
+                className="rounded-lg border border-border bg-card p-4 shadow-sm"
+              >
+                <h3 className="font-medium text-card-foreground">{feature.title}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">{feature.text}</p>
+              </div>
+            ))}
           </div>
         </section>
 
-        {/* Developer & Ecosystem Section */}
-        <section className="rounded-xl border border-border bg-muted/30 p-6 space-y-4">
-          <h2 className="text-xl font-semibold tracking-tight">Developer & Ecosystem</h2>
-          <p className="text-sm text-muted-foreground leading-relaxed">
-            Engineered and maintained by <span className="font-medium text-foreground">{SITE.developerName}</span> ({SITE.developerHandle}).
+        <section aria-labelledby="how-heading" className="space-y-4">
+          <h2 id="how-heading" className="text-xl font-semibold tracking-tight">
+            How it works
+          </h2>
+          <ol className="grid gap-4 sm:grid-cols-3">
+            {STEPS.map((step, index) => (
+              <li
+                key={step.title}
+                className="rounded-lg border border-border bg-card p-4 shadow-sm"
+              >
+                <span className="text-xs font-semibold uppercase tracking-wider text-primary">
+                  Step {index + 1}
+                </span>
+                <h3 className="mt-1 font-medium text-card-foreground">{step.title}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">{step.text}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section aria-labelledby="install-heading" className="space-y-2">
+          <h2 id="install-heading" className="text-xl font-semibold tracking-tight">
+            Use it like an app
+          </h2>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Fabtyna Stores runs in the browser and can be installed on a phone or computer. In
+            Chrome or Edge, choose Install app. On an iPhone, tap Share, then Add to Home Screen. An
+            internet connection is needed to record sales and payments.
           </p>
-          <div className="pt-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Related Platforms</h3>
-            <div className="mt-2 flex flex-wrap gap-3">
+        </section>
+
+        <section
+          aria-labelledby="developer-heading"
+          className="space-y-4 rounded-xl border border-border bg-muted/30 p-6"
+        >
+          <h2 id="developer-heading" className="text-xl font-semibold tracking-tight">
+            Built by
+          </h2>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Designed, built and maintained by{" "}
+            <span className="font-medium text-foreground">{SITE.developerName}</span> (
+            {SITE.developerHandle}), the developer of fabtyna.com and schooldra.com.
+          </p>
+          <ul className="space-y-2 text-sm">
+            <li>
               <a
                 href={SITE.fabtynaUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                className="font-medium text-primary hover:underline"
               >
-                fabtyna.com &rarr;
+                fabtyna.com
               </a>
-              <span className="text-muted-foreground/40">•</span>
+              <span className="text-muted-foreground"> — the home of Fabtyna Stores.</span>
+            </li>
+            <li>
               <a
                 href={SITE.schooldraUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                className="font-medium text-primary hover:underline"
               >
-                schooldra.com &rarr;
+                schooldra.com
               </a>
-            </div>
+              <span className="text-muted-foreground">
+                {" "}
+                — an exam-practice web app for Nigerian secondary school students preparing for JAMB
+                and UTME.
+              </span>
+            </li>
+          </ul>
+        </section>
+
+        <section
+          aria-labelledby="access-heading"
+          className="flex flex-col justify-between gap-4 rounded-xl border border-border bg-card p-6 shadow-sm sm:flex-row sm:items-center"
+        >
+          <div className="space-y-1">
+            <h2 id="access-heading" className="text-lg font-semibold">
+              Access and privacy
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              The application is private and needs a sign-in. Passwords are stored as salted hashes
+              and all connections use HTTPS. No customer, sales or price data appears on this page.
+              For access or questions, contact support.
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-col gap-2 sm:items-end">
+            <a
+              href={`mailto:${SITE.supportEmail}`}
+              className="inline-flex items-center justify-center whitespace-nowrap rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90"
+            >
+              Contact support
+            </a>
+            <Link href="/login" className="text-sm font-medium text-primary hover:underline">
+              Back to sign in
+            </Link>
           </div>
         </section>
 
-        {/* Access & Contact Section */}
-        <section className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-xl border border-border p-6 bg-card shadow-sm">
-          <div>
-            <h2 className="text-lg font-semibold">Access & Support</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              This application is restricted to authorized personnel. For administrative access or inquiries, contact system support.
-            </p>
-          </div>
-          <a
-            href={`mailto:${SITE.supportEmail}`}
-            className="inline-flex items-center justify-center whitespace-nowrap rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow hover:bg-primary/90 transition-colors"
-          >
-            Contact Support
-          </a>
-        </section>
+        <p className="text-xs text-muted-foreground">Last updated {LAST_UPDATED}.</p>
       </article>
     </main>
   );

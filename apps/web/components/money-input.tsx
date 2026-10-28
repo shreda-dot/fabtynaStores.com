@@ -111,7 +111,7 @@ export function MoneyInput({
         />
       </div>
       {error && (
-        <p id={`${id}-error`} role="alert" className="text-sm text-destructive">
+        <p id={`${id}-error`} role="alert" className="text-sm text-danger">
           {error}
         </p>
       )}

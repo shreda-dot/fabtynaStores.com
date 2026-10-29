@@ -55,7 +55,8 @@ export const useNetworkStore = create<NetworkState>((set) => ({
 /**
  * Re-derives connectivity after a failure. Uses `navigator.onLine` and, when the
  * browser believes it is online, falls back to "slow" until a request succeeds
- * (which covers captive portals / flaky connections).
+ * (which covers captive portals / flaky connections). A browser that reports a
+ * connection also clears a stale "offline" verdict, so a manual retry can recover.
  */
 export function reevaluateConnectivity(): void {
   if (typeof navigator === "undefined") return;
@@ -63,8 +64,7 @@ export function reevaluateConnectivity(): void {
     useNetworkStore.setState({ status: "offline", healthyStreak: 0 });
     return;
   }
-  const { status } = useNetworkStore.getState();
-  if (status === "offline" || status === "back-online") return;
+  if (useNetworkStore.getState().status === "back-online") return;
   useNetworkStore.setState({ status: "slow", healthyStreak: 0 });
 }
 

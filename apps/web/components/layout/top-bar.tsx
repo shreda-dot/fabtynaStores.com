@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { KeyRound, LogOut, Menu, Moon, Sun } from "lucide-react";
 import Link from "next/link";
@@ -21,20 +22,24 @@ const THEME_CHOICES = [
 
 export function TopBar() {
   const { theme, resolvedTheme, setTheme } = useTheme();
+  const queryClient = useQueryClient();
   const toggleMobileNav = useUIStore((s) => s.toggleMobileNav);
   const pathname = usePathname();
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPathname, setMenuPathname] = useState(pathname);
   const menuRef = useRef<HTMLDivElement>(null);
   const isDark = resolvedTheme === "dark";
   const pageTitle =
     navItems.find((item) => item.href === pathname)?.label ?? "Fabtyna Stores";
 
-  // Close the account menu when the page changes.
-  useEffect(() => {
+  // Close the account menu when the page changes. Adjusting state during render
+  // (instead of in an effect) avoids a second render pass with the menu still open.
+  if (menuPathname !== pathname) {
+    setMenuPathname(pathname);
     setMenuOpen(false);
-  }, [pathname]);
+  }
 
   // Close the account menu on outside tap or Escape.
   useEffect(() => {
@@ -64,6 +69,8 @@ export function TopBar() {
       await authApi.logout();
       clearAllDrafts();
       setDraftUser(null);
+      // Drop every cached answer, including the cached sign-in check.
+      queryClient.clear();
       router.replace("/login");
     } catch {
       toast.error("Could not sign out. Check your connection and try again.");

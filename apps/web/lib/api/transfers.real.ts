@@ -1,10 +1,16 @@
 import type { CreateTransferDto, StockTransferDto } from "@fabtyna/shared";
 import { requestJson } from "./client";
-import type { TransferDetailDto, TransfersApi } from "./transfers.api";
+import type { TransferDetailDto, TransferListPage, TransfersApi } from "./transfers.api";
 
-type TransferPage = { items: StockTransferDto[]; nextCursor: string | null };
+type TransferPage = {
+  items: StockTransferDto[];
+  nextCursor: string | null;
+  from?: string | null;
+  to?: string | null;
+};
 
 export const transfersRealApi: TransfersApi = {
+  // Without dates the server returns only today's transfers.
   async list() {
     const items: StockTransferDto[] = [];
     let cursor: string | undefined;
@@ -16,6 +22,21 @@ export const transfersRealApi: TransfersApi = {
       cursor = page.nextCursor ?? undefined;
     } while (cursor);
     return items;
+  },
+
+  async listPage(options): Promise<TransferListPage> {
+    const query = new URLSearchParams();
+    if (options.from) query.set("from", options.from);
+    if (options.to) query.set("to", options.to);
+    query.set("limit", String(options.limit ?? 50));
+    if (options.cursor) query.set("cursor", options.cursor);
+    const page = await requestJson<TransferPage>(`/transfers?${query.toString()}`);
+    return {
+      items: page.items,
+      nextCursor: page.nextCursor ?? null,
+      from: page.from ?? null,
+      to: page.to ?? null,
+    };
   },
 
   getById(id) {

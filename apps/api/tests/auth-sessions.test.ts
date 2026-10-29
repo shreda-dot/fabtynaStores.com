@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { OutgoingHttpHeaders } from "node:http";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { buildApp } from "../src/app.js";
 import { hashSessionToken, SESSION_COOKIE_BASE_NAME } from "../src/auth/session.js";
@@ -29,10 +30,10 @@ afterAll(async () => {
   await h.close();
 });
 
-function cookieFrom(response: { headers: Record<string, string | string[] | undefined> }): string {
+function cookieFrom(response: { headers: OutgoingHttpHeaders }): string {
   const value = response.headers["set-cookie"];
   const cookie = Array.isArray(value) ? value[0] : value;
-  if (cookie === undefined) throw new Error("Login response did not set a session cookie.");
+  if (typeof cookie !== "string") throw new Error("Login response did not set a session cookie.");
   return cookie.split(";", 1)[0] ?? "";
 }
 

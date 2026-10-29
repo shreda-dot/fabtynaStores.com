@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CloudOff, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { useNetworkStatus } from "@/hooks/use-network-status";
+import { reevaluateConnectivity } from "@/stores/network-store";
 import { cn } from "@/lib/cn";
 
 const BAR_HEIGHT_VAR = "--network-bar-height";
@@ -15,6 +16,7 @@ const BAR_HEIGHT_VAR = "--network-bar-height";
 export function NetworkStatusBar() {
   const { status } = useNetworkStatus();
   const queryClient = useQueryClient();
+  const [retrying, setRetrying] = useState(false);
   const visible = status !== "online";
 
   useEffect(() => {
@@ -28,6 +30,19 @@ export function NetworkStatusBar() {
       root.style.removeProperty(BAR_HEIGHT_VAR);
     };
   }, [visible]);
+
+  async function retry() {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      // Ask the browser first: it can know a link is back before the app does.
+      // The refetch that follows settles the real state via the network store.
+      reevaluateConnectivity();
+      await queryClient.invalidateQueries();
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   if (!visible) return null;
 
@@ -70,11 +85,15 @@ export function NetworkStatusBar() {
       {status !== "back-online" && (
         <button
           type="button"
-          onClick={() => void queryClient.invalidateQueries()}
-          className="inline-flex min-h-9 items-center gap-1 rounded-md border border-current/40 px-2.5 text-xs font-semibold hover:bg-black/10 dark:hover:bg-white/10"
+          onClick={() => void retry()}
+          disabled={retrying}
+          className="inline-flex min-h-9 items-center gap-1 rounded-md border border-current/40 px-2.5 text-xs font-semibold hover:bg-black/10 disabled:opacity-60 dark:hover:bg-white/10"
         >
-          <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
-          Retry
+          <RefreshCw
+            aria-hidden="true"
+            className={cn("h-3.5 w-3.5", retrying && "animate-spin")}
+          />
+          {retrying ? "Retrying…" : "Retry"}
         </button>
       )}
     </div>

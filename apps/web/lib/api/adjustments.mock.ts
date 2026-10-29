@@ -2,6 +2,7 @@ import {
   buildAdjustment,
   createAdjustmentDtoSchema,
   fromAuditLogDto,
+  getLagosBusinessDate,
   toAuditLogDto,
   toStockAdjustmentDto,
   toStockAdjustmentLineDto,
@@ -82,6 +83,26 @@ export const adjustmentsMockApi: AdjustmentsApi = {
       .sort((a, b) => b.adjustedAt.getTime() - a.adjustedAt.getTime())
       .map(toStockAdjustmentDto);
     return jsonClone(items);
+  },
+
+  async listPage(options) {
+    await delay();
+    const store = readMockStore();
+    const from = options.from ?? null;
+    const to = options.to ?? null;
+    const all = store.stockAdjustments
+      .slice()
+      .sort((a, b) => b.adjustedAt.getTime() - a.adjustedAt.getTime())
+      .map(toStockAdjustmentDto)
+      .filter((adjustment) => {
+        const date = getLagosBusinessDate(new Date(adjustment.adjustedAt));
+        return (from === null || date >= from) && (to === null || date <= to);
+      });
+    const limit = options.limit ?? 50;
+    const offset = options.cursor ? Number.parseInt(options.cursor, 10) || 0 : 0;
+    const items = all.slice(offset, offset + limit);
+    const nextCursor = offset + limit < all.length ? String(offset + limit) : null;
+    return jsonClone({ items, nextCursor, from, to });
   },
 
   async getById(id) {

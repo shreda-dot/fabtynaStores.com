@@ -1,11 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowLeftRight, Plus } from "lucide-react";
 import Link from "next/link";
 import { formatLagosDate, getLagosBusinessDate } from "@fabtyna/shared";
-import { DateFilter } from "@/components/date-filter";
+import type { StockTransferDto } from "@fabtyna/shared";
+import {
+  DateRangeFilter,
+  defaultListRange,
+  lastDaysRange,
+} from "@/components/date-range-filter";
 import { InfoHint } from "@/components/info-hint";
 import {
   ResponsiveTable,
@@ -21,15 +26,27 @@ import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { stockApi, transfersApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
-import type { StockTransferDto } from "@fabtyna/shared";
+import { validateReportRange } from "@/lib/report-range";
+
+const PAGE_SIZE = 50;
 
 export default function TransfersPage() {
-  const [filterDate, setFilterDate] = useState("");
-  const businessDate = useLagosBusinessDate();
+  const today = useLagosBusinessDate() || getLagosBusinessDate();
+  const [range, setRange] = useState(() => defaultListRange(getLagosBusinessDate()));
+  const problem = validateReportRange(range.from, range.to);
 
-  const transfers = useQuery({
-    queryKey: queryKeys.transfers.list,
-    queryFn: () => transfersApi.list(),
+  const transfers = useInfiniteQuery({
+    queryKey: queryKeys.transfers.pages({ from: range.from, to: range.to }),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      transfersApi.listPage({
+        from: range.from,
+        to: range.to,
+        limit: PAGE_SIZE,
+        cursor: pageParam,
+      }),
+    getNextPageParam: (last) => last.nextCursor,
+    enabled: problem === null,
   });
 
   const stock = useQuery({
@@ -37,19 +54,15 @@ export default function TransfersPage() {
     queryFn: () => stockApi.list(),
   });
 
-  const rows = useMemo(() => {
-    return (transfers.data ?? [])
-      .filter(
-        (transfer) =>
-          filterDate === "" ||
-          getLagosBusinessDate(new Date(transfer.transferredAt)) === filterDate,
-      )
-      .sort(
-        (a, b) =>
-          new Date(b.transferredAt).getTime() -
-          new Date(a.transferredAt).getTime(),
-      );
-  }, [transfers.data, filterDate]);
+  // Read before the render branches narrow `transfers`.
+  const loadMoreFailed = transfers.isFetchNextPageError;
+  const queryError: unknown = transfers.error;
+  const fetchNext = transfers.fetchNextPage;
+
+  const rows = useMemo(
+    () => (transfers.data?.pages ?? []).flatMap((page) => page.items),
+    [transfers.data],
+  );
 
   const totalWorth = (stock.data ?? []).reduce(
     (sum, row) => sum + BigInt(row.worthAtCostKobo),
@@ -97,6 +110,9 @@ export default function TransfersPage() {
     },
   ];
 
+  const scope =
+    range.from === range.to ? range.from : `${range.from} to ${range.to}`;
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -121,44 +137,37 @@ export default function TransfersPage() {
       />
 
       <section className="space-y-4 rounded-md border border-border bg-card p-4 sm:p-5">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <DateFilter
-            id="transfers-date"
-            value={filterDate}
-            onChange={setFilterDate}
-            max={businessDate}
-          />
-        </div>
+        <DateRangeFilter
+          idPrefix="transfers"
+          from={range.from}
+          to={range.to}
+          today={today}
+          onChange={setRange}
+          problem={problem}
+        />
 
-        {transfers.isPending ? (
+        {problem !== null ? null : transfers.isPending ? (
           <Skeleton variant="row" count={6} />
-        ) : transfers.isError ? (
+        ) : transfers.isError && !loadMoreFailed ? (
           <ErrorState
             title="Transfers could not be loaded"
-            message={toUserMessage(transfers.error)}
+            message={toUserMessage(queryError)}
             onRetry={() => void transfers.refetch()}
           />
         ) : rows.length === 0 ? (
-          filterDate !== "" ? (
-            <EmptyState
-              title="No transfers match these filters"
-              description="Try clearing the date filter."
-              action={
+          <EmptyState
+            icon={ArrowLeftRight}
+            title={`No transfers for ${scope}`}
+            description="Choose another period, or record a transfer to move stock between the warehouse, shelf and market."
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => setFilterDate("")}
+                  onClick={() => setRange(lastDaysRange(today, 365))}
                 >
-                  Clear filter
+                  Show the last 12 months
                 </Button>
-              }
-            />
-          ) : (
-            <EmptyState
-              icon={ArrowLeftRight}
-              title="No transfers yet"
-              description="Move stock between the warehouse, shelf and market to keep counts accurate."
-              action={
                 <Link
                   href="/transfers/new"
                   className={buttonClasses({ variant: "secondary", size: "sm" })}
@@ -166,15 +175,39 @@ export default function TransfersPage() {
                   <Plus aria-hidden="true" className="h-3.5 w-3.5" />
                   New transfer
                 </Link>
-              }
-            />
-          )
-        ) : (
-          <ResponsiveTable
-            rows={rows}
-            columns={columns}
-            getKey={(transfer) => transfer.id}
+              </div>
+            }
           />
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Showing {rows.length} transfers for {scope}
+              {transfers.hasNextPage ? " (more available)" : ""}.
+            </p>
+            <ResponsiveTable
+              rows={rows}
+              columns={columns}
+              getKey={(transfer) => transfer.id}
+            />
+            {loadMoreFailed && (
+              <ErrorState
+                title="More transfers could not be loaded"
+                message={toUserMessage(queryError)}
+                onRetry={() => void fetchNext()}
+              />
+            )}
+            {transfers.hasNextPage && (
+              <div className="flex justify-center">
+                <Button
+                  variant="secondary"
+                  loading={transfers.isFetchingNextPage}
+                  onClick={() => void transfers.fetchNextPage()}
+                >
+                  Load more
+                </Button>
+              </div>
+            )}
+          </>
         )}
       </section>
     </div>

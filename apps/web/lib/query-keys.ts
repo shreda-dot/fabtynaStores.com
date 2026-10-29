@@ -88,11 +88,14 @@ export const queryKeys = {
   transfers: {
     all: key("transfers"),
     list: key("transfers", "list"),
+    // Infinite (paged) data has a different cache shape than list(); never share a key.
+    pages: (filters: unknown) => key("transfers", "pages", filters),
     detail: (id: string) => key("transfers", "detail", id),
   },
   adjustments: {
     all: key("adjustments"),
     list: key("adjustments", "list"),
+    pages: (filters: unknown) => key("adjustments", "pages", filters),
     detail: (id: string) => key("adjustments", "detail", id),
   },
   dashboard: {

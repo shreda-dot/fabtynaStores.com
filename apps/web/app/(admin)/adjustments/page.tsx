@@ -1,11 +1,20 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Ban, Plus, Scale } from "lucide-react";
 import Link from "next/link";
 import { formatLagosDate, getLagosBusinessDate } from "@fabtyna/shared";
-import { DateFilter } from "@/components/date-filter";
+import type { StockAdjustmentDto } from "@fabtyna/shared";
+import {
+  DateRangeFilter,
+  defaultListRange,
+  lastDaysRange,
+} from "@/components/date-range-filter";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
@@ -23,24 +32,41 @@ import { isMockApiMode } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { invalidateReportsAndBalances } from "@/lib/invalidate-after-write";
+import { validateReportRange } from "@/lib/report-range";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
 import { useWriteFlow } from "@/hooks/use-write-flow";
 import { WriteFlowStatus } from "@/components/write-flow-status";
-import type { StockAdjustmentDto } from "@fabtyna/shared";
+
+const PAGE_SIZE = 50;
 
 export default function AdjustmentsPage() {
-  const [filterDate, setFilterDate] = useState("");
-  const businessDate = useLagosBusinessDate();
+  const today = useLagosBusinessDate() || getLagosBusinessDate();
+  const [range, setRange] = useState(() => defaultListRange(getLagosBusinessDate()));
+  const problem = validateReportRange(range.from, range.to);
   const network = useNetworkStatus();
   const queryClient = useQueryClient();
   const writeFlow = useWriteFlow();
   const [lastVoidId, setLastVoidId] = useState("");
 
-  const adjustments = useQuery({
-    queryKey: queryKeys.adjustments.list,
-    queryFn: () => adjustmentsApi.list(),
+  const adjustments = useInfiniteQuery({
+    queryKey: queryKeys.adjustments.pages({ from: range.from, to: range.to }),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      adjustmentsApi.listPage({
+        from: range.from,
+        to: range.to,
+        limit: PAGE_SIZE,
+        cursor: pageParam,
+      }),
+    getNextPageParam: (last) => last.nextCursor,
+    enabled: problem === null,
   });
+
+  // Read before the render branches narrow `adjustments`.
+  const loadMoreFailed = adjustments.isFetchNextPageError;
+  const queryError: unknown = adjustments.error;
+  const fetchNext = adjustments.fetchNextPage;
 
   const voidMutation = useMutation({
     mutationFn: async (adjustmentId: string) => {
@@ -59,18 +85,10 @@ export default function AdjustmentsPage() {
     onError: (error) => toast.error(toUserMessage(error)),
   });
 
-  const rows = useMemo(() => {
-    return (adjustments.data ?? [])
-      .filter(
-        (a) =>
-          filterDate === "" ||
-          getLagosBusinessDate(new Date(a.adjustedAt)) === filterDate,
-      )
-      .sort(
-        (a, b) =>
-          new Date(b.adjustedAt).getTime() - new Date(a.adjustedAt).getTime(),
-      );
-  }, [adjustments.data, filterDate]);
+  const rows = useMemo(
+    () => (adjustments.data?.pages ?? []).flatMap((page) => page.items),
+    [adjustments.data],
+  );
 
   async function tryVoid(a: StockAdjustmentDto) {
     await confirm({
@@ -136,6 +154,9 @@ export default function AdjustmentsPage() {
     },
   ];
 
+  const scope =
+    range.from === range.to ? range.from : `${range.from} to ${range.to}`;
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -159,44 +180,37 @@ export default function AdjustmentsPage() {
       />
 
       <section className="space-y-4 rounded-md border border-border bg-card p-4 sm:p-5">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <DateFilter
-            id="adjustments-date"
-            value={filterDate}
-            onChange={setFilterDate}
-            max={businessDate}
-          />
-        </div>
+        <DateRangeFilter
+          idPrefix="adjustments"
+          from={range.from}
+          to={range.to}
+          today={today}
+          onChange={setRange}
+          problem={problem}
+        />
 
-        {adjustments.isPending ? (
+        {problem !== null ? null : adjustments.isPending ? (
           <Skeleton variant="row" count={6} />
-        ) : adjustments.isError ? (
+        ) : adjustments.isError && !loadMoreFailed ? (
           <ErrorState
             title="Adjustments could not be loaded"
-            message={toUserMessage(adjustments.error)}
+            message={toUserMessage(queryError)}
             onRetry={() => void adjustments.refetch()}
           />
         ) : rows.length === 0 ? (
-          filterDate !== "" ? (
-            <EmptyState
-              title="No adjustments match these filters"
-              description="Try clearing the date filter."
-              action={
+          <EmptyState
+            icon={Scale}
+            title={`No adjustments for ${scope}`}
+            description="Choose another period, or record a correction when stock counts change for damage, loss or found items."
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => setFilterDate("")}
+                  onClick={() => setRange(lastDaysRange(today, 365))}
                 >
-                  Clear filter
+                  Show the last 12 months
                 </Button>
-              }
-            />
-          ) : (
-            <EmptyState
-              icon={Scale}
-              title="No adjustments yet"
-              description="Record a correction when stock counts change for damage, loss or found items."
-              action={
                 <Link
                   href="/adjustments/new"
                   className={buttonClasses({ variant: "secondary", size: "sm" })}
@@ -204,11 +218,35 @@ export default function AdjustmentsPage() {
                   <Plus aria-hidden="true" className="h-3.5 w-3.5" />
                   New adjustment
                 </Link>
-              }
-            />
-          )
+              </div>
+            }
+          />
         ) : (
-          <ResponsiveTable rows={rows} columns={columns} getKey={(a) => a.id} />
+          <>
+            <p className="text-sm text-muted-foreground">
+              Showing {rows.length} adjustments for {scope}
+              {adjustments.hasNextPage ? " (more available)" : ""}.
+            </p>
+            <ResponsiveTable rows={rows} columns={columns} getKey={(a) => a.id} />
+            {loadMoreFailed && (
+              <ErrorState
+                title="More adjustments could not be loaded"
+                message={toUserMessage(queryError)}
+                onRetry={() => void fetchNext()}
+              />
+            )}
+            {adjustments.hasNextPage && (
+              <div className="flex justify-center">
+                <Button
+                  variant="secondary"
+                  loading={adjustments.isFetchingNextPage}
+                  onClick={() => void adjustments.fetchNextPage()}
+                >
+                  Load more
+                </Button>
+              </div>
+            )}
+          </>
         )}
       </section>
     </div>

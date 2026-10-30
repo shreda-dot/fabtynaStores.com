@@ -16,6 +16,8 @@ import { registerPurchasesRoutes } from "./modules/purchases/purchases.routes.js
 import { createPurchasesService } from "./modules/purchases/purchases.service.js";
 import { registerExpenseCategoryRoutes } from "./modules/expenses/expense-categories.routes.js";
 import { createExpenseCategoryService } from "./modules/expenses/expense-categories.service.js";
+import { registerEmptiesRoutes } from "./modules/empties/empties.routes.js";
+import { createEmptiesService } from "./modules/empties/empties.service.js";
 import { registerExpensesRoutes } from "./modules/expenses/expenses.routes.js";
 import { createExpensesService } from "./modules/expenses/expenses.service.js";
 import { registerAccountsRoutes } from "./modules/accounts/accounts.routes.js";
@@ -218,6 +220,15 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     log,
   });
   registerAdjustmentsRoutes(app, { service: adjustmentsService });
+
+  const emptiesService = createEmptiesService({
+    prisma: options.prisma,
+    now: options.now,
+    txTimeouts: options.txTimeouts,
+    maxDateRangeDays: options.maxDateRangeDays,
+    log,
+  });
+  registerEmptiesRoutes(app, { service: emptiesService });
 
   const reportsService = createReportsService({
     prisma: options.prisma,

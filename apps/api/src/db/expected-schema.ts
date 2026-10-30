@@ -74,6 +74,13 @@ export const EXPECTED_MIGRATIONS = [
   "20261020001000_admin_sessions",
   "20261020001100_idempotency_actor_scope",
   "20261023000000_password_reset_tokens",
+  "20261024000000_empties",
+  // Renames only: repairs unquoted (lower-cased) index/constraint names the
+  // empties migration left behind. See its own header comment.
+  "20261024000100_empties_index_names",
+  // Function body only: restores the account-ledger `note` exemption for
+  // reversal integrity that `20261024000000_empties` silently reverted.
+  "20261024000200_reversal_integrity_note_fix",
 ] as const;
 
 /**
@@ -95,6 +102,11 @@ export const EXPECTED_TABLES = [
   "admin_sessions",
   // 20261023000000_password_reset_tokens
   "password_reset_tokens",
+  // 20261024000000_empties
+  "empties_owners",
+  "empties_types",
+  "empties_movements",
+  "empties_balances",
 ] as const;
 
 /**
@@ -128,6 +140,11 @@ export const EXPECTED_INDEXES = [
   "password_reset_tokens_tokenHash_key",
   "password_reset_tokens_adminUserId_idx",
   "password_reset_tokens_expiresAt_idx",
+  // 20261024000000_empties
+  "empties_owners_normalizedKey_key",
+  // An EXPRESSION index (ownerId, kind, lower(btrim(label))) — Prisma cannot
+  // model it, which is exactly why it is pinned here.
+  "empties_types_owner_kind_label_key",
 ] as const;
 
 /**
@@ -221,6 +238,16 @@ export const EXPECTED_CHECK_CONSTRAINTS = [
   "ck_account_ledger_single_source",
   "ck_account_ledger_opening_balance_positive",
   "ck_account_ledger_requires_note",
+
+  // 20261024000000_empties
+  "ck_empties_owners_name",
+  "ck_empties_owners_normalized_key",
+  "ck_empties_types_label",
+  "ck_empties_types_unit_value_nonnegative",
+  "ck_empties_movements_quantity_nonzero",
+  "ck_empties_movements_note_required",
+  "ck_empties_movements_sign",
+  "ck_empties_balances_nonnegative",
 ] as const;
 
 /**
@@ -325,6 +352,24 @@ export const EXPECTED_TRIGGERS = [
   "trg_account_ledger_apply",
   "trg_account_balances_guard",
   "trg_account_balances_no_truncate",
+
+  // 20261024000000_empties — user-managed owners / types
+  "trg_empties_owner_guard",
+  "trg_empties_owner_no_truncate",
+  "trg_empties_type_guard",
+  "trg_empties_type_no_truncate",
+
+  // 20261024000000_empties — the movement log
+  "trg_empties_movement_immutable",
+  "trg_empties_movement_no_truncate",
+  "trg_empties_movement_type_active",
+  "trg_empties_movement_reversal_target",
+  "trg_empties_movement_reversal_integrity",
+
+  // 20261024000000_empties — the balance maintainer + guards
+  "trg_empties_movement_apply",
+  "trg_empties_balances_guard",
+  "trg_empties_balances_no_truncate",
 ] as const;
 
 /**
@@ -372,6 +417,10 @@ export const EXPECTED_PARTIAL_INDEXES = [
   // 20261020001100_idempotency_actor_scope
   "idempotency_keys_legacy_key_route_key",
   "idempotency_keys_key_route_actorId_key",
+
+  // 20261024000000_empties
+  "ux_empties_movement_opening_active",
+  "ux_empties_movement_reversed_once",
 ] as const;
 
 /**
@@ -407,4 +456,13 @@ export const EXPECTED_FOREIGN_KEYS = [
 
   // 20261023000000_password_reset_tokens
   "fk_password_reset_tokens_admin_user",
+
+  // 20261024000000_empties
+  // (`empties_movements_reversesEntryId_fkey` is Prisma-managed — the schema
+  // declares the self-relation without a `map`, so it is deliberately not
+  // pinned here.)
+  "fk_empties_types_owner",
+  "fk_empties_movements_type",
+  "fk_empties_movements_created_by",
+  "fk_empties_balances_type",
 ] as const;

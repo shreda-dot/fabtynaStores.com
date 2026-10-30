@@ -441,6 +441,55 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
       HAVING p."paidKobo" <> -COALESCE(SUM(a."amountKobo"), 0)
        ORDER BY p.id`,
   },
+
+  // --- 13. EMPTIES ---
+  {
+    name: "empties_balances = Σ empties_movements.quantity",
+    description:
+      "The derived empties count cache must match the append-only movement log for every type.",
+    severity: "fatal",
+    sql: `
+      SELECT COALESCE(eb."typeId", m."typeId")            AS "typeId",
+             COALESCE(eb.quantity, 0)::text               AS "balanceQuantity",
+             COALESCE(m."movementQuantity", 0)::text      AS "movementQuantity"
+        FROM empties_balances eb
+        FULL OUTER JOIN (
+          SELECT "typeId", SUM(quantity) AS "movementQuantity"
+            FROM empties_movements
+           GROUP BY "typeId"
+        ) m ON m."typeId" = eb."typeId"
+       WHERE COALESCE(eb.quantity, 0) <> COALESCE(m."movementQuantity", 0)
+       ORDER BY 1`,
+  },
+  {
+    name: "empties movement: original + reversal = 0",
+    description: "A reversed empties movement must be perfectly negated.",
+    severity: "fatal",
+    sql: `
+      SELECT m.id AS "movementId",
+             SUM(x.quantity)::text AS "netQuantity"
+        FROM empties_movements m
+        JOIN empties_movements x ON x.id = m.id OR x."reversesEntryId" = m.id
+       WHERE m."reversesEntryId" IS NULL
+       GROUP BY m.id
+      HAVING SUM(x.quantity) <> 0 AND EXISTS (
+        SELECT 1 FROM empties_movements r WHERE r."reversesEntryId" = m.id
+      )
+       ORDER BY 1`,
+  },
+  {
+    name: "at most one live OPENING per empties type",
+    description:
+      "A type has a single starting count. The opening row is immutable and keeps `reversesEntryId IS NULL` even after it is reversed, so a second opening is refused for the life of the type; later corrections go through an ADJUSTMENT.",
+    severity: "fatal",
+    sql: `
+      SELECT "typeId", COUNT(*) AS "liveOpenings"
+        FROM empties_movements
+       WHERE "movementType" = 'OPENING' AND "reversesEntryId" IS NULL
+       GROUP BY "typeId"
+      HAVING COUNT(*) > 1
+       ORDER BY 1`,
+  },
 ];
 
 export async function runDbAudit(connectionString: string): Promise<AuditResult> {

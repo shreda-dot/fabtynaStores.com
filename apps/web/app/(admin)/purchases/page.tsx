@@ -9,7 +9,7 @@ import {
   type ChangeEvent,
 } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { Plus, Search } from "lucide-react";
+import { Boxes, Plus, Search } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { formatLagosDate, isPurchaseOverdue } from "@fabtyna/shared";
@@ -265,10 +265,20 @@ function PurchasesContent() {
         title="Purchases"
         description="Record goods received into your store."
         actions={
-          <Link href="/purchases/new" className={buttonClasses({})}>
-            <Plus aria-hidden="true" className="h-4 w-4" />
-            New purchase
-          </Link>
+          <>
+            <Link
+              href="/empties"
+              className={buttonClasses({ variant: "secondary" })}
+              title="Track bottles and crates owed to or returned by suppliers"
+            >
+              <Boxes aria-hidden="true" className="h-4 w-4" />
+              Empties
+            </Link>
+            <Link href="/purchases/new" className={buttonClasses({})}>
+              <Plus aria-hidden="true" className="h-4 w-4" />
+              New purchase
+            </Link>
+          </>
         }
       />
 

@@ -130,4 +130,17 @@ export const queryKeys = {
       key("accounting", "account-ledger", id, from ?? "", to ?? ""),
     accountBalances: key("accounting", "account-balances"),
   },
+  empties: {
+    all: key("empties"),
+    // Active-only and all-rows are different arrays; keep separate caches.
+    owners: (includeInactive: boolean) =>
+      key("empties", "owners", includeInactive ? "all" : "active"),
+    types: (includeInactive: boolean, ownerId: string | null = null) =>
+      key("empties", "types", includeInactive ? "all" : "active", ownerId ?? "ALL"),
+    balances: (includeInactive: boolean) =>
+      key("empties", "balances", includeInactive ? "all" : "active"),
+    movements: (filters: unknown) => key("empties", "movements", filters),
+    // Infinite (paged) data has a different cache shape than movements(); never share a key.
+    pages: (filters: unknown) => key("empties", "pages", filters),
+  },
 };

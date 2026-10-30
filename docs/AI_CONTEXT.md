@@ -37,9 +37,9 @@ phone on slow networks, so the web app is mobile-first with a network status bar
 - `apps/api` (`@fabtyna/api`) — Prisma **7** + `@prisma/adapter-pg` (node-postgres),
   PostgreSQL on Neon, vitest, **Fastify 5** HTTP APIs for sales, purchases,
   products, customers, suppliers, debtors/payables, stock, loans, transfers,
-  adjustments, expense categories, expenses, and accounts (see §6).
+  adjustments, expense categories, expenses, accounts, and empties (see §6).
   - Schema: `apps/api/prisma/schema.prisma`; migrations:
-    `apps/api/prisma/migrations/` (**33** migrations); generated client output:
+    `apps/api/prisma/migrations/` (**36** migrations); generated client output:
     `apps/api/generated/prisma/` (git-ignored).
   - `src/db/`: `expected-schema.ts`, `verify.ts`, `audit.ts`.
   - `src/lib/`: `env.ts`, `prisma.ts` (`createPrismaClient`), `password.ts`
@@ -52,7 +52,8 @@ phone on slow networks, so the web app is mobile-first with a network status bar
     `src/modules/sales/`
     (schemas, validation, repository, service, routes).
   - `src/modules/products/`, `src/modules/parties/`, `src/modules/stock/`,
-    `src/modules/expenses/`, `src/modules/accounts/`; `src/scripts/`: `db-verify.ts`,
+    `src/modules/expenses/`, `src/modules/accounts/`, `src/modules/empties/`;
+    `src/scripts/`: `db-verify.ts`,
     `db-audit.ts`, `seed-admin.ts`, `hash-password.ts`.
   - Tests: `apps/api/tests/*.test.ts` + `global-setup.ts` + `test-db.ts` +
     `sales-fixtures.ts`.
@@ -187,11 +188,46 @@ must print "-- This is an empty migration." and exit 0.
   cannot be voided (`trg_sale_void_guard`); a purchase with a LIVE supplier payment
   cannot be voided (`trg_purchase_void_guard`). Reverse the payment first.
   An unpaid sale requires a customer; an unpaid purchase requires a supplier.
+- **Empties** (phase 1: counts only) are owned by an `empties_owner` (a
+  user-managed list seeded with International Breweries, Nigerian Breweries and
+  Guinness Nigeria; deactivate, never delete) and typed by an `empties_type`
+  (BOTTLE|CRATE, unique per owner+kind+label, optional display-only
+  `unitValueKobo`). A **count is a plain integer**, not money. `empties_movements`
+  is immutable and append-only (OPENING / RECEIVED / RETURNED_TO_OWNER /
+  ADJUSTMENT; quantity signed and never zero; an ADJUSTMENT needs a note), and
+  `empties_balances` is DERIVED — an AFTER INSERT trigger is its only writer and
+  `trg_empties_balances_guard` rejects anything else. Corrections are reversal
+  rows (`reversesEntryId`, exact negation, one reversal per entry, a reversal
+  cannot itself be reversed). `ux_empties_movement_opening_active` allows at most
+  one OPENING per type **for the life of the type**: the original row is
+  immutable, so reversing it never frees the slot — later corrections go through
+  an ADJUSTMENT, exactly like `ux_account_ledger_opening_balance_active`.
+  Out of scope for phase 1: empties customers owe, empties on sale/purchase
+  screens, and deposits in cash reports.
 
 ## 6. Current status (verified)
 
-- Migrations: **33** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
-  The newest four add dynamic expense categories, make `OTHER_INCOME`
+- Migrations: **37** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
+  The newest four are empties tracking (phase 1, counts only):
+  `20261024000000_empties` adds `empties_owners`, `empties_types`, the
+  append-only `empties_movements`, the derived `empties_balances`, three couples
+  of immutability/guard triggers and two partial indexes; and
+  `20261024000100_empties_index_names` is a renames-only repair of five
+  index/constraint names the first migration wrote unquoted (PostgreSQL folds an
+  unquoted identifier to lower case, so the database kept
+  `empties_owners_normalizedkey_key` where Prisma records
+  `empties_owners_normalizedKey_key`). An applied migration is never edited, so
+  the correction is a rename migration — the same repair
+  `20261020000700_expense_category_index_names` made for
+  `expense_categories`/`expenses`.
+  `20261024000200_reversal_integrity_note_fix` is a function-only repair: the
+  empties migration rewrote the shared `fn_check_reversal_integrity` to add the
+  empties magnitude column but, quoting the wrong revision as its source, it
+  silently dropped the `account_ledger_entries` `note` exemption
+  `20261020000400_reverse_payment_guards` had added — so every payment reversal
+  failed with `P0001` / `409`. The fix restores the branch and changes no
+  object.
+  The four before them add dynamic expense categories, make `OTHER_INCOME`
   source-less, correct the category-index names, and make ordinary expense
   details immutable with a single void transition.
   The 2026-10-19 account migrations add account entry enum values, account
@@ -521,6 +557,14 @@ must print "-- This is an empty migration." and exit 0.
   `fabtyna_test`; both object lists matched. `db:audit` returned **0 rows** on
   each database. The standing Prisma drift check printed
   `-- This is an empty migration.` and passed.
+- After the empties migrations (37 total), `db:verify --url DIRECT_URL` and
+  `--url TEST_DIRECT_URL` each passed: **37** migrations and **37** file
+  checksums, 11/11 tables, 61/61 CHECK constraints, 76/76 triggers, 34/34
+  partial indexes, 10/10 foreign keys, 3/3 sequences, **13/13 indexes**.
+  `db:audit` returned **PASS — no drift detected** on both databases, including
+  the three new empties checks (`empties_balances = Σ empties_movements.quantity`,
+  `empties movement: original + reversal = 0`, `at most one live OPENING per
+  empties type`), each at **0 rows**.
 - Loan repayment reversal remains unimplemented: a mistaken repayment cannot
   yet be corrected through the UI. Until a reversal operation is built, payment
   forms should require a clear confirmation of the repayment amount, account,
@@ -646,6 +690,18 @@ adapting an existing shared/mock DTO shape; no row below is blocked.
 | `GET /adjustments/:id` | id | adjustment, lines, movements | `400 VALIDATION`; `404 NOT_FOUND` | `AdjustmentDetailDto` / MATCH |
 | `POST /adjustments` | `{reason,adjustedAt?,lines:[{productId,location,quantityDeltaUnits,unitCostKobo?,reason?}]}` | `{id}` | `400 VALIDATION` (including unknown product); `409 BUSINESS_RULE` for inactive product; `409 INSUFFICIENT_STOCK` for a negative adjustment beyond stock | `CreateAdjustmentDto` then detail fetch / MAPPABLE |
 | `POST /adjustments/:id/void` | empty body | void result | `404 NOT_FOUND`; `409 BUSINESS_RULE` if already voided or reversal is no longer possible | `void(id,key)` then detail fetch / MAPPABLE |
+| `GET /empties/owners?includeInactive` | query boolean | owner rows with `typeCount`/`activeTypeCount` | `400 VALIDATION` issues | `EmptiesOwnerDto[]` / MATCH |
+| `POST /empties/owners` | `{name}` | owner row | `400 VALIDATION`; duplicate normalized name is `409 CONFLICT` with `empties_owners_normalizedKey_key` | `CreateEmptiesOwnerInput` → `EmptiesOwnerDto` / MATCH |
+| `PATCH /empties/owners/:id` | `{name}` | owner row | `400 VALIDATION`; `404 NOT_FOUND`; duplicate-name conflict | `EmptiesOwnerDto` / MATCH |
+| `POST /empties/owners/:id/deactivate` / `reactivate` | empty body | owner row | `404 NOT_FOUND`; `409 BUSINESS_RULE` if already in that state or the owner still has active types | `EmptiesOwnerDto` / MATCH |
+| `GET /empties/types?includeInactive&ownerId` | query | type rows with owner name | `400 VALIDATION` issues | `EmptiesTypeDto[]` / MATCH |
+| `POST /empties/types` | `{ownerId,kind,label,unitValueKobo?}` | type row | `400 VALIDATION`; `404 NOT_FOUND` owner; duplicate owner+kind+label is `409 CONFLICT` with `empties_types_owner_kind_label_key` | `CreateEmptiesTypeInput` → `EmptiesTypeDto` / MATCH |
+| `PATCH /empties/types/:id` | `{label?,unitValueKobo?}` (at least one) | type row | `400 VALIDATION`; `404 NOT_FOUND`; duplicate-label conflict | `PatchEmptiesTypeInput` → `EmptiesTypeDto` / MATCH |
+| `POST /empties/types/:id/deactivate` / `reactivate` | empty body | type row | `404 NOT_FOUND`; `409 BUSINESS_RULE` if already in that state or the type has a non-zero on-hand count | `EmptiesTypeDto` / MATCH |
+| `GET /empties/balances?includeInactive` | query boolean | `{items,totalsByOwner,totalsByKind}` with integer counts and string kobo values | `400 VALIDATION` issues | `EmptiesBalancesDto` / MATCH |
+| `POST /empties/movements` | `{typeId,movementType,quantity,note?,occurredAt?}`; the count is POSITIVE and the server applies the sign for a return; an ADJUSTMENT carries its own non-zero sign and needs a note | movement row | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` `Only N … on hand`; `409 CONFLICT` on `ux_empties_movement_opening_active` for a second opening | `CreateEmptiesMovementInput` → `EmptiesMovementDto` / MATCH |
+| `GET /empties/movements?from&to&typeId&ownerId&limit&cursor` | Lagos dates + keyset cursor | `{items,nextCursor,from,to}` | `400 VALIDATION` issues, date cap, `from > to` | `EmptiesMovementListPage` / MATCH |
+| `POST /empties/movements/:id/reverse` | `{reason}` (1–500 chars) | reversal movement row | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` if already reversed or the target is itself a reversal | `EmptiesMovementDto` / MATCH |
 
 Additional 7C notes:
 - The web uses `useInfiniteQuery` for account statements and displays the API
@@ -803,6 +859,34 @@ run `pnpm --filter @fabtyna/api db:audit` on dev: expect zero rows.
 - Local URLs: use `http://localhost:3000` (web) and `http://localhost:3001`
   (API) consistently; `WEB_ORIGIN` and `NEXT_PUBLIC_API_BASE_URL` must use the
   same host name as the browser address or cookies and CORS fail.
+
+### Empties (phase 1; counts only; real mode only)
+
+- Nav entry "Empties" → `/empties`; owner/type management at `/empties/types`.
+- `/empties` (mobile first): one `StatCard` per owner plus one per kind
+  ("X on hand"), a "Balances by type" table with the count and the optional
+  display value from `unitValueKobo`, four write buttons per row
+  (Opening count, Received from customers, Returned to brewery, Adjustment),
+  a "Reverse" action on each history row, and a history list with the shared
+  `DateRangeFilter` (default list range), `useInfiniteQuery` (`PAGE_SIZE` 50,
+  "Load more") and a per-row Reverse panel.
+- Whole numbers only: the quantity field is parsed by
+  `parseEmptiesQuantityText` (`lib/empties-quantity.ts`, tested in
+  `empties-quantity.test.ts`). A rejected write shows the API message as-is, so
+  an over-return surfaces the server's `Only N … on hand`.
+- `/empties/types`: create/rename/deactivate/reactivate owners, and
+  create/patch/deactivate/reactivate types. The API rejects deactivating an
+  owner that still has active types, or a type with a non-zero count.
+- Mock mode (`isMockApiMode`) renders "Not available with demo data" instead of
+  the panels.
+- Query keys live under `queryKeys.empties` (`lib/query-keys.ts`):
+  `owners(includeInactive)`, `types(includeInactive, ownerId)`,
+  `balances(includeInactive)`, `movements(filters)` (plain `useQuery`) and
+  `pages(filters)` (infinite) are deliberately separate — an infinite key must
+  never be shared with a `useQuery` key.
+- Exact query strings are built by `ownersQuery` / `typesQuery` /
+  `balancesQuery` / `movementsQuery` in `lib/api/empties.real.ts` (tests in
+  `empties.real.test.ts`).
 
 ### Form draft protection (web only)
 

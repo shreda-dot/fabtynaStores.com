@@ -180,6 +180,25 @@ enum AdminRole {
   STAFF
 }
 
+/// Empties (bottles / crates) tracking, phase 1 — migration
+/// `20261024000000_empties`. Thresholds, not money: `unitValueKobo` is a
+/// display-only figure and never reaches a cash or profit report.
+enum EmptiesKind {
+  BOTTLE
+  CRATE
+}
+
+/// `OPENING` is the starting count (at most one live per type);
+/// `RECEIVED` is empties coming back from a customer; `RETURNED_TO_OWNER` is
+/// empties going back to the brewery; `ADJUSTMENT` is the manual correction and
+/// is the only type that requires a note.
+enum EmptiesMovementType {
+  OPENING
+  RECEIVED
+  RETURNED_TO_OWNER
+  ADJUSTMENT
+}
+
 // =====================================================================
 // Identity and audit
 // =====================================================================
@@ -206,6 +225,7 @@ model AdminUser {
   sessions         AdminSession[]
   idempotencyKeys  IdempotencyKey[]
   resetTokens      PasswordResetToken[]
+  emptiesMovements EmptiesMovement[]
 
   @@map("admin_users")
 }
@@ -1005,4 +1025,99 @@ model CashSnapshot {
 
   @@index([asOfDate])
   @@map("cash_snapshots")
+}
+
+// =====================================================================
+// Empties (bottles / crates) — migration `20261024000000_empties`
+// =====================================================================
+
+/// A brewery / supplier of empties. User-managed exactly like
+/// `ExpenseCategory` — but with no `code` column, because there are no
+/// system rows: every owner is created by an admin. Deactivated, never
+/// deleted (`trg_empties_owner_guard`).
+model EmptiesOwner {
+  id            String         @id @default(cuid())
+  name          String
+  normalizedKey String         @unique(map: "empties_owners_normalizedKey_key")
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  types         EmptiesType[]
+
+  // `char_length(btrim(name)) BETWEEN 1 AND 60` and
+  // `"normalizedKey" = lower(btrim(name))` are hand-written CHECKs.
+  @@map("empties_owners")
+}
+
+/// One kind of empties for an owner (a crate, a bottle size, ...).
+/// `unitValueKobo` is display-only and optional. `ownerId` and `kind` are
+/// immutable once created (`trg_empties_type_guard`).
+///
+/// Uniqueness is per (ownerId, kind, case/space-insensitive label) and is a
+/// hand-written EXPRESSION index (`empties_types_owner_kind_label_key`), which
+/// Prisma cannot express — it is deliberately not modelled here.
+model EmptiesType {
+  id            String          @id @default(cuid())
+  ownerId       String
+  kind          EmptiesKind
+  label         String
+  unitValueKobo BigInt?
+  isActive      Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+  owner         EmptiesOwner    @relation(fields: [ownerId], references: [id], onDelete: Restrict, map: "fk_empties_types_owner")
+  movements     EmptiesMovement[]
+  balance       EmptiesBalance?
+
+  // `char_length(btrim(label)) BETWEEN 1 AND 40` and
+  // `"unitValueKobo" IS NULL OR "unitValueKobo" >= 0` are hand-written CHECKs.
+  @@map("empties_types")
+}
+
+/// One immutable empties movement. `quantity` is signed (positive = empties
+/// held, negative = empties gone back to the owner) and is never zero; a
+/// correction is a new row whose `reversesEntryId` points at the original and
+/// whose quantity is the exact negation (hand-written triggers
+/// `trg_empties_movement_immutable`, `trg_empties_movement_reversal_target`,
+/// `trg_empties_movement_reversal_integrity`).
+model EmptiesMovement {
+  id              String              @id @default(cuid())
+  typeId          String
+  movementType    EmptiesMovementType
+  quantity        Int
+  note            String?
+  /// Business timestamp, stored as a naive UTC `timestamp(3)` like every other
+  /// `occurredAt` in this schema.
+  occurredAt      DateTime            @default(now())
+  createdById     String
+  reversesEntryId String?
+  createdAt       DateTime            @default(now())
+  type            EmptiesType         @relation(fields: [typeId], references: [id], onDelete: Restrict, map: "fk_empties_movements_type")
+  createdBy       AdminUser           @relation(fields: [createdById], references: [id], onDelete: Restrict, map: "fk_empties_movements_created_by")
+  reversesEntry   EmptiesMovement?    @relation("EmptiesMovementReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversedBy      EmptiesMovement[]   @relation("EmptiesMovementReversals")
+
+  // `quantity <> 0`, the ADJUSTMENT-needs-a-note rule and the sign rule are
+  // hand-written CHECKs; `ux_empties_movement_opening_active` and
+  // `ux_empties_movement_reversed_once` are hand-written partial indexes.
+  @@index([typeId, occurredAt])
+  @@index([occurredAt])
+  @@index([reversesEntryId])
+  @@map("empties_movements")
+}
+
+/// Running count of empties per type, derived from `empties_movements` by an
+/// AFTER INSERT trigger (`20261024000000_empties`). It is what makes the
+/// database the arbiter of "empties never go below zero": a movement that
+/// would take a count negative aborts on `ck_empties_balances_nonnegative`.
+///
+/// Never write this table from the application. `trg_empties_balances_guard`
+/// rejects any write that did not come from the trigger.
+model EmptiesBalance {
+  typeId    String   @id
+  quantity  Int      @default(0)
+  /// Set by the trigger on every applied movement, not by `@updatedAt`.
+  updatedAt DateTime @default(now())
+  type      EmptiesType @relation(fields: [typeId], references: [id], onDelete: Restrict, map: "fk_empties_balances_type")
+
+  // `ck_empties_balances_nonnegative` is hand-written SQL.
+  @@map("empties_balances")
 }

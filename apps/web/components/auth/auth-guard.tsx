@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { AuthApiError, authApi } from "@/lib/api";
+import { ApiError } from "@/lib/api/client";
 import { reevaluateConnectivity } from "@/stores/network-store";
 import { setDraftUser } from "@/lib/form-draft";
 
@@ -12,15 +13,30 @@ export const AUTH_ME_KEY = ["auth", "me"] as const;
 const SESSION_CHECK_STALE_MS = 2 * 60 * 1000;
 const SLOW_NOTICE_MS = 12_000;
 
-/** The server could not be reached or answered badly: the session itself may still be fine. */
-function isTransient(error: unknown): boolean {
+/** Auth errors that say "try again later", not "you are signed out" (mock mode). */
+function isTransientAuthError(error: AuthApiError): boolean {
   return (
-    error instanceof AuthApiError &&
-    (error.kind === "network" ||
-      error.kind === "timeout" ||
-      error.kind === "server" ||
-      error.kind === "rate-limited")
+    error.kind === "network" ||
+    error.kind === "timeout" ||
+    error.kind === "server" ||
+    error.kind === "rate-limited"
   );
+}
+
+/**
+ * Only the server saying "unauthorized" proves the session is dead. The real
+ * API throws ApiError (lib/api/client.ts); the mock API throws AuthApiError.
+ * Network failures, timeouts, 5xx, unreadable responses and raw errors all
+ * mean "could not verify", never "signed out".
+ */
+function provesSessionInvalid(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    return error.kind === "unauthorized" || error.status === 401;
+  }
+  if (error instanceof AuthApiError) {
+    return !isTransientAuthError(error);
+  }
+  return false;
 }
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -35,7 +51,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     retry: false,
   });
 
-  const sessionInvalid = me.isError && !isTransient(me.error);
+  const sessionInvalid = me.isError && provesSessionInvalid(me.error);
 
   // Reset the "slow" notice when the check settles, by adjusting state during
   // render rather than in an effect (which would trigger a cascading render).
@@ -61,7 +77,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   }, [me.isPending]);
 
   // Signed in (or at least not proven otherwise): show the app. A background
-  // re-check that fails for a network reason keeps the app on screen.
+  // re-check that fails for any non-auth reason keeps the app on screen.
   if (me.data && !sessionInvalid) return children;
 
   if (me.isError && !sessionInvalid) {

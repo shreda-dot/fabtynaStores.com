@@ -205,10 +205,22 @@ must print "-- This is an empty migration." and exit 0.
   Out of scope for phase 1: empties customers owe, empties on sale/purchase
   screens, and deposits in cash reports.
 
+Empties phase 2 adds `empties_product_owners`, a separate mutable mapping from
+product to brewery; every real assignment change is audit-logged. It does not
+alter the product DTO or stock. `GET /empties/overview` uses two SQL statements:
+one for active-owner empties balances and one for per-product stock by location.
+Full crates are floor(warehouse units / `unitsPerPack`); the remainder is loose
+in the warehouse, while RETAIL_SHELF and MARKET units are shown as bottles and
+never added to crates. Inactive products with stock are included. Products
+assigned to inactive breweries are excluded from active totals and warned about.
+Counts stay integer-only, and empties display values remain outside money and
+financial reports. Migration `20261031000000_empties_product_owners` is applied
+to both dev and test.
+
 ## 6. Current status (verified)
 
-- Migrations: **37** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
-  The newest four are empties tracking (phase 1, counts only):
+- Migrations: **38** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
+  The three `202610240...` migrations are empties tracking phase 1 (counts only):
   `20261024000000_empties` adds `empties_owners`, `empties_types`, the
   append-only `empties_movements`, the derived `empties_balances`, three couples
   of immutability/guard triggers and two partial indexes; and
@@ -226,7 +238,9 @@ must print "-- This is an empty migration." and exit 0.
   silently dropped the `account_ledger_entries` `note` exemption
   `20261020000400_reverse_payment_guards` had added — so every payment reversal
   failed with `P0001` / `409`. The fix restores the branch and changes no
-  object.
+  object. `20261031000000_empties_product_owners` adds the separate product to
+  brewery mapping table for phase 2; it adds no trigger and changes no stock,
+  product DTO or financial data.
   The four before them add dynamic expense categories, make `OTHER_INCOME`
   source-less, correct the category-index names, and make ordinary expense
   details immutable with a single void transition.
@@ -702,6 +716,12 @@ adapting an existing shared/mock DTO shape; no row below is blocked.
 | `POST /empties/movements` | `{typeId,movementType,quantity,note?,occurredAt?}`; the count is POSITIVE and the server applies the sign for a return; an ADJUSTMENT carries its own non-zero sign and needs a note | movement row | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` `Only N … on hand`; `409 CONFLICT` on `ux_empties_movement_opening_active` for a second opening | `CreateEmptiesMovementInput` → `EmptiesMovementDto` / MATCH |
 | `GET /empties/movements?from&to&typeId&ownerId&limit&cursor` | Lagos dates + keyset cursor | `{items,nextCursor,from,to}` | `400 VALIDATION` issues, date cap, `from > to` | `EmptiesMovementListPage` / MATCH |
 | `POST /empties/movements/:id/reverse` | `{reason}` (1–500 chars) | reversal movement row | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` if already reversed or the target is itself a reversal | `EmptiesMovementDto` / MATCH |
+| `GET /empties/overview` | none | `{owners,warnings}`; per-owner crate totals and product/location breakdown | authenticated; read-only | `EmptiesOverviewDto` / MATCH |
+| `GET /empties/product-owners?q&assigned&cursor&limit` | search, assignment filter and ID cursor | `{items,nextCursor}` for active products | `400 VALIDATION` issues | `ProductOwnerListPage` / MATCH |
+| `PUT /empties/product-owners/:productId` | `{ownerId:string|null}` | product and current brewery mapping | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` for an inactive brewery | `ProductOwnerDto` / MATCH |
+| `GET /empties/overview` | none | `{owners,warnings}`; per-owner crate totals and product/location breakdown | authenticated; read-only | `EmptiesOverviewDto` / MATCH |
+| `GET /empties/product-owners?q&assigned&cursor&limit` | search, assignment filter and ID cursor | `{items,nextCursor}` for active products | `400 VALIDATION` issues | `ProductOwnerListPage` / MATCH |
+| `PUT /empties/product-owners/:productId` | `{ownerId:string|null}` | product and current brewery mapping | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` for an inactive brewery | `ProductOwnerDto` / MATCH |
 
 Additional 7C notes:
 - The web uses `useInfiniteQuery` for account statements and displays the API

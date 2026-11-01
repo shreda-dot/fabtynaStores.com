@@ -83,6 +83,7 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261024000000_empties`                      | Empties tracking, phase 1 (counts only). Creates `empties_owners` / `empties_types` / `empties_movements` / `empties_balances`, seeds the three brewery owners, adds 2 enums, 7 `CHECK`s, 5 foreign keys (one of them the `reversesEntryId` self-reference), 7 indexes (3 plain, 2 unique, 2 partial unique), 5 new functions (`fn_empties_owner_guard`, `fn_empties_type_guard`, `fn_check_empties_type_active`, `fn_apply_empties_movement`, `fn_empties_balance_direct_write_guard`) plus a `CREATE OR REPLACE` of the shared `fn_check_reversal_integrity`, and 12 triggers. See §3 and §4.9. |
 | `20261024000100_empties_index_names`          | Renames-only repair of the five index/constraint names `20261024000000_empties` wrote **unquoted** (PostgreSQL folds an unquoted identifier to lower case, so the database kept `empties_owners_normalizedkey_key` while `db:verify` and Prisma expect `empties_owners_normalizedKey_key`). No definition, constraint, trigger or row changes. Same repair as `20261020000700_expense_category_index_names`.                                                                                                                                                                                      |
 | `20261024000200_reversal_integrity_note_fix`  | Function body only. Restores the `account_ledger_entries` `note` exemption in the shared `fn_check_reversal_integrity` that `20261024000000_empties` silently reverted when it rewrote the function to add the empties magnitude column. No object is created, renamed or dropped. See §4.9.                                                                                                                                                                                                                                                                                                      |
+| `20261031000000_empties_product_owners`       | Adds `empties_product_owners`, a mutable product-to-brewery mapping with product PK and RESTRICT FKs to products and empties owners, plus the owner index. It does not change products, stock, financial data, or shared trigger functions.                                                                                                                                                                                                                                                                                                      |
 
 ## 3. Tables
 
@@ -194,6 +195,7 @@ value column is the only kobo anywhere in this feature.
 | `empties_types`     | One kind of empties for one owner. `kind` is `BOTTLE` or `CRATE`; `unitValueKobo` is a nullable display-only figure; `ownerId` and `kind` are immutable after creation (only `label` and `unitValueKobo` stay editable).                                                                     | `ownerId` (FK RESTRICT), `kind`, `label`, `unitValueKobo`                                                                          |
 | `empties_movements` | The append-only log. **Immutable.** `quantity` is signed and never zero; `OPENING`/`RECEIVED` positive, `RETURNED_TO_OWNER` negative, `ADJUSTMENT` either sign and it must carry a `note`. Corrections are reversal rows.                                                                    | `typeId` (FK RESTRICT), `movementType`, `quantity`, `note`, `occurredAt`, `createdById` (FK RESTRICT), `reversesEntryId` (self-FK) |
 | `empties_balances`  | **DERIVED** cache of `Σ empties_movements.quantity` per type, maintained only by `trg_empties_movement_apply`. One row per type; must never go negative.                                                                                                                                     | `typeId` (PK, FK RESTRICT), `quantity`, `updatedAt`                                                                                |
+| `empties_product_owners` | Mutable mapping from a product to its brewery. Reassignment is allowed and real changes are audit-logged; products and their DTOs remain unchanged. | `productId` (PK, FK RESTRICT), `ownerId` (FK RESTRICT), `createdAt`, `updatedAt` |
 
 `empties_types` has no `code` column and no `normalizedKey` column: every row is
 user-managed (unlike `expense_categories`, which seeds protected system rows),
@@ -339,7 +341,7 @@ except for the magnitude column (`amountKobo`, or `quantityUnits` for
 - **`admin_sessions`** stores a SHA-256 hash of the 32-byte random cookie token, never the token itself. `tokenHash` is unique; `adminUserId` references `admin_users` with `ON DELETE RESTRICT`; indexes support lookup by admin and expiry. The API enforces sliding idle expiry (12 hours by default), absolute expiry (7 days by default), revocation, and active-user status. `lastSeenAt` is refreshed at most once per minute. There are no session-specific database triggers.
 - Cookie/session policy is configured by `SESSION_IDLE_TIMEOUT_HOURS`, `SESSION_ABSOLUTE_TIMEOUT_DAYS`, optional `COOKIE_DOMAIN`, `WEB_ORIGIN`, and `HOST`. The API is the authentication boundary; client middleware checks cookie presence only as a navigation shortcut.
 
-### 4.9 Empties (`20261024000000`, `20261024000100`, `20261024000200`)
+### 4.9 Empties (`20261024000000`, `20261024000100`, `20261024000200`, `20261031000000`)
 
 - **Owners and types are deactivated, never deleted** — `fn_empties_owner_guard`
   and `fn_empties_type_guard` raise on `DELETE`, and `empties_types.ownerId`
@@ -425,6 +427,18 @@ its target on type and every source column (account_ledger_entries)`, which
   migration added is kept: it is an actor column, and of the six tables carrying
   this trigger only `empties_movements` has it, so subtracting it is a no-op for
   the other five, which is why the regression touched only `note`.
+- **Phase 2 brewery ownership** — `empties_product_owners` is separate from the
+  product DTO and stock schema. The primary key is `productId`; both product
+  and owner references are `ON DELETE RESTRICT`, while the mapping itself is
+  mutable. API assignment changes are audit-logged. The overview reads
+  `stock_balances` in two SQL statements: warehouse units determine full crates
+  by floor division with `unitsPerPack`, and the remainder is loose warehouse
+  stock. RETAIL_SHELF and MARKET are reported as bottle counts, not crates.
+  Inactive products are included; products assigned to inactive breweries are
+  warned about and excluded from active-owner totals. `unitsPerPack = 1`
+  products never count as crates. Empty values are display-only.
+- Migration `20261031000000_empties_product_owners` creates no trigger and does
+  not replace or alter `fn_check_reversal_integrity`.
 
 ---
 
@@ -683,6 +697,11 @@ trap worth remembering:
 Both migrations also re-backfill `stock_balances` from `stock_movements` and are
 proven by the API test suite (`stock-balances.test.ts`,
 `reversal-positive.test.ts`), not just by `db:verify`.
+
+The shared `fn_check_reversal_integrity` must retain its
+`account_ledger_entries` branch and `note` exemption. Before a production
+rollout, inspect the installed function body; object-existence verification
+alone does not prove that the branch still behaves correctly.
 
 ## 9. 5A catalogue, parties and stock read APIs
 

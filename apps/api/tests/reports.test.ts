@@ -333,7 +333,7 @@ describe("read-only reports", () => {
     const voidResponse = await call(h.app, "POST", `/sales/${voidedSale.body.id}/void`, {});
     expect(voidResponse.status).toBe(200);
 
-    const report = await reportCall("product-sales", `/reports/product-sales?from=${today}&to=${today}`);
+    const report = await reportCall("product-sales", `    /reports/product-sales?from=${today}&to=${today}&limit=100`);
     expect(report.status).toBe(200);
     const productResult = report.body.items.find((item: { productId: string }) => item.productId === product.id);
     expect(productResult).toBeDefined();

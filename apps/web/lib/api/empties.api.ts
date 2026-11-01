@@ -64,6 +64,74 @@ export type EmptiesBalancesDto = {
   totalsByKind: Array<EmptiesBalanceTotalsDto & { kind: EmptiesKind }>;
 };
 
+export type EmptiesProductOverviewDto = {
+  productId: string;
+  productName: string;
+  isActive: boolean;
+  unitsPerPack: number;
+  warehouseUnits: number;
+  fullCrates: number;
+  looseUnits: number;
+  shelfUnits: number;
+  marketUnits: number;
+};
+
+export type EmptiesOverviewOwnerDto = {
+  ownerId: string;
+  ownerName: string;
+  emptyCrates: number;
+  emptyBottles: number;
+  fullCrates: number;
+  looseUnitsInWarehouse: number;
+  bottlesOnShelfAndMarket: number;
+  totalCrates: number;
+  emptyValueKobo: string | null;
+  products: EmptiesProductOverviewDto[];
+};
+
+export type EmptiesStockWarningDto = {
+  productId: string;
+  productName: string;
+  unitsPerPack: number;
+  warehouseUnits: number;
+  shelfUnits: number;
+  marketUnits: number;
+  totalUnits: number;
+  ownerId?: string;
+  ownerName?: string;
+};
+
+export type EmptiesOverviewDto = {
+  owners: EmptiesOverviewOwnerDto[];
+  warnings: {
+    productsWithoutBrewery: EmptiesStockWarningDto[];
+    assignedCans: EmptiesStockWarningDto[];
+    productsAssignedToInactiveOwner: EmptiesStockWarningDto[];
+  };
+};
+
+export type ProductOwnerDto = {
+  productId: string;
+  productName: string;
+  sku: string | null;
+  unitsPerPack: number;
+  ownerId: string | null;
+  ownerName: string | null;
+  ownerIsActive: boolean | null;
+};
+
+export type ProductOwnerListOptions = {
+  q?: string;
+  assigned?: "all" | "assigned" | "unassigned";
+  cursor?: string | null;
+  limit?: number;
+};
+
+export type ProductOwnerListPage = {
+  items: ProductOwnerDto[];
+  nextCursor: string | null;
+};
+
 export type EmptiesOwnerListOptions = {
   includeInactive?: boolean;
 };
@@ -125,6 +193,14 @@ export type CreateEmptiesMovementInput = {
 };
 
 export interface EmptiesApi {
+  getOverview(): Promise<EmptiesOverviewDto>;
+  listProductOwners(options?: ProductOwnerListOptions): Promise<ProductOwnerListPage>;
+  assignProductOwner(
+    productId: string,
+    ownerId: string | null,
+    idempotencyKey?: string,
+  ): Promise<ProductOwnerDto>;
+
   listOwners(options?: EmptiesOwnerListOptions): Promise<EmptiesOwnerDto[]>;
   createOwner(input: CreateEmptiesOwnerInput, idempotencyKey?: string): Promise<EmptiesOwnerDto>;
   renameOwner(id: string, name: string, idempotencyKey?: string): Promise<EmptiesOwnerDto>;

@@ -132,6 +132,7 @@ export const queryKeys = {
   },
   empties: {
     all: key("empties"),
+    overview: key("empties", "overview"),
     // Active-only and all-rows are different arrays; keep separate caches.
     owners: (includeInactive: boolean) =>
       key("empties", "owners", includeInactive ? "all" : "active"),
@@ -142,5 +143,8 @@ export const queryKeys = {
     movements: (filters: unknown) => key("empties", "movements", filters),
     // Infinite (paged) data has a different cache shape than movements(); never share a key.
     pages: (filters: unknown) => key("empties", "pages", filters),
+    productOwners: (filters: unknown) => key("empties", "product-owners", filters),
+    // Product-owner infinite data is distinct from both its list and movement pages.
+    productOwnerPages: (filters: unknown) => key("empties", "product-owner-pages", filters),
   },
 };

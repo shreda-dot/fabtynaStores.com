@@ -97,9 +97,11 @@ A Linux run has NOT been done: repeat it on the real host (section 8).
 ## 6. Deploying a new version
 
 1. Take a backup/branch first (section 7).
-2. Apply new migrations (`db:migrate:deploy -- --confirm-db <name>`), then `db:verify` and `db:audit`. Migrations must be backward compatible with the running API version until it is replaced.
-3. Start new API instances, wait for `/health`, then **drain** the old ones (stop routing new requests, let in-flight requests finish, then stop) so two versions do not run against a changing schema longer than needed.
-4. Rebuild and deploy the web app if the API contract changed.
+2. For the empties phase-2 migration, create a named Neon rehearsal branch from the backup and rehearse the migration and verification there first. Do not point rehearsal commands at production.
+3. Before applying the production migration, inspect the installed `fn_check_reversal_integrity` body and confirm that it still contains the `account_ledger_entries` rule, including the `note` exemption. `db:verify` checks object existence, not function-body behavior.
+4. Apply migrations with `pnpm --filter @fabtyna/api db:migrate:deploy -- --confirm-db <production name>`, then run `db:verify` and `db:audit`; verification must pass and the audit must return zero rows. The migration command refuses a mismatched database name.
+5. Deploy the API first and wait for `/health` to pass. Then rebuild and deploy the web app that consumes the new API contract.
+6. Keep migrations backward compatible with the running API until it is replaced; drain old API instances only after the new version is healthy.
 
 ## 7. Backup, restore test and rollback
 

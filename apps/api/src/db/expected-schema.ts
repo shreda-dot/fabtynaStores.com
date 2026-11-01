@@ -81,6 +81,7 @@ export const EXPECTED_MIGRATIONS = [
   // Function body only: restores the account-ledger `note` exemption for
   // reversal integrity that `20261024000000_empties` silently reverted.
   "20261024000200_reversal_integrity_note_fix",
+  "20261031000000_empties_product_owners",
 ] as const;
 
 /**
@@ -107,6 +108,8 @@ export const EXPECTED_TABLES = [
   "empties_types",
   "empties_movements",
   "empties_balances",
+  // 20261031000000_empties_product_owners
+  "empties_product_owners",
 ] as const;
 
 /**
@@ -142,6 +145,9 @@ export const EXPECTED_INDEXES = [
   "password_reset_tokens_expiresAt_idx",
   // 20261024000000_empties
   "empties_owners_normalizedKey_key",
+  // 20261031000000_empties_product_owners
+  "empties_product_owners_pkey",
+  "empties_product_owners_ownerId_idx",
   // An EXPRESSION index (ownerId, kind, lower(btrim(label))) — Prisma cannot
   // model it, which is exactly why it is pinned here.
   "empties_types_owner_kind_label_key",
@@ -465,4 +471,8 @@ export const EXPECTED_FOREIGN_KEYS = [
   "fk_empties_movements_type",
   "fk_empties_movements_created_by",
   "fk_empties_balances_type",
+
+  // 20261031000000_empties_product_owners
+  "fk_empties_product_owners_product",
+  "fk_empties_product_owners_owner",
 ] as const;

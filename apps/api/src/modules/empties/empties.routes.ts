@@ -3,14 +3,17 @@ import { requireActor } from "../../auth/actor.js";
 import { validationError } from "../../lib/errors.js";
 import {
   balanceListQuerySchema,
+  assignProductOwnerSchema,
   createMovementSchema,
   createOwnerSchema,
   createTypeSchema,
   emptiesIdParamsSchema,
   emptiesIdempotencyKeySchema,
+  emptiesProductIdParamsSchema,
   listMovementsQuerySchema,
   ownerListQuerySchema,
   patchTypeSchema,
+  productOwnerListQuerySchema,
   renameOwnerSchema,
   reverseMovementSchema,
   typeListQuerySchema,
@@ -33,6 +36,12 @@ function readId(request: FastifyRequest): string {
   const parsed = emptiesIdParamsSchema.safeParse(request.params);
   if (!parsed.success) throw validationError("Invalid empties id.", parsed.error.issues);
   return parsed.data.id;
+}
+
+function readProductId(request: FastifyRequest): string {
+  const parsed = emptiesProductIdParamsSchema.safeParse(request.params);
+  if (!parsed.success) throw validationError("Invalid product id.", parsed.error.issues);
+  return parsed.data.productId;
 }
 
 function send(reply: FastifyReply, result: { status: number; body: unknown; replayed: boolean }) {
@@ -118,6 +127,34 @@ export function registerEmptiesRoutes(
       throw validationError("The empties-balance filter is not valid.", parsed.error.issues);
     }
     return reply.status(200).send(await deps.service.listBalances(parsed.data));
+  });
+
+  // ---------- product ownership and brewery crate overview ----------
+  app.get("/empties/overview", async (request, reply) => {
+    requireActor(request);
+    return reply.status(200).send(await deps.service.getOverview());
+  });
+
+  app.get("/empties/product-owners", async (request, reply) => {
+    requireActor(request);
+    const parsed = productOwnerListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      throw validationError("The product-owner filter is not valid.", parsed.error.issues);
+    }
+    return reply.status(200).send(await deps.service.listProductOwners(parsed.data));
+  });
+
+  app.put("/empties/product-owners/:productId", async (request, reply) => {
+    const actor = requireActor(request);
+    const productId = readProductId(request);
+    const parsed = assignProductOwnerSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw validationError("The product owner assignment is not valid.", parsed.error.issues);
+    }
+    return send(
+      reply,
+      await deps.service.assignProductOwner(productId, parsed.data, actor, readKey(request)),
+    );
   });
 
   // ---------- movements ----------

@@ -3,11 +3,15 @@ import type {
   EmptiesApi,
   EmptiesBalanceListOptions,
   EmptiesBalancesDto,
+  EmptiesOverviewDto,
   EmptiesMovementDto,
   EmptiesMovementListOptions,
   EmptiesMovementListPage,
   EmptiesOwnerDto,
   EmptiesOwnerListOptions,
+  ProductOwnerListOptions,
+  ProductOwnerListPage,
+  ProductOwnerDto,
   EmptiesTypeDto,
   EmptiesTypeListOptions,
 } from "./empties.api";
@@ -52,7 +56,33 @@ export function movementsQuery(options: EmptiesMovementListOptions = {}): string
   });
 }
 
+export function productOwnersQuery(options: ProductOwnerListOptions = {}): string {
+  return query({
+    q: nonEmpty(options.q),
+    assigned: options.assigned === undefined || options.assigned === "all" ? undefined : options.assigned,
+    cursor: options.cursor ?? undefined,
+    limit: options.limit === undefined ? undefined : String(options.limit),
+  });
+}
+
 export const emptiesRealApi: EmptiesApi = {
+  async getOverview() {
+    return requestJson<EmptiesOverviewDto>("/empties/overview");
+  },
+
+  async listProductOwners(options = {}) {
+    return requestJson<ProductOwnerListPage>(
+      `/empties/product-owners${productOwnersQuery(options)}`,
+    );
+  },
+
+  async assignProductOwner(productId, ownerId, idempotencyKey) {
+    return requestJson<ProductOwnerDto>(
+      `/empties/product-owners/${encodeURIComponent(productId)}`,
+      { method: "PUT", body: { ownerId }, idempotencyKey },
+    );
+  },
+
   async listOwners(options = {}) {
     return requestJson<EmptiesOwnerDto[]>(`/empties/owners${ownersQuery(options)}`);
   },

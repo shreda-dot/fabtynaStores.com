@@ -12,6 +12,9 @@ function notAvailable(): never {
  * instead of a parallel fake. Every call therefore refuses.
  */
 export const emptiesMockApi: EmptiesApi = {
+  getOverview: async () => notAvailable(),
+  listProductOwners: async () => notAvailable(),
+  assignProductOwner: async () => notAvailable(),
   listOwners: async () => notAvailable(),
   createOwner: async () => notAvailable(),
   renameOwner: async () => notAvailable(),

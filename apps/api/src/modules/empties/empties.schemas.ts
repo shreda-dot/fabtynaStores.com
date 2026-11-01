@@ -11,6 +11,7 @@ import { IDEMPOTENCY_KEY_PATTERN } from "../../lib/idempotency.js";
  */
 
 export const emptiesIdParamsSchema = z.object({ id: idSchema }).strict();
+export const emptiesProductIdParamsSchema = z.object({ productId: idSchema }).strict();
 
 export const emptiesIdempotencyKeySchema = z
   .string()
@@ -78,6 +79,20 @@ export type PatchTypeBody = z.infer<typeof patchTypeSchema>;
 // ---------- balances ----------
 export const balanceListQuerySchema = z.object({ includeInactive: includeInactiveSchema }).strict();
 export type ListBalancesQuery = z.infer<typeof balanceListQuerySchema>;
+
+// ---------- product ownership ----------
+export const productOwnerListQuerySchema = z
+  .object({
+    q: z.string().trim().min(1).max(100).optional(),
+    assigned: z.enum(["all", "assigned", "unassigned"]).default("all"),
+    cursor: z.string().trim().min(1).max(400).optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+  })
+  .strict();
+export type ProductOwnerListQuery = z.infer<typeof productOwnerListQuerySchema>;
+
+export const assignProductOwnerSchema = z.object({ ownerId: idSchema.nullable() }).strict();
+export type AssignProductOwnerBody = z.infer<typeof assignProductOwnerSchema>;
 
 // ---------- movements ----------
 const movementQuantitySchema = z

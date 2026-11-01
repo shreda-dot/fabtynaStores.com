@@ -7,6 +7,7 @@ import {
   decodeCursor,
   encodeCursor,
   lagosDayStartIso,
+  likePattern,
   resolveListDateRange,
   utcTimestamp,
 } from "../../lib/list-helpers.js";
@@ -23,9 +24,11 @@ import type {
   CreateMovementBody,
   CreateOwnerBody,
   CreateTypeBody,
+  AssignProductOwnerBody,
   ListBalancesQuery,
   ListMovementsQuery,
   ListTypesQuery,
+  ProductOwnerListQuery,
   PatchTypeBody,
   RenameOwnerBody,
   ReverseMovementBody,
@@ -90,6 +93,40 @@ interface BalanceRow {
   quantity: number;
 }
 
+interface OverviewOwnerRow {
+  ownerId: string;
+  ownerName: string;
+  emptyCrates: bigint;
+  emptyBottles: bigint;
+  emptyValueKobo: string | null;
+}
+
+interface ProductStockRow {
+  productId: string;
+  productName: string;
+  isActive: boolean;
+  sku: string | null;
+  unitsPerPack: number;
+  ownerId: string | null;
+  ownerName: string | null;
+  ownerIsActive: boolean | null;
+  warehouseUnits: bigint;
+  shelfUnits: bigint;
+  marketUnits: bigint;
+}
+
+interface ProductOwnerRow {
+  productId: string;
+  productName: string;
+  sku: string | null;
+  unitsPerPack: number;
+  ownerId: string | null;
+  ownerName: string | null;
+  ownerIsActive: boolean | null;
+}
+
+interface ProductOwnerLockRow extends ProductOwnerRow {}
+
 export interface OwnerDto {
   id: string;
   name: string;
@@ -145,6 +182,67 @@ export interface EmptiesBalancesDto {
   totalsByKind: Array<EmptiesBalanceTotalsDto & { kind: EmptiesKind }>;
 }
 
+export interface EmptiesProductOverviewDto {
+  productId: string;
+  productName: string;
+  isActive: boolean;
+  unitsPerPack: number;
+  warehouseUnits: number;
+  fullCrates: number;
+  looseUnits: number;
+  shelfUnits: number;
+  marketUnits: number;
+}
+
+export interface EmptiesOverviewOwnerDto {
+  ownerId: string;
+  ownerName: string;
+  emptyCrates: number;
+  emptyBottles: number;
+  fullCrates: number;
+  looseUnitsInWarehouse: number;
+  bottlesOnShelfAndMarket: number;
+  totalCrates: number;
+  emptyValueKobo: string | null;
+  products: EmptiesProductOverviewDto[];
+}
+
+export interface EmptiesStockWarningDto {
+  productId: string;
+  productName: string;
+  unitsPerPack: number;
+  warehouseUnits: number;
+  shelfUnits: number;
+  marketUnits: number;
+  totalUnits: number;
+  ownerId?: string;
+  ownerName?: string;
+}
+
+export interface EmptiesOverviewDto {
+  owners: EmptiesOverviewOwnerDto[];
+  warnings: {
+    productsWithoutBrewery: EmptiesStockWarningDto[];
+    assignedCans: EmptiesStockWarningDto[];
+    productsAssignedToInactiveOwner: EmptiesStockWarningDto[];
+  };
+}
+
+export interface ProductOwnerDto {
+  productId: string;
+  productName: string;
+  sku: string | null;
+  unitsPerPack: number;
+  ownerId: string | null;
+  ownerName: string | null;
+  ownerIsActive: boolean | null;
+}
+
+export interface ProductOwnerPageDto {
+  items: ProductOwnerDto[];
+  nextCursor: string | null;
+}
+
 export interface EmptiesServiceOptions {
   prisma: PrismaClient;
   now?: () => Date;
@@ -154,6 +252,13 @@ export interface EmptiesServiceOptions {
 }
 
 const routeFor = (method: string, path: string): string => `${method} ${path}`;
+
+function safeCount(value: bigint, field: string): number {
+  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError(`${field} is outside the safe whole-number range.`);
+  }
+  return Number(value);
+}
 
 function toOwnerDto(owner: OwnerRow, typeCount: number, activeTypeCount: number): OwnerDto {
   return {
@@ -638,6 +743,294 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
         totalsByOwner: [...ownerTotals.values()],
         totalsByKind: [...kindTotals.values()],
       };
+    },
+
+    // ================================================================
+    // Product ownership and brewery crate overview
+    // ================================================================
+    async getOverview(): Promise<EmptiesOverviewDto> {
+      // Statement 1: empties quantities and display-only values per active owner.
+      const ownerRows = await prisma.$queryRaw<OverviewOwnerRow[]>`
+        SELECT o.id AS "ownerId", o.name AS "ownerName",
+               COALESCE(SUM(b.quantity) FILTER (WHERE t.kind = 'CRATE'::"EmptiesKind"), 0)::bigint AS "emptyCrates",
+               COALESCE(SUM(b.quantity) FILTER (WHERE t.kind = 'BOTTLE'::"EmptiesKind"), 0)::bigint AS "emptyBottles",
+               CASE WHEN COUNT(t."unitValueKobo") = 0 THEN NULL
+                    ELSE COALESCE(
+                      SUM(b.quantity::numeric * t."unitValueKobo"::numeric)
+                        FILTER (WHERE t."unitValueKobo" IS NOT NULL),
+                      0
+                    )::text
+               END AS "emptyValueKobo"
+          FROM empties_owners o
+          LEFT JOIN empties_types t ON t."ownerId" = o.id
+          LEFT JOIN empties_balances b ON b."typeId" = t.id
+         WHERE o."isActive" = TRUE
+         GROUP BY o.id, o.name
+         ORDER BY o.name ASC, o.id ASC`;
+
+      // Statement 2: one location-aggregated row per product, including inactive
+      // and unassigned products so stock warnings and historical ownership remain visible.
+      const stockRows = await prisma.$queryRaw<ProductStockRow[]>`
+        SELECT p.id AS "productId", p.name AS "productName", p.sku,
+               (p."deletedAt" IS NULL) AS "isActive", p."unitsPerPack",
+               po."ownerId", o.name AS "ownerName", o."isActive" AS "ownerIsActive",
+               COALESCE(SUM(sb."quantityUnits")
+                 FILTER (WHERE sb.location = 'WAREHOUSE'::"StockLocation"), 0)::bigint AS "warehouseUnits",
+               COALESCE(SUM(sb."quantityUnits")
+                 FILTER (WHERE sb.location = 'RETAIL_SHELF'::"StockLocation"), 0)::bigint AS "shelfUnits",
+               COALESCE(SUM(sb."quantityUnits")
+                 FILTER (WHERE sb.location = 'MARKET'::"StockLocation"), 0)::bigint AS "marketUnits"
+          FROM products p
+          LEFT JOIN empties_product_owners po ON po."productId" = p.id
+          LEFT JOIN empties_owners o ON o.id = po."ownerId"
+          LEFT JOIN stock_balances sb ON sb."productId" = p.id
+         GROUP BY p.id, p.name, p.sku, p."deletedAt", p."unitsPerPack",
+                  po."ownerId", o.name, o."isActive"
+         ORDER BY p.name ASC, p.id ASC`;
+
+      const owners = new Map<string, EmptiesOverviewOwnerDto>();
+      const totals = new Map<string, { fullCrates: bigint; looseUnits: bigint; shelfMarket: bigint }>();
+      for (const row of ownerRows) {
+        owners.set(row.ownerId, {
+          ownerId: row.ownerId,
+          ownerName: row.ownerName,
+          emptyCrates: safeCount(row.emptyCrates, "emptyCrates"),
+          emptyBottles: safeCount(row.emptyBottles, "emptyBottles"),
+          fullCrates: 0,
+          looseUnitsInWarehouse: 0,
+          bottlesOnShelfAndMarket: 0,
+          totalCrates: 0,
+          emptyValueKobo: row.emptyValueKobo,
+          products: [],
+        });
+        totals.set(row.ownerId, { fullCrates: 0n, looseUnits: 0n, shelfMarket: 0n });
+      }
+
+      const warnings: EmptiesOverviewDto["warnings"] = {
+        productsWithoutBrewery: [],
+        assignedCans: [],
+        productsAssignedToInactiveOwner: [],
+      };
+
+      for (const row of stockRows) {
+        const warehouseUnits = safeCount(row.warehouseUnits, "warehouseUnits");
+        const shelfUnits = safeCount(row.shelfUnits, "shelfUnits");
+        const marketUnits = safeCount(row.marketUnits, "marketUnits");
+        const totalUnits = row.warehouseUnits + row.shelfUnits + row.marketUnits;
+        const cans = row.unitsPerPack === 1;
+        const fullCrates = cans
+          ? 0n
+          : row.warehouseUnits / BigInt(row.unitsPerPack);
+        const looseUnits = cans
+          ? row.warehouseUnits
+          : row.warehouseUnits % BigInt(row.unitsPerPack);
+        const stockWarning: EmptiesStockWarningDto = {
+          productId: row.productId,
+          productName: row.productName,
+          unitsPerPack: row.unitsPerPack,
+          warehouseUnits,
+          shelfUnits,
+          marketUnits,
+          totalUnits: safeCount(totalUnits, "totalUnits"),
+        };
+
+        if (row.ownerId === null) {
+          if (totalUnits > 0n) warnings.productsWithoutBrewery.push(stockWarning);
+          continue;
+        }
+
+        if (cans) {
+          warnings.assignedCans.push({
+            ...stockWarning,
+            ownerId: row.ownerId,
+            ownerName: row.ownerName ?? "",
+          });
+        }
+        if (row.ownerIsActive === false && totalUnits > 0n) {
+          warnings.productsAssignedToInactiveOwner.push({
+            ...stockWarning,
+            ownerId: row.ownerId,
+            ownerName: row.ownerName ?? "",
+          });
+        }
+
+        const owner = owners.get(row.ownerId);
+        if (owner === undefined) continue;
+
+        owner.products.push({
+          productId: row.productId,
+          productName: row.productName,
+          isActive: row.isActive,
+          unitsPerPack: row.unitsPerPack,
+          warehouseUnits,
+          fullCrates: safeCount(fullCrates, "fullCrates"),
+          looseUnits: safeCount(looseUnits, "looseUnits"),
+          shelfUnits,
+          marketUnits,
+        });
+        const ownerTotal = totals.get(row.ownerId)!;
+        ownerTotal.fullCrates += fullCrates;
+        ownerTotal.looseUnits += looseUnits;
+        ownerTotal.shelfMarket += BigInt(shelfUnits) + BigInt(marketUnits);
+      }
+
+      for (const [ownerId, owner] of owners) {
+        const ownerTotal = totals.get(ownerId)!;
+        owner.fullCrates = safeCount(ownerTotal.fullCrates, "fullCrates");
+        owner.looseUnitsInWarehouse = safeCount(ownerTotal.looseUnits, "looseUnitsInWarehouse");
+        owner.bottlesOnShelfAndMarket = safeCount(
+          ownerTotal.shelfMarket,
+          "bottlesOnShelfAndMarket",
+        );
+        owner.totalCrates = safeCount(
+          BigInt(owner.emptyCrates) + ownerTotal.fullCrates,
+          "totalCrates",
+        );
+      }
+
+      return { owners: [...owners.values()], warnings };
+    },
+
+    async listProductOwners(query: ProductOwnerListQuery): Promise<ProductOwnerPageDto> {
+      const conditions: Prisma.Sql[] = [Prisma.sql`p."deletedAt" IS NULL`];
+      if (query.q !== undefined) {
+        const pattern = likePattern(query.q);
+        conditions.push(
+          Prisma.sql`(p.name ILIKE ${pattern} ESCAPE '\\' OR p.sku ILIKE ${pattern} ESCAPE '\\')`,
+        );
+      }
+      if (query.assigned === "assigned") {
+        conditions.push(Prisma.sql`po."ownerId" IS NOT NULL`);
+      } else if (query.assigned === "unassigned") {
+        conditions.push(Prisma.sql`po."ownerId" IS NULL`);
+      }
+      if (query.cursor !== undefined) {
+        conditions.push(Prisma.sql`p.id > ${query.cursor}`);
+      }
+      const rows = await prisma.$queryRaw<ProductOwnerRow[]>`
+        SELECT p.id AS "productId", p.name AS "productName", p.sku, p."unitsPerPack",
+               po."ownerId", o.name AS "ownerName", o."isActive" AS "ownerIsActive"
+          FROM products p
+          LEFT JOIN empties_product_owners po ON po."productId" = p.id
+          LEFT JOIN empties_owners o ON o.id = po."ownerId"
+         WHERE ${Prisma.join(conditions, " AND ")}
+         ORDER BY p.id ASC
+         LIMIT ${query.limit + 1}`;
+      const page = rows.slice(0, query.limit);
+      const last = page.at(-1);
+      return {
+        items: page,
+        nextCursor: rows.length > query.limit && last !== undefined ? last.productId : null,
+      };
+    },
+
+    async assignProductOwner(
+      productId: string,
+      input: AssignProductOwnerBody,
+      actor: Actor,
+      key: string | null,
+    ): Promise<WriteResponse> {
+      const route = routeFor("PUT", `/empties/product-owners/${productId}`);
+      return runner.runWrite(route, { productId }, (ctx) =>
+        runner.withIdempotency(
+          ctx,
+          { actorId: actor.id, route, key, requestHash: hashRequestBody({ productId, ...input }) },
+          async () => {
+            counted(ctx);
+            const products = await ctx.tx.$queryRaw<ProductOwnerLockRow[]>`
+              SELECT p.id AS "productId", p.name AS "productName", p.sku, p."unitsPerPack",
+                     po."ownerId", o.name AS "ownerName", o."isActive" AS "ownerIsActive"
+                FROM products p
+                LEFT JOIN empties_product_owners po ON po."productId" = p.id
+                LEFT JOIN empties_owners o ON o.id = po."ownerId"
+               WHERE p.id = ${productId}
+               FOR UPDATE OF p`;
+            const product = products[0];
+            if (product === undefined) {
+              throw new AppError(404, "NOT_FOUND", "Product not found.", { productId });
+            }
+
+            let targetOwner: { id: string; name: string; isActive: boolean } | null = null;
+            if (input.ownerId !== null) {
+              counted(ctx);
+              const owners = await ctx.tx.$queryRaw<Array<{
+                id: string;
+                name: string;
+                isActive: boolean;
+              }>>`
+                SELECT id, name, "isActive"
+                  FROM empties_owners
+                 WHERE id = ${input.ownerId}
+                 FOR SHARE`;
+              targetOwner = owners[0] ?? null;
+              if (targetOwner === null) {
+                throw new AppError(404, "NOT_FOUND", "Empties owner not found.", {
+                  ownerId: input.ownerId,
+                });
+              }
+              if (!targetOwner.isActive) {
+                throw businessRuleError(
+                  `'${targetOwner.name}' is deactivated; reactivate it before assigning products.`,
+                  { ownerId: targetOwner.id },
+                );
+              }
+            }
+
+            if (product.ownerId !== input.ownerId) {
+              if (input.ownerId === null) {
+                counted(ctx);
+                await ctx.tx.$executeRaw`
+                  DELETE FROM empties_product_owners
+                   WHERE "productId" = ${productId}`;
+              } else {
+                counted(ctx);
+                await ctx.tx.$executeRaw`
+                  INSERT INTO empties_product_owners ("productId", "ownerId")
+                  VALUES (${productId}, ${input.ownerId})
+                  ON CONFLICT ("productId") DO UPDATE
+                    SET "ownerId" = EXCLUDED."ownerId",
+                        "updatedAt" = CURRENT_TIMESTAMP`;
+              }
+
+              const after = {
+                productId,
+                productName: product.productName,
+                sku: product.sku,
+                unitsPerPack: product.unitsPerPack,
+                ownerId: targetOwner?.id ?? null,
+                ownerName: targetOwner?.name ?? null,
+                ownerIsActive: targetOwner?.isActive ?? null,
+              } satisfies ProductOwnerDto;
+              await insertAuditLog(ctx, "Product", {
+                actorId: actor.id,
+                action: "EMPTIES_PRODUCT_OWNER_CHANGED",
+                entityId: productId,
+                beforeData: {
+                  productId,
+                  ownerId: product.ownerId,
+                  ownerName: product.ownerName,
+                },
+                afterData: after as unknown as Prisma.InputJsonValue,
+                metadata: { idempotencyKey: key, actorEmail: actor.email },
+              });
+              return { status: 200, body: after };
+            }
+
+            return {
+              status: 200,
+              body: {
+                productId: product.productId,
+                productName: product.productName,
+                sku: product.sku,
+                unitsPerPack: product.unitsPerPack,
+                ownerId: product.ownerId,
+                ownerName: product.ownerName,
+                ownerIsActive: product.ownerIsActive,
+              } satisfies ProductOwnerDto,
+            };
+          },
+        ),
+      );
     },
 
     // ================================================================

@@ -132,7 +132,7 @@ describe("POST /auth/reset-password", () => {
   it("sets the new password, revokes every session, and burns the link", async () => {
     const email = await seedAdmin();
     const user = await h.prisma.adminUser.findUniqueOrThrow({ where: { email }, select: { id: true } });
-    const sessionToken = "reset_test_session_token";
+    const sessionToken = newId("reset_test_session_token");
     await h.pg.query(
       `INSERT INTO admin_sessions (id, "adminUserId", "tokenHash", "createdAt", "lastSeenAt", "expiresAt")
        VALUES ($1, $2, $3, now(), now(), now() + interval '7 days')`,
@@ -141,7 +141,8 @@ describe("POST /auth/reset-password", () => {
 
     expect((await forgot(email)).statusCode).toBe(204);
     const token = tokenFromLastEmail();
-    expect((await reset(token)).statusCode).toBe(204);
+    const resetResponse = await reset(token);
+    expect(resetResponse.statusCode, resetResponse.body).toBe(204);
 
     const session = await h.prisma.adminSession.findFirst({ where: { tokenHash: hashSessionToken(sessionToken) } });
     expect(session?.revokedAt).not.toBeNull();
@@ -174,11 +175,13 @@ describe("POST /auth/reset-password", () => {
 
     const email = await seedAdmin();
     const user = await h.prisma.adminUser.findUniqueOrThrow({ where: { email }, select: { id: true } });
-    const expired = "expired-token-0123456789";
+    const expired = newId("expired_token");
+    const createdAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const expiresAt = new Date(Date.now() - 60 * 60 * 1000);
     await h.pg.query(
       `INSERT INTO password_reset_tokens (id, "adminUserId", "tokenHash", "createdAt", "expiresAt")
-       VALUES ($1, $2, $3, now() - interval '2 hours', now() - interval '1 hour')`,
-      [newId("reset_token"), user.id, hashSessionToken(expired)],
+       VALUES ($1, $2, $3, $4, $5)`,
+      [newId("reset_token"), user.id, hashSessionToken(expired), createdAt, expiresAt],
     );
     const stale = await reset(expired);
     expect(stale.statusCode).toBe(400);

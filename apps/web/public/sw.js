@@ -1,4 +1,4 @@
-const VERSION = "v2";
+const VERSION = "v4";
 const STATIC_CACHE = `fabtyna-static-${VERSION}`;
 const OFFLINE_URL = "/offline";
 

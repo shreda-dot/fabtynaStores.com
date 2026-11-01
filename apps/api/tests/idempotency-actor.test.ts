@@ -135,7 +135,7 @@ describe("actor-scoped idempotency", () => {
       headers: { "idempotency-key": key },
     });
 
-    expect(response.statusCode).toBe(201);
+    expect(response.statusCode, response.body).toBe(201);
     const claim = await harness.pg.query(
       `SELECT "actorId", "responseStatus" FROM idempotency_keys WHERE key = $1 AND route = 'POST /customers'`,
       [key],

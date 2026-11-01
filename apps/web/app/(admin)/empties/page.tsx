@@ -7,7 +7,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Boxes, Package, Undo2 } from "lucide-react";
+import { ArrowLeft, Boxes, Package, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { formatLagosDateTime, getLagosBusinessDate } from "@fabtyna/shared";
 import {
@@ -28,7 +28,6 @@ import { Input, Textarea } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
-import { StatCard } from "@/components/ui/stat-card";
 import { WriteFlowStatus } from "@/components/write-flow-status";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { useNetworkStatus } from "@/hooks/use-network-status";
@@ -41,6 +40,7 @@ import type {
   EmptiesMovementDto,
   EmptiesMovementType,
 } from "@/lib/api/empties.api";
+import { formatEmptiesCount, overviewCountRows } from "@/lib/empties-overview";
 import { parseEmptiesQuantityText } from "@/lib/empties-quantity";
 import { queryKeys } from "@/lib/query-keys";
 import { validateReportRange } from "@/lib/report-range";
@@ -333,6 +333,12 @@ export default function EmptiesPage() {
   } | null>(null);
   const [reverseTarget, setReverseTarget] = useState<EmptiesMovementDto | null>(null);
 
+  const overview = useQuery({
+    queryKey: queryKeys.empties.overview,
+    queryFn: () => emptiesApi.getOverview(),
+    enabled: !isMockApiMode,
+  });
+
   const balances = useQuery({
     queryKey: queryKeys.empties.balances(false),
     queryFn: () => emptiesApi.listBalances(),
@@ -454,19 +460,26 @@ export default function EmptiesPage() {
   ];
 
   const scope = range.from === range.to ? range.from : `${range.from} to ${range.to}`;
-  const totalsByOwner = balances.data?.totalsByOwner ?? [];
-  const totalsByKind = balances.data?.totalsByKind ?? [];
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Empties"
-        description="Count bottles and crates owed back to breweries. Counts only; values are for reference and never enter cash or profit."
+        description="See brewery crate totals and track bottles and crates owed back. Values are for reference only and never enter cash or profit."
         actions={
-          <Link href="/empties/types" className={buttonClasses({ variant: "secondary" })}>
-            <Boxes aria-hidden="true" className="h-4 w-4" />
-            Manage owners &amp; types
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/dashboard" className={buttonClasses({ variant: "secondary" })}>
+              <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+              Back to dashboard
+            </Link>
+            <Link href="/empties/products" className={buttonClasses({ variant: "secondary" })}>
+              Assign products
+            </Link>
+            <Link href="/empties/types" className={buttonClasses({ variant: "secondary" })}>
+              <Boxes aria-hidden="true" className="h-4 w-4" />
+              Manage owners &amp; types
+            </Link>
+          </div>
         }
       />
 
@@ -477,48 +490,21 @@ export default function EmptiesPage() {
         />
       ) : (
         <>
-          {balances.isPending ? (
+          {overview.isPending ? (
             <Skeleton variant="stat" count={4} />
-          ) : balances.isError ? (
+          ) : overview.isError ? (
             <ErrorState
-              title="Empties could not be loaded"
-              message={toUserMessage(balances.error)}
-              onRetry={() => void balances.refetch()}
+              title="Brewery crate totals could not be loaded"
+              message={toUserMessage(overview.error)}
+              onRetry={() => void overview.refetch()}
             />
           ) : (
             <>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {totalsByOwner.map((total) => (
-                  <StatCard
-                    key={total.ownerId}
-                    label={total.ownerName}
-                    value={`${total.quantity} on hand`}
-                    hint={<Money kobo={total.valueKobo} tone="neutral" />}
-                  />
-                ))}
-                {totalsByKind.map((total) => (
-                  <StatCard
-                    key={total.kind}
-                    label={`${KIND_LABEL[total.kind]}s`}
-                    value={`${total.quantity}`}
-                    hint={<Money kobo={total.valueKobo} tone="neutral" />}
-                  />
-                ))}
-              </div>
-
-              {action !== null && (
-                <RecordMovementPanel
-                  type={action.type}
-                  movementType={action.movementType}
-                  onClose={() => setAction(null)}
-                />
-              )}
-
-              {(balances.data?.items.length ?? 0) === 0 ? (
+              {overview.data.owners.length === 0 ? (
                 <EmptyState
-                  icon={Package}
-                  title="No empties types yet"
-                  description="Add an owner and its bottle and crate types before recording counts."
+                  icon={Boxes}
+                  title="No active breweries yet"
+                  description="Add an active owner and assign returnable products to see crate totals."
                   action={
                     <Link
                       href="/empties/types"
@@ -529,21 +515,200 @@ export default function EmptiesPage() {
                   }
                 />
               ) : (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {overview.data.owners.map((owner) => (
+                    <Card key={owner.ownerId}>
+                      <CardHeader
+                        title={owner.ownerName}
+                        description="Full crates count warehouse packs only. Shelf and market stock is shown as loose bottles."
+                      />
+                      <CardBody className="space-y-4">
+                        <div className="rounded-md bg-muted p-4">
+                          <p className="text-sm font-medium text-muted-foreground">Total crates</p>
+                          <p className="mt-1 text-4xl font-semibold tabular text-foreground">
+                            {formatEmptiesCount(owner.totalCrates)}
+                          </p>
+                        </div>
+                        <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {overviewCountRows(owner).map((row) => (
+                            <div key={row.label} className="rounded-md border border-border p-3">
+                              <dt className="text-sm text-muted-foreground">{row.label}</dt>
+                              <dd className="mt-1 font-semibold tabular">
+                                {formatEmptiesCount(row.value)}
+                              </dd>
+                            </div>
+                          ))}
+                          <div className="rounded-md border border-border p-3">
+                            <dt className="text-sm text-muted-foreground">Empty bottles</dt>
+                            <dd className="mt-1 font-semibold tabular">
+                              {formatEmptiesCount(owner.emptyBottles)}
+                            </dd>
+                          </div>
+                        </dl>
+                        {owner.emptyValueKobo !== null && (
+                          <p className="text-sm text-muted-foreground">
+                            Display value of empties:{" "}
+                            <Money kobo={owner.emptyValueKobo} tone="neutral" />
+                          </p>
+                        )}
+                        <details className="rounded-md border border-border p-3">
+                          <summary className="cursor-pointer font-medium">
+                            Product breakdown ({formatEmptiesCount(owner.products.length)})
+                          </summary>
+                          {owner.products.length === 0 ? (
+                            <p className="mt-3 text-sm text-muted-foreground">
+                              No assigned products yet.
+                            </p>
+                          ) : (
+                            <ul className="mt-3 divide-y divide-border">
+                              {owner.products.map((product) => (
+                                <li key={product.productId} className="space-y-2 py-3 first:pt-0">
+                                  <p className="font-medium">
+                                    {product.productName}
+                                    {!product.isActive && (
+                                      <span className="ml-2 text-xs text-muted-foreground">
+                                        Inactive product
+                                      </span>
+                                    )}
+                                  </p>
+                                  <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm sm:grid-cols-3">
+                                    <div>
+                                      <dt className="text-muted-foreground">Units per pack</dt>
+                                      <dd className="tabular">{formatEmptiesCount(product.unitsPerPack)}</dd>
+                                    </div>
+                                    <div>
+                                      <dt className="text-muted-foreground">Warehouse units</dt>
+                                      <dd className="tabular">{formatEmptiesCount(product.warehouseUnits)}</dd>
+                                    </div>
+                                    <div>
+                                      <dt className="text-muted-foreground">Full crates</dt>
+                                      <dd className="tabular">{formatEmptiesCount(product.fullCrates)}</dd>
+                                    </div>
+                                    <div>
+                                      <dt className="text-muted-foreground">Loose in warehouse</dt>
+                                      <dd className="tabular">{formatEmptiesCount(product.looseUnits)}</dd>
+                                    </div>
+                                    <div>
+                                      <dt className="text-muted-foreground">Shelf bottles</dt>
+                                      <dd className="tabular">{formatEmptiesCount(product.shelfUnits)}</dd>
+                                    </div>
+                                    <div>
+                                      <dt className="text-muted-foreground">Market bottles</dt>
+                                      <dd className="tabular">{formatEmptiesCount(product.marketUnits)}</dd>
+                                    </div>
+                                  </dl>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </details>
+                      </CardBody>
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+              {(overview.data.warnings.productsWithoutBrewery.length > 0 ||
+                overview.data.warnings.assignedCans.length > 0 ||
+                overview.data.warnings.productsAssignedToInactiveOwner.length > 0) && (
                 <Card>
                   <CardHeader
-                    title="Balances by type"
-                    description="On hand at the shop for each owner and type."
+                    title="Products to review"
+                    description="These warnings do not add crates to an active brewery total."
                   />
-                  <CardBody>
-                    <ResponsiveTable
-                      rows={balances.data?.items ?? []}
-                      columns={balanceColumns}
-                      getKey={(b) => b.typeId}
-                    />
+                  <CardBody className="space-y-4">
+                    {overview.data.warnings.productsWithoutBrewery.length > 0 && (
+                      <div>
+                        <h3 className="font-medium">
+                          Products with stock but no brewery (these are not counted yet)
+                        </h3>
+                        <ul className="mt-2 space-y-1 text-sm">
+                          {overview.data.warnings.productsWithoutBrewery.map((product) => (
+                            <li key={product.productId}>
+                              {product.productName} · {formatEmptiesCount(product.totalUnits)} units
+                            </li>
+                          ))}
+                        </ul>
+                        <Link
+                          href="/empties/products"
+                          className="mt-3 inline-block text-sm font-medium text-primary underline"
+                        >
+                          Assign a brewery
+                        </Link>
+                      </div>
+                    )}
+                    {overview.data.warnings.assignedCans.length > 0 && (
+                      <div>
+                        <h3 className="font-medium">Assigned products that are never counted as crates</h3>
+                        <ul className="mt-2 space-y-1 text-sm">
+                          {overview.data.warnings.assignedCans.map((product) => (
+                            <li key={product.productId}>{product.productName} · cans (1 unit per pack)</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {overview.data.warnings.productsAssignedToInactiveOwner.length > 0 && (
+                      <div>
+                        <h3 className="font-medium">Products assigned to inactive breweries</h3>
+                        <ul className="mt-2 space-y-1 text-sm">
+                          {overview.data.warnings.productsAssignedToInactiveOwner.map((product) => (
+                            <li key={product.productId}>
+                              {product.productName} · {product.ownerName}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </CardBody>
                 </Card>
               )}
+            </>
+          )}
 
+          {balances.isPending ? (
+            <Skeleton variant="row" count={4} />
+          ) : balances.isError ? (
+            <ErrorState
+              title="Empties balances could not be loaded"
+              message={toUserMessage(balances.error)}
+              onRetry={() => void balances.refetch()}
+            />
+          ) : (balances.data?.items.length ?? 0) === 0 ? (
+            <EmptyState
+              icon={Package}
+              title="No empties types yet"
+              description="Add an owner and its bottle and crate types before recording counts."
+              action={
+                <Link
+                  href="/empties/types"
+                  className={buttonClasses({ variant: "secondary", size: "sm" })}
+                >
+                  Manage owners &amp; types
+                </Link>
+              }
+            />
+          ) : (
+            <>
+              {action !== null && (
+                <RecordMovementPanel
+                  type={action.type}
+                  movementType={action.movementType}
+                  onClose={() => setAction(null)}
+                />
+              )}
+              <Card>
+                <CardHeader
+                  title="Empty balances by type"
+                  description="Use these actions to record the existing empties movements."
+                />
+                <CardBody>
+                  <ResponsiveTable
+                    rows={balances.data.items}
+                    columns={balanceColumns}
+                    getKey={(b) => b.typeId}
+                  />
+                </CardBody>
+              </Card>
               {reverseTarget !== null && (
                 <ReverseMovementPanel
                   movement={reverseTarget}

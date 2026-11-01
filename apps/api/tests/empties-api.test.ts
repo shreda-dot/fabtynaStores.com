@@ -1,10 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getLagosBusinessDate } from "@fabtyna/shared";
 import { runDbAudit } from "../src/db/audit.js";
-import { connectionString, createHarness, newId, type Harness } from "./sales-fixtures.js";
+import {
+  connectionString,
+  createHarness,
+  newId,
+  seedProduct,
+  type Harness,
+} from "./sales-fixtures.js";
 
 /**
- * Empties tracking, phase 1 — counts only.
+ * Empties tracking: immutable count movements and mutable brewery ownership.
  *
  * `empties_balances` is DERIVED: the AFTER INSERT trigger on `empties_movements`
  * is its only writer, and `trg_empties_balances_guard` rejects anything else.
@@ -65,6 +71,53 @@ interface BalancesDto {
   items: BalanceItem[];
   totalsByOwner: Array<{ ownerId: string; ownerName: string; quantity: number; valueKobo: string }>;
   totalsByKind: Array<{ kind: "BOTTLE" | "CRATE"; quantity: number; valueKobo: string }>;
+}
+
+interface ProductOwnerDto {
+  productId: string;
+  productName: string;
+  sku: string | null;
+  unitsPerPack: number;
+  ownerId: string | null;
+  ownerName: string | null;
+  ownerIsActive: boolean | null;
+}
+
+interface ProductOwnerPageDto {
+  items: ProductOwnerDto[];
+  nextCursor: string | null;
+}
+
+interface ProductOverviewDto {
+  productId: string;
+  productName: string;
+  isActive: boolean;
+  unitsPerPack: number;
+  warehouseUnits: number;
+  fullCrates: number;
+  looseUnits: number;
+  shelfUnits: number;
+  marketUnits: number;
+}
+
+interface EmptiesOverviewDto {
+  owners: Array<{
+    ownerId: string;
+    ownerName: string;
+    emptyCrates: number;
+    emptyBottles: number;
+    fullCrates: number;
+    looseUnitsInWarehouse: number;
+    bottlesOnShelfAndMarket: number;
+    totalCrates: number;
+    emptyValueKobo: string | null;
+    products: ProductOverviewDto[];
+  }>;
+  warnings: {
+    productsWithoutBrewery: Array<{ productId: string; productName: string; totalUnits: number }>;
+    assignedCans: Array<{ productId: string; productName: string; ownerId?: string }>;
+    productsAssignedToInactiveOwner: Array<{ productId: string; productName: string; ownerId?: string }>;
+  };
 }
 
 interface ApiError {
@@ -133,6 +186,28 @@ async function movementCountOf(typeId: string): Promise<number> {
     [typeId],
   );
   return Number(rows[0]!.n);
+}
+
+async function addStockUnits(
+  productId: string,
+  location: "WAREHOUSE" | "RETAIL_SHELF" | "MARKET",
+  quantityUnits: number,
+): Promise<void> {
+  await h.pg.query(
+    `INSERT INTO stock_movements
+       (id, "productId", location, type, "quantityUnits", "unitCostKobo", "returnLineId")
+     VALUES ($1, $2, $3::"StockLocation", 'PURCHASE', $4, 0::bigint, $5)`,
+    [newId("empties_stock"), productId, location, quantityUnits, newId("empties_stock_source")],
+  );
+}
+
+async function setProductOwner(productId: string, ownerId: string | null, key?: string) {
+  return h.app.inject({
+    method: "PUT",
+    url: `/empties/product-owners/${productId}`,
+    payload: { ownerId },
+    headers: key === undefined ? {} : { "idempotency-key": key },
+  });
 }
 
 describe("empties movements update the derived balance", () => {
@@ -403,6 +478,232 @@ describe("empties owner and type management", () => {
     expect(response.statusCode, response.body).toBe(409);
     expect(response.json<ApiError>().error.message).toContain("active empties type");
     expect((await h.app.inject({ method: "GET", url: "/empties/owners" })).json<OwnerDto[]>().map((o) => o.id)).toContain(owner.id);
+  }, 120_000);
+});
+
+describe("empties brewery product ownership", () => {
+  it("registers the three routes and requires an authenticated actor", async () => {
+    const expected = [
+      { method: "GET", url: "/empties/overview" },
+      { method: "GET", url: "/empties/product-owners" },
+      { method: "PUT", url: "/empties/product-owners/:productId" },
+    ];
+    for (const route of expected) {
+      expect(
+        h.routes.some((registered) =>
+          (Array.isArray(registered.method)
+            ? registered.method.includes(route.method)
+            : registered.method === route.method) && registered.url === route.url,
+        ),
+        `${route.method} ${route.url} is registered`,
+      ).toBe(true);
+    }
+
+    const requests = await Promise.all([
+      h.injectAnonymous({ method: "GET", url: "/empties/overview" }),
+      h.injectAnonymous({ method: "GET", url: "/empties/product-owners" }),
+      h.injectAnonymous({
+        method: "PUT",
+        url: "/empties/product-owners/nonexistent-product",
+        headers: { origin: "http://localhost:3000" },
+        payload: { ownerId: null },
+      }),
+    ]);
+    expect(requests.map((response) => response.statusCode)).toEqual([401, 401, 401]);
+  });
+
+  it("calculates warehouse crates, loose units, separate shelf stock, warnings, and inactive stock", async () => {
+    const brewery = await createOwner();
+    const secondBrewery = await createOwner();
+    const crateType = await createType({
+      ownerId: brewery.id,
+      kind: "CRATE",
+      unitValueKobo: "5000",
+    });
+    const bottleType = await createType({ ownerId: brewery.id, kind: "BOTTLE" });
+    expect((await record(crateType.id, "OPENING", 10)).statusCode).toBe(201);
+    expect((await record(bottleType.id, "OPENING", 3)).statusCode).toBe(201);
+
+    const returnable = await seedProduct(h.pg, {
+      name: `ZZTEST returnable ${newId("beer")}`,
+      unitsPerPack: 24,
+      stock: 100,
+      location: "WAREHOUSE",
+    });
+    await addStockUnits(returnable.id, "RETAIL_SHELF", 30);
+    await addStockUnits(returnable.id, "MARKET", 5);
+    expect((await setProductOwner(returnable.id, brewery.id)).statusCode).toBe(200);
+
+    const unassigned = await seedProduct(h.pg, {
+      name: `ZZTEST unassigned ${newId("beer")}`,
+      stock: 3,
+      location: "MARKET",
+    });
+    const cans = await seedProduct(h.pg, {
+      name: `ZZTEST cans ${newId("beer")}`,
+      unitsPerPack: 1,
+      stock: 12,
+      location: "WAREHOUSE",
+    });
+    expect((await setProductOwner(cans.id, brewery.id)).statusCode).toBe(200);
+
+    const inactiveProduct = await seedProduct(h.pg, {
+      name: `ZZTEST inactive ${newId("beer")}`,
+      unitsPerPack: 12,
+      stock: 24,
+      location: "WAREHOUSE",
+      deactivated: true,
+    });
+    expect((await setProductOwner(inactiveProduct.id, secondBrewery.id)).statusCode).toBe(200);
+
+    const response = await h.app.inject({ method: "GET", url: "/empties/overview" });
+    expect(response.statusCode, response.body).toBe(200);
+    const overview = response.json<EmptiesOverviewDto>();
+    const first = overview.owners.find((owner) => owner.ownerId === brewery.id)!;
+    const second = overview.owners.find((owner) => owner.ownerId === secondBrewery.id)!;
+
+    // Hand check: 100 / 24 = 4 crates with 4 loose warehouse units.
+    // The 30 shelf and 5 MARKET units are bottles, not crates; 10 empties + 4 full = 14.
+    expect(first).toMatchObject({
+      emptyCrates: 10,
+      emptyBottles: 3,
+      fullCrates: 4,
+      totalCrates: 14,
+      bottlesOnShelfAndMarket: 35,
+      emptyValueKobo: "50000",
+    });
+    expect(
+      first.products.find((product) => product.productId === returnable.id),
+    ).toMatchObject({
+      warehouseUnits: 100,
+      fullCrates: 4,
+      looseUnits: 4,
+      shelfUnits: 30,
+      marketUnits: 5,
+    });
+    expect(first.products.find((product) => product.productId === cans.id)).toMatchObject({
+      fullCrates: 0,
+      looseUnits: 12,
+    });
+    expect(second).toMatchObject({ fullCrates: 2, totalCrates: 2 });
+    expect(
+      second.products.find((product) => product.productId === inactiveProduct.id),
+    ).toMatchObject({ isActive: false, fullCrates: 2 });
+    expect(overview.warnings.productsWithoutBrewery).toContainEqual(
+      expect.objectContaining({ productId: unassigned.id, productName: unassigned.name, totalUnits: 3 }),
+    );
+    expect(overview.warnings.assignedCans).toContainEqual(
+      expect.objectContaining({ productId: cans.id, productName: cans.name, ownerId: brewery.id }),
+    );
+  }, 180_000);
+
+  it("filters and paginates active products with a stable cursor", async () => {
+    const owner = await createOwner();
+    const prefix = `ZZTEST owner page ${newId("products")}`;
+    const firstProduct = await seedProduct(h.pg, { name: `${prefix} A` });
+    const secondProduct = await seedProduct(h.pg, { name: `${prefix} B` });
+    const inactiveProduct = await seedProduct(h.pg, { name: `${prefix} inactive`, deactivated: true });
+    expect((await setProductOwner(firstProduct.id, owner.id)).statusCode).toBe(200);
+
+    const firstPageResponse = await h.app.inject({
+      method: "GET",
+      url: `/empties/product-owners?q=${encodeURIComponent(prefix)}&limit=1`,
+    });
+    expect(firstPageResponse.statusCode, firstPageResponse.body).toBe(200);
+    const firstPage = firstPageResponse.json<ProductOwnerPageDto>();
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.nextCursor).not.toBeNull();
+
+    const secondPageResponse = await h.app.inject({
+      method: "GET",
+      url: `/empties/product-owners?q=${encodeURIComponent(prefix)}&limit=1&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
+    });
+    const secondPage = secondPageResponse.json<ProductOwnerPageDto>();
+    expect(secondPage.items).toHaveLength(1);
+    expect(secondPage.items[0]?.productId).not.toBe(firstPage.items[0]?.productId);
+
+    const assigned = await h.app.inject({
+      method: "GET",
+      url: `/empties/product-owners?q=${encodeURIComponent(prefix)}&assigned=assigned`,
+    });
+    expect(assigned.json<ProductOwnerPageDto>().items.map((item) => item.productId)).toEqual([
+      firstProduct.id,
+    ]);
+    const unassigned = await h.app.inject({
+      method: "GET",
+      url: `/empties/product-owners?q=${encodeURIComponent(prefix)}&assigned=unassigned`,
+    });
+    expect(unassigned.json<ProductOwnerPageDto>().items.map((item) => item.productId).sort()).toEqual(
+      [secondProduct.id].sort(),
+    );
+    expect(
+      [...firstPage.items, ...secondPage.items].some((item) => item.productId === inactiveProduct.id),
+    ).toBe(false);
+  }, 120_000);
+
+  it("assigns, reassigns, unassigns idempotently and audit-logs only actual changes", async () => {
+    const firstOwner = await createOwner();
+    const secondOwner = await createOwner();
+    const product = await seedProduct(h.pg, { name: `ZZTEST assignment ${newId("beer")}` });
+    const key = newId("empties-owner-key");
+
+    const first = await setProductOwner(product.id, firstOwner.id, key);
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json<ProductOwnerDto>()).toMatchObject({
+      productId: product.id,
+      ownerId: firstOwner.id,
+    });
+    expect(h.txLog.at(-1)?.queries).toBe(9);
+
+    const replay = await setProductOwner(product.id, firstOwner.id, key);
+    expect(replay.statusCode, replay.body).toBe(200);
+    expect(replay.headers["idempotent-replayed"]).toBe("true");
+
+    const sameOwner = await setProductOwner(product.id, firstOwner.id);
+    expect(sameOwner.statusCode, sameOwner.body).toBe(200);
+
+    const reassigned = await setProductOwner(product.id, secondOwner.id);
+    expect(reassigned.statusCode, reassigned.body).toBe(200);
+    expect(reassigned.json<ProductOwnerDto>().ownerId).toBe(secondOwner.id);
+
+    const unassigned = await setProductOwner(product.id, null);
+    expect(unassigned.statusCode, unassigned.body).toBe(200);
+    expect(unassigned.json<ProductOwnerDto>()).toMatchObject({
+      productId: product.id,
+      ownerId: null,
+      ownerName: null,
+    });
+
+    const auditRows = await h.pg.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM audit_logs
+        WHERE action = 'EMPTIES_PRODUCT_OWNER_CHANGED' AND "entityId" = $1`,
+      [product.id],
+    );
+    expect(auditRows.rows[0]?.count).toBe("3");
+  }, 120_000);
+
+  it("refuses inactive or missing owners and warns when an assigned brewery is deactivated", async () => {
+    const owner = await createOwner();
+    const product = await seedProduct(h.pg, {
+      name: `ZZTEST inactive owner ${newId("beer")}`,
+      unitsPerPack: 24,
+      stock: 50,
+      location: "WAREHOUSE",
+    });
+    expect((await setProductOwner(product.id, newId("missing_owner"))).statusCode).toBe(404);
+    expect((await setProductOwner(product.id, owner.id)).statusCode).toBe(200);
+
+    const deactivated = await h.app.inject({
+      method: "POST",
+      url: `/empties/owners/${owner.id}/deactivate`,
+    });
+    expect(deactivated.statusCode, deactivated.body).toBe(200);
+    const overview = await h.app.inject({ method: "GET", url: "/empties/overview" });
+    const body = overview.json<EmptiesOverviewDto>();
+    expect(body.owners.some((item) => item.ownerId === owner.id)).toBe(false);
+    expect(body.warnings.productsAssignedToInactiveOwner).toContainEqual(
+      expect.objectContaining({ productId: product.id, productName: product.name, ownerId: owner.id }),
+    );
   }, 120_000);
 });
 

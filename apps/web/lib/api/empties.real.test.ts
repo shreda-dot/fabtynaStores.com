@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { balancesQuery, movementsQuery, ownersQuery, typesQuery } from "./empties.real";
+import {
+  balancesQuery,
+  movementsQuery,
+  ownersQuery,
+  productOwnersQuery,
+  typesQuery,
+} from "./empties.real";
 
 describe("empties owners query string", () => {
   it("always states the active filter explicitly", () => {
@@ -50,5 +56,23 @@ describe("empties movements query string", () => {
 
   it("ignores a null cursor and empty strings", () => {
     expect(movementsQuery({ from: "", to: "", cursor: null })).toBe("?limit=50");
+  });
+});
+
+describe("empties product-owner query string", () => {
+  it("omits unset filters and the all-assigned default", () => {
+    expect(productOwnersQuery({})).toBe("");
+    expect(productOwnersQuery({ assigned: "all" })).toBe("");
+  });
+
+  it("sends search, assignment filter, cursor and plain integer limit in order", () => {
+    expect(
+      productOwnersQuery({
+        q: "  lager  ",
+        assigned: "unassigned",
+        cursor: "product-2",
+        limit: 50,
+      }),
+    ).toBe("?q=lager&assigned=unassigned&cursor=product-2&limit=50");
   });
 });

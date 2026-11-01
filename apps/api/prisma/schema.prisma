@@ -332,6 +332,7 @@ model Product {
   stockBalances      StockBalance[]
   transferLines      StockTransferLine[]
   adjustmentLines    StockAdjustmentLine[]
+  emptiesOwner       EmptiesProductOwner?
 
   // Partial unique index on (sku) WHERE deletedAt IS NULL and the
   // `sku = upper(trim(sku))` CHECK live in the hand-written SQL migrations;
@@ -1042,10 +1043,24 @@ model EmptiesOwner {
   isActive      Boolean        @default(true)
   createdAt     DateTime       @default(now())
   types         EmptiesType[]
+  products      EmptiesProductOwner[]
 
   // `char_length(btrim(name)) BETWEEN 1 AND 60` and
   // `"normalizedKey" = lower(btrim(name))` are hand-written CHECKs.
   @@map("empties_owners")
+}
+
+/// Mutable assignment of a returnable product to the brewery that owns its crates.
+model EmptiesProductOwner {
+  productId String   @id(map: "empties_product_owners_pkey")
+  ownerId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  product   Product      @relation(fields: [productId], references: [id], onDelete: Restrict, map: "fk_empties_product_owners_product")
+  owner     EmptiesOwner @relation(fields: [ownerId], references: [id], onDelete: Restrict, map: "fk_empties_product_owners_owner")
+
+  @@index([ownerId], map: "empties_product_owners_ownerId_idx")
+  @@map("empties_product_owners")
 }
 
 /// One kind of empties for an owner (a crate, a bottle size, ...).

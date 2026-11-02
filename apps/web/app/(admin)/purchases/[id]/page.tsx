@@ -39,7 +39,6 @@ import {
 } from "@/lib/api/purchases.api";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
-import { toast } from "@/stores/toast-store";
 
 const REASON_MAX = 500;
 
@@ -289,11 +288,14 @@ export default function PurchaseDetailPage() {
     });
     if (!ok) return;
     const submit = async () => {
-      const result = await voidFlow.run((key) => purchasesApi.void(id, key));
+      const result = await voidFlow.run(
+        "purchase.void",
+        (key) => purchasesApi.void(id, key),
+        { reference },
+      );
       if (result) {
         invalidateAll();
         void purchase.refetch();
-        toast.success(`Purchase ${reference} voided.`);
       }
     };
     retryVoid.current = submit;
@@ -347,8 +349,9 @@ export default function PurchaseDetailPage() {
     const paidAt = new Date().toISOString();
     const method = paymentMethod;
     const submit = async () => {
-      const result = await payFlow.run((key) =>
-        purchasesApi.recordPayment(
+      const result = await payFlow.run(
+        "purchase.payment",
+        (key) => purchasesApi.recordPayment(
           id,
           amountKobo,
           paidAt,
@@ -363,7 +366,6 @@ export default function PurchaseDetailPage() {
         void purchase.refetch();
         setPaying(false);
         setPaymentKobo("");
-        toast.success("Supplier payment recorded.");
       }
     };
     retryPay.current = submit;
@@ -408,15 +410,15 @@ export default function PurchaseDetailPage() {
     if (!ok) return;
 
     const submit = async () => {
-      const result = await reverseFlow.run((key) =>
-        purchasesApi.reversePayment(id, payment.id, trimmed, key),
+      const result = await reverseFlow.run(
+        "purchase.payment.reverse",
+        (key) => purchasesApi.reversePayment(id, payment.id, trimmed, key),
       );
       if (result) {
         invalidateAll();
         void purchase.refetch();
         setReversing(null);
         setReason("");
-        toast.success("Supplier payment reversed.");
       }
     };
     retryReverse.current = submit;

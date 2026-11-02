@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
+import { notifyWriteSuccess } from "@/lib/write-messages";
 
 const NOOP_UNSUBSCRIBE = () => {};
 
@@ -41,7 +42,7 @@ export function StorageBanner() {
     if (!ok) return;
     try {
       resetDemoData();
-      toast.success("Demo data reset. Reloading…");
+      notifyWriteSuccess("demo.reset");
       window.location.reload();
     } catch {
       toast.error("Could not reset the demo data. Try reloading the page.");

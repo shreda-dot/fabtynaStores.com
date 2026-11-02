@@ -243,7 +243,6 @@ export default function NewSalePage() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.debtors.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
-    toast.success(`Sale recorded — ${sale.reference ?? sale.id.slice(0, 8)}.`);
     draft.clear();
     router.push(`/sales/${sale.id}`);
   }
@@ -466,7 +465,11 @@ export default function NewSalePage() {
       if (!ok) return;
       const previewTotal = totalKobo;
       const run = async () => {
-        const sale = await flow.run((key) => salesApi.create(input, key));
+        const sale = await flow.run(
+          "sale.create",
+          (key) => salesApi.create(input, key),
+          (created) => ({ reference: created.reference ?? created.id.slice(0, 8) }),
+        );
         if (sale) afterCreated(sale, previewTotal);
       };
       retrySubmit.current = run;

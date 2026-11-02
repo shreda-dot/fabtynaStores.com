@@ -40,6 +40,7 @@ import { createIdempotencyIntent, type IdempotencyIntent } from "@/lib/api/idemp
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
+import { notifyWriteSuccess } from "@/lib/write-messages";
 import { useUIStore } from "@/stores/ui-store";
 
 export default function CustomersPage() {
@@ -84,11 +85,14 @@ export default function CustomersPage() {
       input: CreateCustomerDto;
       key: string;
     }) => (id ? customersApi.update(id, input, key) : customersApi.create(input, key)),
-    onSuccess: async () => {
+    onSuccess: async (customer, variables) => {
       await queryClient.invalidateQueries({
         queryKey: queryKeys.customers.all,
       });
       saveIntent.current.markSucceeded();
+      notifyWriteSuccess(variables.id ? "customer.update" : "customer.create", {
+        name: customer.name,
+      });
       closeForm();
     },
   });
@@ -188,7 +192,7 @@ export default function CustomersPage() {
       });
       intent.markSucceeded();
       actionIntents.current.delete(intentId);
-      toast.success(`${customer.name} deactivated`);
+      notifyWriteSuccess("customer.deactivate", { name: customer.name });
     } catch (err) {
       toast.error(toUserMessage(err));
     }
@@ -216,7 +220,7 @@ export default function CustomersPage() {
       });
       intent.markSucceeded();
       actionIntents.current.delete(intentId);
-      toast.success(`${customer.name} reactivated`);
+      notifyWriteSuccess("customer.reactivate", { name: customer.name });
     } catch (err) {
       toast.error(toUserMessage(err));
     }

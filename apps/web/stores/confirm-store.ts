@@ -18,8 +18,6 @@ export type ConfirmOptions = {
    * runs, closes on success and stays open with the error message on failure.
    */
   onConfirm?: () => Promise<unknown> | unknown;
-  /** Optional toast fired after `onConfirm` resolves. */
-  successMessage?: string;
 };
 
 type ConfirmState = {

@@ -94,15 +94,17 @@ export default function NewAdjustmentPage() {
   const createMutation = useMutation({
     mutationFn: async (input: CreateAdjustmentDto) => {
       setLastInput(input);
-      if (isMockApiMode) return adjustmentsApi.create(input);
-      return writeFlow.run((key) => adjustmentsApi.create(input, key));
+      return writeFlow.run(
+        "adjustment.create",
+        (key) => isMockApiMode ? adjustmentsApi.create(input) : adjustmentsApi.create(input, key),
+        (adjustment) => ({ reference: adjustment.id.slice(0, 8) }),
+      );
     },
     onSuccess: (adjustment) => {
       if (!adjustment) return;
       void queryClient.invalidateQueries({ queryKey: queryKeys.adjustments.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
-      toast.success(`Adjustment ${adjustment.id.slice(0, 8)} recorded.`);
       router.push(`/adjustments/${adjustment.id}`);
     },
     onError: (error) => {

@@ -189,8 +189,10 @@ function ExpensesContent() {
   const voidMutation = useMutation({
     mutationFn: async (input: { id: string; reason: string }) => {
       setLastVoid(input);
-      if (isMockApiMode) return expensesApi.void(input.id, input.reason);
-      return writeFlow.run((key) => expensesApi.void(input.id, input.reason, key));
+      return writeFlow.run(
+        "expense.void",
+        (key) => isMockApiMode ? expensesApi.void(input.id, input.reason) : expensesApi.void(input.id, input.reason, key),
+      );
     },
     onSuccess: (result) => {
       if (!result) return;

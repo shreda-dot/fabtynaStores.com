@@ -47,7 +47,6 @@ import type {
 import { toUserMessage } from "@/lib/api/client";
 import { WriteFlowStatus } from "@/components/write-flow-status";
 import { useWriteFlow } from "@/hooks/use-write-flow";
-import { toast } from "@/stores/toast-store";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 
@@ -208,7 +207,7 @@ export default function PayablesPage() {
       const note = paymentNote.trim() === "" ? undefined : paymentNote.trim();
       const method = paymentMethod;
       const run = async () => {
-        const result = await flow.run(async (key) => {
+        const result = await flow.run("payable.payment", async (key) => {
           await payablesApi.recordPayment(
             line.purchaseId,
             amount.toString(),
@@ -219,9 +218,8 @@ export default function PayablesPage() {
             key,
           );
           return true as const;
-        });
+        }, { name: supplierName });
         if (result === undefined) return;
-        toast.success(`Payment of ${formatNaira(amount)} recorded for ${supplierName}.`);
         void queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
         void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
         void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });

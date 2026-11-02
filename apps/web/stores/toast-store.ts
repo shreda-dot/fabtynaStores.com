@@ -9,7 +9,7 @@ export type ToastItem = {
   type: ToastType;
   message: string;
   description?: string;
-  /** 0 means "sticky until dismissed" (used by `toast.promise` loading). */
+  /** 0 means "sticky until dismissed" (used by errors and `toast.promise` loading). */
   durationMs: number;
 };
 
@@ -24,13 +24,12 @@ type ToastState = {
 const MAX_VISIBLE = 3;
 const DEDUPE_WINDOW_MS = 2000;
 const SUCCESS_DURATION_MS = 4000;
-/** Error/warning stay for at least 8s, then the user can still dismiss them. */
-const STICKY_DURATION_MS = 8000;
+const WARNING_DURATION_MS = 8000;
 
 export function toastDuration(type: ToastType): number {
-  return type === "success" || type === "info"
-    ? SUCCESS_DURATION_MS
-    : STICKY_DURATION_MS;
+  if (type === "success" || type === "info") return SUCCESS_DURATION_MS;
+  if (type === "error") return 0;
+  return WARNING_DURATION_MS;
 }
 
 export const useToastStore = create<ToastState>((set) => ({

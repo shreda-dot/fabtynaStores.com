@@ -42,9 +42,11 @@ export default function AdjustmentDetailPage() {
 
   const voidMutation = useMutation({
     mutationFn: () =>
-      isMockApiMode
-        ? adjustmentsApi.void(id)
-        : writeFlow.run((key) => adjustmentsApi.void(id, key)),
+      writeFlow.run(
+        "adjustment.void",
+        (key) => isMockApiMode ? adjustmentsApi.void(id) : adjustmentsApi.void(id, key),
+        { reference: adjustment.data?.id.slice(0, 8) },
+      ),
     onSuccess: (result) => {
       if (!result) return;
       void queryClient.invalidateQueries({ queryKey: queryKeys.adjustments.all });

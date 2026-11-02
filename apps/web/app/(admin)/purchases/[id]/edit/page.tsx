@@ -367,7 +367,6 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
     void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
-    toast.success("Purchase amended — a new purchase was recorded and the original voided.");
     draft.clear();
     router.push(`/purchases/${updated.id}?replaced=${purchase.id}`);
   }
@@ -598,8 +597,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       if (!ok) return;
       const previewTotal = totalKobo;
       const run = async () => {
-        const result = await flow.run((key) =>
-          purchasesApi.update(purchase.id, input, key),
+        const result = await flow.run(
+          "purchase.amend",
+          (key) => purchasesApi.update(purchase.id, input, key),
+          (amended) => ({ reference: amended.reference ?? amended.id.slice(0, 8) }),
         );
         if (result) afterAmended(result, previewTotal);
       };

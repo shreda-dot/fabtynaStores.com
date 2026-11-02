@@ -27,7 +27,6 @@ import { toUserMessage } from "@/lib/api/client";
 import type { ProductOwnerDto } from "@/lib/api/empties.api";
 import { formatEmptiesCount } from "@/lib/empties-overview";
 import { queryKeys } from "@/lib/query-keys";
-import { toast } from "@/stores/toast-store";
 
 const PAGE_SIZE = 50;
 
@@ -51,14 +50,15 @@ function ProductOwnerRow({
       if (flow.status === "unknown" && !isRetry) return undefined;
       if (flow.status === "failed" && !isRetry) flow.edit();
       setLastOwnerId(ownerId);
-      return flow.run((key) =>
-        emptiesApi.assignProductOwner(product.productId, ownerId === "" ? null : ownerId, key),
+      return flow.run(
+        ownerId === "" ? "empties.productOwner.unassign" : "empties.productOwner.assign",
+        (key) => emptiesApi.assignProductOwner(product.productId, ownerId === "" ? null : ownerId, key),
+        { name: product.productName },
       );
     },
     onSuccess: async (result) => {
       if (!result) return;
       setSelectedOwnerId(result.ownerId ?? "");
-      toast.success(`${product.productName} brewery assignment saved.`);
       await onSaved();
     },
   });
@@ -103,11 +103,6 @@ function ProductOwnerRow({
             ))}
           </Select>
         </FormField>
-        {flow.status === "success" && (
-          <p role="status" className="text-sm font-medium text-success">
-            Saved
-          </p>
-        )}
         {flow.status !== "success" && flow.status !== "idle" && (
           <WriteFlowStatus
             flow={flow}

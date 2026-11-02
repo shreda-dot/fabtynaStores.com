@@ -28,7 +28,7 @@ import { WriteFlowStatus } from "@/components/write-flow-status";
 import { useWriteFlow } from "@/hooks/use-write-flow";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { accountingApi, isMockApiMode, loansApi } from "@/lib/api";
-import type { LoanDetailDto, SavedRepaymentDto } from "@/lib/api/loans.api";
+import type { LoanDetailDto } from "@/lib/api/loans.api";
 import { ApiError, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { invalidateReportsAndBalances } from "@/lib/invalidate-after-write";
@@ -156,7 +156,6 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
   const chargeFlow = useWriteFlow();
   const [lastRepayment, setLastRepayment] = useState<RepaymentInput | null>(null);
   const [lastCharge, setLastCharge] = useState<ChargeInput | null>(null);
-  const [savedRepayment, setSavedRepayment] = useState<SavedRepaymentDto | null>(null);
 
   function invalidate() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.loans.all });
@@ -168,14 +167,15 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
   const repayMutation = useMutation({
     mutationFn: async (input: RepaymentInput) => {
       setLastRepayment(input);
-      return isMockApiMode
-        ? loansApi.recordRepayment(loan.id, input)
-        : repayFlow.run((key) => loansApi.recordRepayment(loan.id, input, key));
+      return repayFlow.run(
+        "loan.repayment",
+        (key) => isMockApiMode ? loansApi.recordRepayment(loan.id, input) : loansApi.recordRepayment(loan.id, input, key),
+        { name: loan.lenderName },
+      );
     },
     onSuccess: (result) => {
       if (!result) return;
       invalidate();
-      setSavedRepayment(result.savedRepayment ?? null);
       setRepayAmount("");
       setRepayInterest("0");
       setRepayNote("");
@@ -187,9 +187,11 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
   const chargeMutation = useMutation({
     mutationFn: async (input: ChargeInput) => {
       setLastCharge(input);
-      return isMockApiMode
-        ? loansApi.addCharge(loan.id, input)
-        : chargeFlow.run((key) => loansApi.addCharge(loan.id, input, key));
+      return chargeFlow.run(
+        "loan.charge",
+        (key) => isMockApiMode ? loansApi.addCharge(loan.id, input) : loansApi.addCharge(loan.id, input, key),
+        { name: loan.lenderName },
+      );
     },
     onSuccess: (result) => {
       if (!result) return;
@@ -261,7 +263,6 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
         description:
           "This cannot be undone yet. There is no way to reverse a loan repayment, so check every detail.",
         confirmLabel: "Record repayment",
-        successMessage: `Repayment of ${formatNaira(amount)} recorded for ${loan.lenderName}.`,
         details: (
           <dl className="space-y-1.5 text-sm">
             <SummaryRow label="Lender">{loan.lenderName}</SummaryRow>
@@ -342,7 +343,6 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
         title: "Add this charge?",
         description: "Extra fees or penalties increase what you owe.",
         confirmLabel: "Add charge",
-        successMessage: `Charge of ${formatNaira(amount)} added to the ${loan.lenderName} loan.`,
         details: (
           <dl className="space-y-1.5 text-sm">
             <SummaryRow label="Lender">{loan.lenderName}</SummaryRow>
@@ -547,15 +547,6 @@ function LoanDetail({ loan }: { loan: LoanDetailDto }) {
                 />
               </FormField>
 
-              {savedRepayment && (
-                <p
-                  role="status"
-                  className="rounded-sm border border-success/30 bg-success-surface px-2 py-1 text-xs text-success"
-                >
-                  Saved. The server recorded {formatNaira(savedRepayment.amountKobo)}, of
-                  which {formatNaira(savedRepayment.interestPortionKobo)} is interest.
-                </p>
-              )}
               {repayError && (
                 <p role="alert" className="text-sm text-danger">
                   {repayError}

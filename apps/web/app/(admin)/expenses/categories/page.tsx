@@ -52,7 +52,15 @@ export default function ExpenseCategoriesPage() {
       if (flow.status === "unknown" && !isRetry) return undefined;
       if (flow.status === "failed" && !isRetry) flow.edit();
       setLastOperation(operation);
-      return flow.run(async (key) => {
+      const operationKey =
+        operation.kind === "create"
+          ? "expenseCategory.create"
+          : operation.kind === "rename"
+            ? "expenseCategory.rename"
+            : operation.isActive
+              ? "expenseCategory.reactivate"
+              : "expenseCategory.deactivate";
+      return flow.run(operationKey, async (key) => {
         if (operation.kind === "create") {
           if (!expensesApi.createCategory) throw new Error("Category creation is unavailable.");
           return expensesApi.createCategory(operation.name, key);
@@ -63,7 +71,7 @@ export default function ExpenseCategoriesPage() {
         }
         if (!expensesApi.setCategoryActive) throw new Error("Category activation is unavailable.");
         return expensesApi.setCategoryActive(operation.id, operation.isActive, key);
-      });
+      }, { name: operation.kind === "active" ? undefined : operation.name });
     },
     onSuccess: async (result) => {
       if (!result) return;

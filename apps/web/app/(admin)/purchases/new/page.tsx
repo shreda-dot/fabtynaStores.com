@@ -227,9 +227,6 @@ export default function NewPurchasePage() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
-    toast.success(
-      `Purchase ${purchase.reference ?? purchase.id.slice(0, 8)} received — ${formatNaira(BigInt(purchase.totalKobo))}.`,
-    );
     draft.clear();
     router.push(`/purchases/${purchase.id}`);
   }
@@ -472,7 +469,11 @@ export default function NewPurchasePage() {
       if (!ok) return;
       const previewTotal = totalKobo;
       const run = async () => {
-        const purchase = await flow.run((key) => purchasesApi.create(input, key));
+        const purchase = await flow.run(
+          "purchase.create",
+          (key) => purchasesApi.create(input, key),
+          (created) => ({ reference: created.reference ?? created.id.slice(0, 8) }),
+        );
         if (purchase) afterCreated(purchase, previewTotal);
       };
       retrySubmit.current = run;

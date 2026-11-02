@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { Modal } from "./modal";
 import { Button } from "./button";
-import { toast } from "@/stores/toast-store";
 import { useConfirmStore, type ConfirmOptions } from "@/stores/confirm-store";
 import { toTechnicalDetail, toUserMessage } from "@/lib/api/client";
 
@@ -42,7 +41,6 @@ function ConfirmDialog({
     setError("");
     try {
       await current.onConfirm();
-      if (current.successMessage) toast.success(current.successMessage);
       settle(true);
     } catch (cause) {
       setError(toUserMessage(cause));

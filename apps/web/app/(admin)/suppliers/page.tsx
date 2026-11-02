@@ -40,6 +40,7 @@ import type {
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
+import { notifyWriteSuccess } from "@/lib/write-messages";
 import { useUIStore } from "@/stores/ui-store";
 
 export default function SuppliersPage() {
@@ -84,9 +85,12 @@ export default function SuppliersPage() {
       id
         ? suppliersApi.update(id, input, key)
         : suppliersApi.create(input, key),
-    onSuccess: async () => {
+    onSuccess: async (supplier, variables) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
       saveIntent.current.markSucceeded();
+      notifyWriteSuccess(variables.id ? "supplier.update" : "supplier.create", {
+        name: supplier.name,
+      });
       closeForm();
     },
   });
@@ -166,7 +170,10 @@ export default function SuppliersPage() {
       });
       intent.markSucceeded();
       actionIntents.current.delete(intentId);
-      toast.success(`${row.name} ${active ? "reactivated" : "deactivated"}`);
+      notifyWriteSuccess(
+        active ? "supplier.reactivate" : "supplier.deactivate",
+        { name: row.name },
+      );
     } catch (error) {
       toast.error(toUserMessage(error));
     }

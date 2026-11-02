@@ -12,6 +12,7 @@ import { customersApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { toast } from "@/stores/toast-store";
+import { notifyWriteSuccess } from "@/lib/write-messages";
 
 /**
  * Creates a customer without leaving the current screen (e.g. a sale form), so
@@ -35,7 +36,7 @@ export function QuickAddCustomerDialog({
     mutationFn: (input: CreateCustomerDto) => customersApi.create(input),
     onSuccess: (customer) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
-      toast.success(`${customer.name} added.`);
+      notifyWriteSuccess("customer.create", { name: customer.name });
       onCreated(customer);
       onClose();
     },

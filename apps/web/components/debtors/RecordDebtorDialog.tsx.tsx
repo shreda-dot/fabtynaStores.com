@@ -13,7 +13,6 @@ import { WriteFlowStatus } from "@/components/write-flow-status";
 import { useWriteFlow } from "@/hooks/use-write-flow";
 import { customersApi, productsApi, salesApi } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
-import { toast } from "@/stores/toast-store";
 
 /**
  * Converts what the user typed in naira ("1,200" or "1200.50") into a kobo
@@ -100,8 +99,9 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
     const run = async () => {
       // One key for this submission: a retry after an unknown outcome replays
       // the first request instead of recording a second debt.
-      const sale = await writeFlow.run((idempotencyKey) =>
-        salesApi.create(
+      const sale = await writeFlow.run(
+        "sale.create",
+        (idempotencyKey) => salesApi.create(
           {
             customerId: input.customerId,
             customerName: null,
@@ -122,6 +122,7 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
           },
           idempotencyKey,
         ),
+        (created) => ({ reference: created.reference ?? created.id.slice(0, 8) }),
       );
       if (sale === undefined) return;
 
@@ -129,11 +130,6 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
-      const total = BigInt(input.unitPriceKobo) * BigInt(input.quantity);
-      const name =
-        retailCustomers.find((c) => c.id === input.customerId)?.name ??
-        "customer";
-      toast.success(`Debt of ${formatNaira(total)} recorded for ${name}.`);
       close();
     };
     retrySubmit.current = run;

@@ -40,6 +40,7 @@ import { createIdempotencyIntent, type IdempotencyIntent } from "@/lib/api/idemp
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
+import { notifyWriteSuccess } from "@/lib/write-messages";
 import { useUIStore } from "@/stores/ui-store";
 
 function categoryLabel(category: ProductRecordDto["category"]): string {
@@ -104,9 +105,12 @@ export default function ProductsPage() {
       input: CreateProductDto;
       key: string;
     }) => (id ? productsApi.update(id, input, key) : productsApi.create(input, key)),
-    onSuccess: async () => {
+    onSuccess: async (product, variables) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
       saveIntent.current.markSucceeded();
+      notifyWriteSuccess(variables.id ? "product.update" : "product.create", {
+        name: product.name,
+      });
       closeForm();
     },
   });
@@ -189,7 +193,10 @@ export default function ProductsPage() {
       });
       intent.markSucceeded();
       actionIntents.current.delete(intentId);
-      toast.success(isDelete ? `${product.name} deactivated` : `${product.name} reactivated`);
+      notifyWriteSuccess(
+        isDelete ? "product.deactivate" : "product.reactivate",
+        { name: product.name },
+      );
     } catch (err) {
       toast.error(toUserMessage(err));
     }

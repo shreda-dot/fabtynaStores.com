@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { AuthApiError, authApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { toast } from "@/stores/toast-store";
+import { notifyWriteSuccess } from "@/lib/write-messages";
 
 export default function ChangePasswordPage() {
   const router = useRouter();
@@ -29,7 +29,7 @@ export default function ChangePasswordPage() {
     setPending(true);
     try {
       await authApi.changePassword(currentPassword, newPassword);
-      toast.success("Password changed. Other sessions have been signed out.");
+      notifyWriteSuccess("password.change");
       router.replace("/dashboard");
     } catch (cause) {
       if (cause instanceof AuthApiError && cause.kind === "network") {

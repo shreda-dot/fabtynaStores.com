@@ -71,9 +71,9 @@ describe("WriteFlowStatus", () => {
     await waitFor(() => expect(status.dismiss).toHaveBeenCalled());
   });
 
-  it("reports a success that arrived after the client stopped waiting", () => {
+  it("does not duplicate the toast for a success that arrived late", () => {
     show(flow({ status: "success", reconciled: true }));
 
-    expect(screen.getByRole("status").textContent).toContain("Saved.");
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

@@ -132,10 +132,22 @@ function OwnersSection({
       if (flow.status === "unknown" && !isRetry) return undefined;
       if (flow.status === "failed" && !isRetry) flow.edit();
       setLastOperation(operation);
-      return flow.run((key) => {
+      const operationKey =
+        operation.kind === "create"
+          ? "empties.owner.create"
+          : operation.kind === "rename"
+            ? "empties.owner.rename"
+            : operation.isActive
+              ? "empties.owner.reactivate"
+              : "empties.owner.deactivate";
+      return flow.run(operationKey, (key) => {
         if (operation.kind === "create") return emptiesApi.createOwner({ name: operation.name }, key);
         if (operation.kind === "rename") return emptiesApi.renameOwner(operation.id, operation.name, key);
         return emptiesApi.setOwnerActive(operation.id, operation.isActive, key);
+      }, {
+        name: operation.kind === "active"
+          ? owners.find((owner) => owner.id === operation.id)?.name
+          : operation.name,
       });
     },
     onSuccess: async (result) => {
@@ -304,7 +316,15 @@ function TypesSection({
       if (flow.status === "unknown" && !isRetry) return undefined;
       if (flow.status === "failed" && !isRetry) flow.edit();
       setLastOperation(operation);
-      return flow.run((key) => {
+      const operationKey =
+        operation.kind === "create"
+          ? "empties.type.create"
+          : operation.kind === "patch"
+            ? "empties.type.update"
+            : operation.isActive
+              ? "empties.type.reactivate"
+              : "empties.type.deactivate";
+      return flow.run(operationKey, (key) => {
         if (operation.kind === "create") {
           return emptiesApi.createType(
             {
@@ -324,6 +344,10 @@ function TypesSection({
           );
         }
         return emptiesApi.setTypeActive(operation.id, operation.isActive, key);
+      }, {
+        name: operation.kind === "active"
+          ? types.find((type) => type.id === operation.id)?.label
+          : operation.label,
       });
     },
     onSuccess: async (result) => {

@@ -7,6 +7,7 @@ import { resetDemoData } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { confirm } from "@/stores/confirm-store";
 import { toast } from "@/stores/toast-store";
+import { notifyWriteSuccess } from "@/lib/write-messages";
 
 export function DemoDataReset() {
   const queryClient = useQueryClient();
@@ -24,7 +25,7 @@ export function DemoDataReset() {
     try {
       resetDemoData();
       queryClient.clear();
-      toast.success("Demo data reset", "The original sample data has been restored.");
+      notifyWriteSuccess("demo.reset");
     } catch (err) {
       toast.error(toUserMessage(err));
     }

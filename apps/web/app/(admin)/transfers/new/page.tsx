@@ -99,18 +99,17 @@ export default function NewTransferPage() {
   const createMutation = useMutation({
     mutationFn: async (input: CreateTransferDto) => {
       setLastInput(input);
-      return isMockApiMode
-        ? transfersApi.create(input)
-        : writeFlow.run((key) => transfersApi.create(input, key));
+      return writeFlow.run(
+        "transfer.create",
+        (key) => isMockApiMode ? transfersApi.create(input) : transfersApi.create(input, key),
+        (transfer) => ({ reference: transfer.reference ?? transfer.id.slice(0, 8) }),
+      );
     },
     onSuccess: (transfer) => {
       if (!transfer) return;
       void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
-      toast.success(
-        `Transfer ${transfer.reference ?? transfer.id.slice(0, 8)} recorded.`,
-      );
       router.push(`/transfers/${transfer.id}`);
     },
     onError: (error) => {

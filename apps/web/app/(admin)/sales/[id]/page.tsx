@@ -35,7 +35,6 @@ import {
 } from "@/lib/api/sales.api";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
-import { toast } from "@/stores/toast-store";
 
 const REASON_MAX = 500;
 
@@ -298,11 +297,14 @@ export default function SaleDetailPage() {
     });
     if (!ok) return;
     const submit = async () => {
-      const result = await voidFlow.run((key) => salesApi.void(id, key));
+      const result = await voidFlow.run(
+        "sale.void",
+        (key) => salesApi.void(id, key),
+        { reference },
+      );
       if (result) {
         invalidateAll();
         void sale.refetch();
-        toast.success(`Sale ${reference} voided.`);
       }
     };
     retryVoid.current = submit;
@@ -367,15 +369,15 @@ export default function SaleDetailPage() {
 
     const paidAt = new Date().toISOString();
     const submit = async () => {
-      const result = await payFlow.run((key) =>
-        salesApi.recordPayment(id, amountKobo, paidAt, selectedAccountId, key),
+      const result = await payFlow.run(
+        "sale.payment",
+        (key) => salesApi.recordPayment(id, amountKobo, paidAt, selectedAccountId, key),
       );
       if (result) {
         invalidateAll();
         void sale.refetch();
         setPaying(false);
         setPaymentKobo("");
-        toast.success("Payment recorded.");
       }
     };
     retryPay.current = submit;
@@ -420,15 +422,15 @@ export default function SaleDetailPage() {
     if (!ok) return;
 
     const submit = async () => {
-      const result = await reverseFlow.run((key) =>
-        salesApi.reversePayment(id, payment.id, trimmed, key),
+      const result = await reverseFlow.run(
+        "sale.payment.reverse",
+        (key) => salesApi.reversePayment(id, payment.id, trimmed, key),
       );
       if (result) {
         invalidateAll();
         void sale.refetch();
         setReversing(null);
         setReason("");
-        toast.success("Payment reversed.");
       }
     };
     retryReverse.current = submit;

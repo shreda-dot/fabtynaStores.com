@@ -32,7 +32,6 @@ import { queryKeys } from "@/lib/query-keys";
 import { selectableCategories } from "@/lib/expense-filters";
 import { useFormDraft } from "@/hooks/use-form-draft";
 import { DraftBanner } from "@/components/draft-banner";
-import { toast } from "@/stores/toast-store";
 import { useWriteFlow } from "@/hooks/use-write-flow";
 import { WriteFlowStatus } from "@/components/write-flow-status";
 
@@ -152,15 +151,13 @@ export default function NewExpensePage() {
   const createMutation = useMutation({
     mutationFn: async (input: CreateExpenseInput) => {
       setLastInput(input);
-      if (isMockApiMode) {
-        return amendId
-          ? expensesApi.amend(amendId, input)
-          : expensesApi.create(input);
-      }
-      return writeFlow.run((key): Promise<ExpenseRecordDto | ExpenseAmendResultDto> =>
-        amendId
-          ? expensesApi.amend(amendId, input, key)
-          : expensesApi.create(input, key),
+      return writeFlow.run(
+        amendId ? "expense.amend" : "expense.create",
+        (key): Promise<ExpenseRecordDto | ExpenseAmendResultDto> =>
+          amendId
+            ? isMockApiMode ? expensesApi.amend(amendId, input) : expensesApi.amend(amendId, input, key)
+            : isMockApiMode ? expensesApi.create(input) : expensesApi.create(input, key),
+        { amount: formatNaira(input.amountKobo) },
       );
     },
     onSuccess: async (result) => {
@@ -168,11 +165,6 @@ export default function NewExpensePage() {
       await queryClient.invalidateQueries({ queryKey: queryKeys.expenses.all });
       await queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
       await queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
-      toast.success(
-        amendId && "voidedExpenseId" in result
-          ? `Expense amended; original ${result.voidedExpenseId} was voided.`
-          : `Expense of ${formatNaira(amountKobo)} recorded.`,
-      );
       draft.clear();
       router.push("/expenses");
     },

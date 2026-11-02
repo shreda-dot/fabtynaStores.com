@@ -7,7 +7,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   createLagosDateTime,
-  formatNaira,
   getLagosBusinessDate,
   type CreateLoanDto,
 } from "@fabtyna/shared";
@@ -84,9 +83,11 @@ export default function NewLoanPage() {
   const createMutation = useMutation({
     mutationFn: async (input: CreateLoanDto) => {
       setLastInput(input);
-      return isMockApiMode
-        ? loansApi.create(input)
-        : writeFlow.run((key) => loansApi.create(input, key));
+      return writeFlow.run(
+        "loan.create",
+        (key) => isMockApiMode ? loansApi.create(input) : loansApi.create(input, key),
+        (loan) => ({ name: loan.lenderName }),
+      );
     },
     onSuccess: (loan) => {
       if (!loan) return;
@@ -95,9 +96,6 @@ export default function NewLoanPage() {
         queryKey: queryKeys.accounting.all,
       });
       void invalidateReportsAndBalances(queryClient);
-      toast.success(
-        `${loan.lenderName} loan recorded — ${formatNaira(principal)} borrowed.`,
-      );
       draft.clear();
       router.push(`/accounting/loans/${loan.id}`);
     },

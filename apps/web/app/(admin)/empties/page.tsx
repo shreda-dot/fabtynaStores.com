@@ -99,7 +99,16 @@ function RecordMovementPanel({
       if (flow.status === "unknown" && !isRetry) return undefined;
       if (flow.status === "failed" && !isRetry) flow.edit();
       setLastOperation(operation);
-      return flow.run((key) =>
+      const operationKey =
+        movementType === "OPENING"
+          ? "empties.opening"
+          : movementType === "RECEIVED"
+            ? "empties.received"
+            : movementType === "RETURNED_TO_OWNER"
+              ? "empties.returned"
+              : "empties.adjustment";
+      return flow.run(operationKey,
+        (key) =>
         emptiesApi.createMovement(
           {
             typeId: type.typeId,
@@ -114,7 +123,6 @@ function RecordMovementPanel({
     onSuccess: async (result) => {
       if (!result) return;
       await queryClient.invalidateQueries({ queryKey: queryKeys.empties.all });
-      toast.success(`${MOVEMENT_LABEL[movementType]} recorded.`);
       onClose();
     },
     onError: (error) => toast.error(toUserMessage(error)),
@@ -236,12 +244,11 @@ function ReverseMovementPanel({
       if (flow.status === "unknown" && !isRetry) return undefined;
       if (flow.status === "failed" && !isRetry) flow.edit();
       setLastReason(reasonText);
-      return flow.run((key) => emptiesApi.reverseMovement(movement.id, reasonText, key));
+      return flow.run("empties.movement.reverse", (key) => emptiesApi.reverseMovement(movement.id, reasonText, key));
     },
     onSuccess: async (result) => {
       if (!result) return;
       await queryClient.invalidateQueries({ queryKey: queryKeys.empties.all });
-      toast.success("Movement reversed.");
       onClose();
     },
     onError: (error) => toast.error(toUserMessage(error)),

@@ -570,8 +570,10 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
       if (!ok) return;
       const previewTotal = totalKobo;
       const run = async () => {
-        const updated = await flow.run((key) =>
-          salesApi.update(sale.id, input, key),
+        const updated = await flow.run(
+          "sale.amend",
+          (key) => salesApi.update(sale.id, input, key),
+          (amended) => ({ reference: amended.reference ?? amended.id.slice(0, 8) }),
         );
         if (!updated) return;
         if (
@@ -588,9 +590,6 @@ function SaleEditForm({ sale }: { sale: SaleDetailDto }) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.debtors.all });
         void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
         void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
-        toast.success(
-          `${originalReference} was voided and replaced by ${updated.reference ?? "a new sale"}.`,
-        );
         const voidedId = updated.voidedSaleId;
         draft.clear();
         router.push(

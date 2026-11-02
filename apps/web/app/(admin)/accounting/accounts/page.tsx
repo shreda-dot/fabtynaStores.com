@@ -368,8 +368,39 @@ export default function AccountsPage() {
         }
         return value;
       };
-      if (isMockApiMode) return (await execute()) ?? true;
-      const result = await writeFlow.run(async (key) => ({ value: await execute(key) }));
+      const operationKey =
+        operation.kind === "create"
+          ? "account.create"
+          : operation.kind === "update"
+            ? "account.rename"
+            : operation.kind === "deactivate"
+              ? "account.deactivate"
+              : operation.kind === "reactivate"
+                ? "account.reactivate"
+                : operation.kind === "opening"
+                  ? "account.opening"
+                  : operation.kind === "reconcile"
+                    ? "account.reconcile"
+                    : operation.kind === "transfer"
+                      ? "account.transfer"
+                      : operation.kind === "reverseTransfer"
+                        ? "account.transfer.reverse"
+                        : operation.kind === "reverseEntry"
+                          ? "account.entry.reverse"
+                          : "account.movement";
+      const name =
+        operation.kind === "create" || operation.kind === "update"
+          ? operation.input.name
+          : operation.kind === "opening" || operation.kind === "reconcile"
+            ? selectedAccount?.name
+            : "id" in operation
+              ? accounts.find((account) => account.id === operation.id)?.name
+              : undefined;
+      const result = await writeFlow.run(
+        operationKey,
+        async (key) => ({ value: await execute(key) }),
+        { name },
+      );
       if (!result) return null;
       if (operation.kind === "transfer" && typeof result.value === "object" && result.value !== null && "id" in result.value) {
         setLastTransferId(String(result.value.id));

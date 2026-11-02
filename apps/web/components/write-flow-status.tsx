@@ -146,17 +146,5 @@ export function WriteFlowStatus({
     );
   }
 
-  if (flow.status === "success" && flow.reconciled) {
-    return (
-      <p
-        role="status"
-        className="rounded-md border border-border bg-muted p-3 text-sm text-foreground"
-      >
-        Saved. The request finished after the page stopped waiting, and the lists have been
-        refreshed.
-      </p>
-    );
-  }
-
   return null;
 }

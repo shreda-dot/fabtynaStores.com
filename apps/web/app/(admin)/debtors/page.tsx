@@ -29,6 +29,7 @@ import { toUserMessage } from "@/lib/api/client";
 import { createIdempotencyIntent, type IdempotencyIntent } from "@/lib/api/idempotency-intent";
 import { queryKeys } from "@/lib/query-keys";
 import { confirm } from "@/stores/confirm-store";
+import { notifyWriteSuccess } from "@/lib/write-messages";
 import type { PaymentMethod } from "@fabtyna/shared";
 import type { DebtorDto, DebtorSaleDto } from "@/lib/api/debtors.api";
 
@@ -96,6 +97,7 @@ export default function DebtorsPage() {
         queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all }),
       ]);
       paymentIntent.current.markSucceeded();
+      notifyWriteSuccess("debtor.payment");
       setPayingSaleId(null);
       setPaymentKobo("");
       setAccountId("");

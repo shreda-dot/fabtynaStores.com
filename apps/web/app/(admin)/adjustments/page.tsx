@@ -70,11 +70,13 @@ export default function AdjustmentsPage() {
 
   const voidMutation = useMutation({
     mutationFn: async (adjustmentId: string) => {
-      if (isMockApiMode) return adjustmentsApi.void(adjustmentId);
       if (writeFlow.status === "unknown" && adjustmentId !== lastVoidId) return undefined;
       if (writeFlow.status === "failed" && adjustmentId !== lastVoidId) writeFlow.edit();
       setLastVoidId(adjustmentId);
-      return writeFlow.run((key) => adjustmentsApi.void(adjustmentId, key));
+      return writeFlow.run(
+        "adjustment.void",
+        (key) => isMockApiMode ? adjustmentsApi.void(adjustmentId) : adjustmentsApi.void(adjustmentId, key),
+      );
     },
     onSuccess: (result) => {
       if (!result) return;

@@ -4,6 +4,12 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import { useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api/client";
 import { createWriteFlow, type WriteFlowStatus } from "@/lib/write-flow";
+import {
+  notifyWriteSuccess,
+  type WriteMessageValue,
+  type WriteOperation,
+  type WriteMessageValues,
+} from "@/lib/write-messages";
 
 export const SAVING_AFTER_MS = 8_000;
 export const STILL_WORKING_AFTER_MS = 30_000;
@@ -30,7 +36,9 @@ export type UseWriteFlow = {
    * settles later (the API transaction keeps running; it is never aborted).
    */
   run<T>(
+    operation: WriteOperation,
     action: (idempotencyKey: string) => Promise<T>,
+    values?: WriteMessageValue<T>,
     options?: { onLate?: (result: LateWriteResult<T>) => void },
   ): Promise<T | undefined>;
   /** Call when the user edits the form: renews the key. */
@@ -72,7 +80,9 @@ export function useWriteFlow(): UseWriteFlow {
 
   const run = useCallback(
     async <T,>(
+      operation: WriteOperation,
       action: (idempotencyKey: string) => Promise<T>,
+      values?: WriteMessageValue<T>,
       options?: { onLate?: (result: LateWriteResult<T>) => void },
     ) => {
       const key = flow.begin();
@@ -80,6 +90,7 @@ export function useWriteFlow(): UseWriteFlow {
       try {
         const value = await action(key);
         flow.succeed();
+        notifyWriteSuccess(operation, resolveValues(value, values));
         return value;
       } catch (cause) {
         const status = flow.fail(cause);
@@ -89,7 +100,10 @@ export function useWriteFlow(): UseWriteFlow {
           // replace "we are not sure" with the true result.
           void cause.lateOutcome.then((outcome) => {
             if (outcome.ok) {
-              if (flow.lateSucceed(key)) void queryClient.invalidateQueries();
+              if (flow.lateSucceed(key)) {
+                notifyWriteSuccess(operation, resolveValues(outcome.value as T, values));
+                void queryClient.invalidateQueries();
+              }
               options?.onLate?.({ ok: true, value: outcome.value as T });
             } else {
               flow.lateFail(key, outcome.cause);
@@ -123,4 +137,11 @@ export function useWriteFlow(): UseWriteFlow {
     }),
     [state.status, state.error, state.reconciled, phase, run, edit, reset, dismiss],
   );
+}
+
+function resolveValues<T>(
+  value: T,
+  values: WriteMessageValue<T> | undefined,
+): WriteMessageValues {
+  return typeof values === "function" ? values(value) : values ?? {};
 }

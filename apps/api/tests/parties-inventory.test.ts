@@ -133,6 +133,33 @@ describe("catalogue and inventory read APIs", () => {
 });
 
 describe("customer and supplier APIs", () => {
+  it("paginates customers using the customer-name cursor", async () => {
+    const prefix = `5A cursor ${newId("party")}`;
+    const first = await call(h.app, "POST", "/customers", { name: `${prefix} A` });
+    const second = await call(h.app, "POST", "/customers", { name: `${prefix} B` });
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+
+    const firstPage = await call(
+      h.app,
+      "GET",
+      `/customers?q=${encodeURIComponent(prefix)}&limit=1`,
+    );
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.items).toHaveLength(1);
+    expect(firstPage.body.nextCursor).toEqual(expect.any(String));
+
+    const secondPage = await call(
+      h.app,
+      "GET",
+      `/customers?q=${encodeURIComponent(prefix)}&limit=1&cursor=${encodeURIComponent(firstPage.body.nextCursor as string)}`,
+    );
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.body.items).toHaveLength(1);
+    expect(secondPage.body.items[0].id).toBe(second.body.id);
+    expect(secondPage.body.nextCursor).toBeNull();
+  });
+
   it("patches and deactivates/reactivates customers and suppliers", async () => {
     const customer = await call(h.app, "POST", "/customers", { name: `5A party ${newId("customer")}` });
     expect(customer.status).toBe(201);

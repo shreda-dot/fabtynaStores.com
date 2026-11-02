@@ -4,6 +4,7 @@ import { AppError } from "../../lib/errors.js";
 import {
   addOneDay,
   decodeCursor,
+  decodeIntegerCursor,
   encodeCursor,
   lagosDayStartIso,
   likePattern,
@@ -321,7 +322,7 @@ export async function listDebtors(
     conditions.push(Prisma.sql`(eligible.name ILIKE ${pattern} ESCAPE '\\' OR eligible.phone ILIKE ${pattern} ESCAPE '\\')`);
   }
   if (query.minBalanceKobo) conditions.push(Prisma.sql`eligible.balance >= ${BigInt(query.minBalanceKobo)}`);
-  const cursor = query.cursor ? decodeCursor(query.cursor) : null;
+  const cursor = query.cursor ? decodeIntegerCursor(query.cursor) : null;
   if (cursor) {
     conditions.push(Prisma.sql`(eligible.balance < ${BigInt(cursor.at)} OR (eligible.balance = ${BigInt(cursor.at)} AND eligible.id > ${cursor.id}))`);
   }
@@ -381,7 +382,7 @@ export async function listPayables(prisma: PrismaClient, query: { q?: string; ov
     conditions.push(Prisma.sql`(eligible.name ILIKE ${pattern} ESCAPE '\\' OR eligible.phone ILIKE ${pattern} ESCAPE '\\')`);
   }
   if (query.overdueOnly) conditions.push(Prisma.sql`eligible.has_overdue`);
-  const cursor = query.cursor ? decodeCursor(query.cursor) : null;
+  const cursor = query.cursor ? decodeIntegerCursor(query.cursor) : null;
   if (cursor) conditions.push(Prisma.sql`(eligible.balance < ${BigInt(cursor.at)} OR (eligible.balance = ${BigInt(cursor.at)} AND eligible.id > ${cursor.id}))`);
   const where = conditions.length ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}` : Prisma.empty;
   const rows = await prisma.$queryRaw<Array<{

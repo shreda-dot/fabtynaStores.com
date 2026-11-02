@@ -18,10 +18,15 @@ export function addOneDay(date: string): string {
 }
 
 /** `timestamp without time zone` columns hold UTC; compare against a UTC literal. */
-export const utcTimestamp = (iso: string): Prisma.Sql =>
-  Prisma.sql`(${iso}::timestamptz AT TIME ZONE 'UTC')`;
+export const utcTimestamp = (iso: string): Prisma.Sql => {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    throw validationError("The cursor is not valid.", { field: "cursor" });
+  }
+  return Prisma.sql`(${date.toISOString()}::timestamptz AT TIME ZONE 'UTC')`;
+};
 
-/** Keyset cursor on (timestamp, id), newest first. */
+/** Keyset cursor on an ordered value and id. */
 export interface Cursor {
   at: string;
   id: string;
@@ -34,17 +39,21 @@ export function encodeCursor(cursor: Cursor): string {
 export function decodeCursor(raw: string): Cursor {
   try {
     const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Partial<Cursor>;
-    if (
-      typeof parsed.at === "string" &&
-      typeof parsed.id === "string" &&
-      !Number.isNaN(new Date(parsed.at).getTime())
-    ) {
-      return { at: new Date(parsed.at).toISOString(), id: parsed.id };
+    if (typeof parsed.at === "string" && typeof parsed.id === "string") {
+      return { at: parsed.at, id: parsed.id };
     }
   } catch {
     // fall through to the error below
   }
   throw validationError("The cursor is not valid.", { field: "cursor" });
+}
+
+export function decodeIntegerCursor(raw: string): Cursor {
+  const cursor = decodeCursor(raw);
+  if (!/^-?\d+$/.test(cursor.at)) {
+    throw validationError("The cursor is not valid.", { field: "cursor" });
+  }
+  return cursor;
 }
 
 /** Escapes `%`, `_` and `\` so a search term is matched literally. */

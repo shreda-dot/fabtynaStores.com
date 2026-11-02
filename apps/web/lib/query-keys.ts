@@ -146,5 +146,13 @@ export const queryKeys = {
     productOwners: (filters: unknown) => key("empties", "product-owners", filters),
     // Product-owner infinite data is distinct from both its list and movement pages.
     productOwnerPages: (filters: unknown) => key("empties", "product-owner-pages", filters),
+    customerBalances: (filters: unknown) =>
+      key("empties", "customer-balances", filters),
+    customerBalancePages: (filters: unknown) =>
+      key("empties", "customer-balance-pages", filters),
+    customerMovements: (filters: unknown) =>
+      key("empties", "customer-movements", filters),
+    customerMovementPages: (filters: unknown) =>
+      key("empties", "customer-movement-pages", filters),
   },
 };

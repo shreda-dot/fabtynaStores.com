@@ -4,6 +4,7 @@ import { validationError } from "../../lib/errors.js";
 import {
   balanceListQuerySchema,
   assignProductOwnerSchema,
+  createCustomerMovementSchema,
   createMovementSchema,
   createOwnerSchema,
   createTypeSchema,
@@ -11,11 +12,14 @@ import {
   emptiesIdempotencyKeySchema,
   emptiesProductIdParamsSchema,
   listMovementsQuerySchema,
+  listCustomerBalancesQuerySchema,
+  listCustomerMovementsQuerySchema,
   ownerListQuerySchema,
   patchTypeSchema,
   productOwnerListQuerySchema,
   renameOwnerSchema,
   reverseMovementSchema,
+  reverseCustomerMovementSchema,
   typeListQuerySchema,
 } from "./empties.schemas.js";
 import type { EmptiesService } from "./empties.service.js";
@@ -180,5 +184,47 @@ export function registerEmptiesRoutes(
     const parsed = reverseMovementSchema.safeParse(request.body);
     if (!parsed.success) throw validationError("The reversal is not valid.", parsed.error.issues);
     return send(reply, await deps.service.reverseMovement(id, parsed.data, actor, readKey(request)));
+  });
+
+  // ---------- customer-owned empties ----------
+  app.get("/empties/customer-balances", async (request, reply) => {
+    requireActor(request);
+    const parsed = listCustomerBalancesQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      throw validationError("The customer empties-balance filter is not valid.", parsed.error.issues);
+    }
+    return reply.status(200).send(await deps.service.listCustomerBalances(parsed.data));
+  });
+
+  app.get("/empties/customer-movements", async (request, reply) => {
+    requireActor(request);
+    const parsed = listCustomerMovementsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      throw validationError("The customer empties-movement filter is not valid.", parsed.error.issues);
+    }
+    return reply.status(200).send(await deps.service.listCustomerMovements(parsed.data));
+  });
+
+  app.post("/empties/customer-movements", async (request, reply) => {
+    const actor = requireActor(request);
+    const parsed = createCustomerMovementSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw validationError("The customer empties movement is not valid.", parsed.error.issues);
+    }
+    return send(
+      reply,
+      await deps.service.createCustomerMovement(parsed.data, actor, readKey(request)),
+    );
+  });
+
+  app.post("/empties/customer-movements/:id/reverse", async (request, reply) => {
+    const actor = requireActor(request);
+    const id = readId(request);
+    const parsed = reverseCustomerMovementSchema.safeParse(request.body);
+    if (!parsed.success) throw validationError("The reversal is not valid.", parsed.error.issues);
+    return send(
+      reply,
+      await deps.service.reverseCustomerMovement(id, parsed.data, actor, readKey(request)),
+    );
   });
 }

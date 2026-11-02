@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  customerBalancesQuery,
+  customerMovementsQuery,
+  emptiesRealApi,
+} from "./empties.real";
+import { customersRealApi } from "./customers.real";
 import {
   balancesQuery,
   movementsQuery,
@@ -74,5 +80,71 @@ describe("empties product-owner query string", () => {
         limit: 50,
       }),
     ).toBe("?q=lager&assigned=unassigned&cursor=product-2&limit=50");
+  });
+});
+
+describe("customer-owned empties query strings", () => {
+  it("encodes searchable balances and defaults to owing customers", () => {
+    expect(customerBalancesQuery({ q: "  A&B  ", ownerId: "owner-1" })).toBe(
+      "?ownerId=owner-1&q=A%26B&onlyOwing=true&limit=50",
+    );
+    expect(
+      customerBalancesQuery({
+        customerId: "customer-1",
+        typeId: "type-1",
+        onlyOwing: false,
+        cursor: "next",
+        limit: 25,
+      }),
+    ).toBe(
+      "?customerId=customer-1&typeId=type-1&onlyOwing=false&cursor=next&limit=25",
+    );
+  });
+
+  it("encodes movement date, customer, type, cursor and limit filters", () => {
+    expect(
+      customerMovementsQuery({
+        from: "2026-10-01",
+        to: "2026-10-31",
+        customerId: "customer-1",
+        typeId: "type-1",
+        cursor: "next",
+        limit: 25,
+      }),
+    ).toBe(
+      "?from=2026-10-01&to=2026-10-31&customerId=customer-1&typeId=type-1&cursor=next&limit=25",
+    );
+  });
+
+  it("uses the cursor-paged active customer API for the customer picker", async () => {
+    const previousBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+    process.env.NEXT_PUBLIC_API_BASE_URL = "http://api.test";
+    const fetchMock = vi.fn().mockImplementation(
+      async () => new Response(JSON.stringify({ items: [], nextCursor: null }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await emptiesRealApi.listCustomerBalances({ q: "phone search", limit: 50 });
+      await customersRealApi.listPage({
+        search: "  phone search  ",
+        includeDeleted: false,
+        limit: 25,
+        cursor: "customer-next",
+      });
+      const requestedUrls = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(requestedUrls[0]).toBe(
+        "http://api.test/empties/customer-balances?q=phone+search&onlyOwing=true&limit=50",
+      );
+      expect(requestedUrls[1]).toBe(
+        "http://api.test/customers?q=phone+search&active=true&limit=25&cursor=customer-next",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      if (previousBaseUrl === undefined) delete process.env.NEXT_PUBLIC_API_BASE_URL;
+      else process.env.NEXT_PUBLIC_API_BASE_URL = previousBaseUrl;
+    }
   });
 });

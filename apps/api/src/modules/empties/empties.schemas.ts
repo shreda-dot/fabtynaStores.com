@@ -29,6 +29,13 @@ export const emptiesMovementTypeSchema = z.enum([
   "ADJUSTMENT",
 ]);
 
+export const emptiesCustomerMovementTypeSchema = z.enum([
+  "TAKEN",
+  "RETURNED",
+  "KEPT",
+  "ADJUSTMENT",
+]);
+
 const includeInactiveSchema = z
   .enum(["true", "false"])
   .transform((value) => value === "true")
@@ -147,3 +154,71 @@ export const listMovementsQuerySchema = z
     path: ["from"],
   });
 export type ListMovementsQuery = z.infer<typeof listMovementsQuerySchema>;
+
+// ---------- customer movements ----------
+const customerQuantitySchema = z
+  .number()
+  .int()
+  .safe()
+  .min(-2_147_483_648)
+  .max(2_147_483_647)
+  .refine((value) => value !== 0, "Quantity must not be zero.");
+
+export const createCustomerMovementSchema = z
+  .object({
+    customerId: idSchema,
+    typeId: idSchema,
+    movementType: emptiesCustomerMovementTypeSchema,
+    quantity: customerQuantitySchema,
+    note: z.string().trim().min(1).max(500).nullable().optional(),
+    occurredAt: isoDateTimeSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (body) => body.movementType === "ADJUSTMENT" || body.quantity > 0,
+    {
+      message: "Quantity must be a positive whole number for this movement type.",
+      path: ["quantity"],
+    },
+  )
+  .refine(
+    (body) =>
+      (body.movementType !== "KEPT" && body.movementType !== "ADJUSTMENT")
+      || (body.note ?? "").trim() !== "",
+    { message: "A note is required for this movement type.", path: ["note"] },
+  );
+export type CreateCustomerMovementBody = z.infer<typeof createCustomerMovementSchema>;
+
+export const listCustomerBalancesQuerySchema = z
+  .object({
+    customerId: idSchema.optional(),
+    ownerId: idSchema.optional(),
+    typeId: idSchema.optional(),
+    q: z.string().trim().min(1).max(100).optional(),
+    onlyOwing: z.enum(["true", "false"]).transform((value) => value === "true").default(true),
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    cursor: z.string().trim().min(1).max(400).optional(),
+  })
+  .strict();
+export type ListCustomerBalancesQuery = z.infer<typeof listCustomerBalancesQuerySchema>;
+
+export const listCustomerMovementsQuerySchema = z
+  .object({
+    from: lagosDateStringSchema.optional(),
+    to: lagosDateStringSchema.optional(),
+    customerId: idSchema.optional(),
+    typeId: idSchema.optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    cursor: z.string().trim().min(1).max(400).optional(),
+  })
+  .strict()
+  .refine((query) => query.from === undefined || query.to === undefined || query.from <= query.to, {
+    message: "'from' must not be after 'to'.",
+    path: ["from"],
+  });
+export type ListCustomerMovementsQuery = z.infer<typeof listCustomerMovementsQuerySchema>;
+
+export const reverseCustomerMovementSchema = z
+  .object({ reason: z.string().trim().min(1).max(500) })
+  .strict();
+export type ReverseCustomerMovementBody = z.infer<typeof reverseCustomerMovementSchema>;

@@ -84,6 +84,7 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261024000100_empties_index_names`          | Renames-only repair of the five index/constraint names `20261024000000_empties` wrote **unquoted** (PostgreSQL folds an unquoted identifier to lower case, so the database kept `empties_owners_normalizedkey_key` while `db:verify` and Prisma expect `empties_owners_normalizedKey_key`). No definition, constraint, trigger or row changes. Same repair as `20261020000700_expense_category_index_names`.                                                                                                                                                                                      |
 | `20261024000200_reversal_integrity_note_fix`  | Function body only. Restores the `account_ledger_entries` `note` exemption in the shared `fn_check_reversal_integrity` that `20261024000000_empties` silently reverted when it rewrote the function to add the empties magnitude column. No object is created, renamed or dropped. See §4.9.                                                                                                                                                                                                                                                                                                      |
 | `20261031000000_empties_product_owners`       | Adds `empties_product_owners`, a mutable product-to-brewery mapping with product PK and RESTRICT FKs to products and empties owners, plus the owner index. It does not change products, stock, financial data, or shared trigger functions.                                                                                                                                                                                                                                                                                                      |
+| `20261101000000_empties_customer_movements`  | Adds immutable customer-owned empties movements and the trigger-derived customer/type balance cache. Adds table-specific sign/note/link checks, RESTRICT FKs, reverse-once and live-return-link partial indexes, immutable/reversal/balance triggers, and six new functions. It does not replace shared reversal functions or depend on product ownership. |
 
 ## 3. Tables
 
@@ -196,6 +197,8 @@ value column is the only kobo anywhere in this feature.
 | `empties_movements` | The append-only log. **Immutable.** `quantity` is signed and never zero; `OPENING`/`RECEIVED` positive, `RETURNED_TO_OWNER` negative, `ADJUSTMENT` either sign and it must carry a `note`. Corrections are reversal rows.                                                                    | `typeId` (FK RESTRICT), `movementType`, `quantity`, `note`, `occurredAt`, `createdById` (FK RESTRICT), `reversesEntryId` (self-FK) |
 | `empties_balances`  | **DERIVED** cache of `Σ empties_movements.quantity` per type, maintained only by `trg_empties_movement_apply`. One row per type; must never go negative.                                                                                                                                     | `typeId` (PK, FK RESTRICT), `quantity`, `updatedAt`                                                                                |
 | `empties_product_owners` | Mutable mapping from a product to its brewery. Reassignment is allowed and real changes are audit-logged; products and their DTOs remain unchanged. | `productId` (PK, FK RESTRICT), `ownerId` (FK RESTRICT), `createdAt`, `updatedAt` |
+| `empties_customer_movements` | Immutable customer-side ledger for crates taken, returned, kept, or adjusted. `RETURNED` rows point to their paired on-hand `RECEIVED` row; a customer return and its on-hand movement are written in one transaction. Reversals preserve all links and negate the target exactly. | `customerId` (FK RESTRICT), `typeId` (FK RESTRICT), `movementType`, signed `quantity`, `note`, `occurredAt` (`timestamptz`), `createdById`, `emptiesMovementId`, `reversesEntryId` |
+| `empties_customer_balances` | Trigger-maintained cache of `Σ empties_customer_movements.quantity` per customer and type; never directly writable and never negative. | `customerId` + `typeId` (composite PK, FKs RESTRICT), `quantity`, `updatedAt` |
 
 `empties_types` has no `code` column and no `normalizedKey` column: every row is
 user-managed (unlike `expense_categories`, which seeds protected system rows),
@@ -341,7 +344,7 @@ except for the magnitude column (`amountKobo`, or `quantityUnits` for
 - **`admin_sessions`** stores a SHA-256 hash of the 32-byte random cookie token, never the token itself. `tokenHash` is unique; `adminUserId` references `admin_users` with `ON DELETE RESTRICT`; indexes support lookup by admin and expiry. The API enforces sliding idle expiry (12 hours by default), absolute expiry (7 days by default), revocation, and active-user status. `lastSeenAt` is refreshed at most once per minute. There are no session-specific database triggers.
 - Cookie/session policy is configured by `SESSION_IDLE_TIMEOUT_HOURS`, `SESSION_ABSOLUTE_TIMEOUT_DAYS`, optional `COOKIE_DOMAIN`, `WEB_ORIGIN`, and `HOST`. The API is the authentication boundary; client middleware checks cookie presence only as a navigation shortcut.
 
-### 4.9 Empties (`20261024000000`, `20261024000100`, `20261024000200`, `20261031000000`)
+### 4.9 Empties (`20261024000000`, `20261024000100`, `20261024000200`, `20261031000000`, `20261101000000`)
 
 - **Owners and types are deactivated, never deleted** — `fn_empties_owner_guard`
   and `fn_empties_type_guard` raise on `DELETE`, and `empties_types.ownerId`
@@ -439,6 +442,38 @@ its target on type and every source column (account_ledger_entries)`, which
   products never count as crates. Empty values are display-only.
 - Migration `20261031000000_empties_product_owners` creates no trigger and does
   not replace or alter `fn_check_reversal_integrity`.
+- **Customer-owned crates are a separate ledger** (`20261101000000`): the
+  minimum design is `empties_customer_movements` plus
+  `empties_customer_balances`. The former is the append-only source of truth;
+  the latter is the derived cache. They cannot be merged because the existing
+  `empties_movements`/`empties_balances` represent business on-hand stock per
+  type, not quantities owed by each customer.
+- Customer movement signs are `TAKEN` positive, `RETURNED` and `KEPT` negative,
+  and non-zero `ADJUSTMENT` signed either way. `KEPT` and `ADJUSTMENT` require a
+  note. The new reversal-integrity trigger/function is scoped only to
+  `empties_customer_movements`; the phase-1 shared
+  `fn_check_reversal_integrity`, `fn_raise_immutable`, and
+  `fn_apply_empties_movement` are deliberately not reused or replaced.
+- A `RETURNED` movement links only to an on-hand `RECEIVED` row of the same
+  type and absolute count. Both rows are inserted atomically. Reversing the
+  customer return inserts the exact customer reversal and reverses the linked
+  on-hand row in the same transaction. The general on-hand reversal endpoint
+  refuses a linked customer return so it cannot break this pairing.
+- `empties_customer_balances` has a named non-negative CHECK, direct-write and
+  truncate guards, and an AFTER INSERT maintainer. The maintainer uses an
+  UPDATE-first loop and inserts only when no cache row exists, retrying after a
+  concurrent unique-key insert. `INSERT ... ON CONFLICT DO UPDATE` is wrong
+  here for the same reason as `stock_balances`: PostgreSQL checks the proposed
+  delta row before conflict resolution, so a legal negative movement can fail
+  before it is merged with the existing positive balance. The UPDATE-first
+  branch locks the existing row and serializes concurrent returns.
+- Customer return quantities can come from any brewery type; the movement's
+  `typeId` is authoritative and balances are per customer/type. Display value
+  is `quantity × unitValueKobo` in integer kobo or null, and is never posted to
+  money, profit, account, or financial-position ledgers.
+- Three fatal `db:audit` checks compare customer balance caches with ledger
+  sums, verify each live customer return has its matching live on-hand receipt,
+  and ensure reversed customer movements net to zero.
 
 ---
 
@@ -697,6 +732,12 @@ trap worth remembering:
 Both migrations also re-backfill `stock_balances` from `stock_movements` and are
 proven by the API test suite (`stock-balances.test.ts`,
 `reversal-positive.test.ts`), not just by `db:verify`.
+
+The customer-empties balance maintainer follows the same UPDATE-first rule for
+its own non-negative cache. It is implemented by new
+`fn_apply_empties_customer_movement` and
+`fn_empties_customer_balance_direct_write_guard` functions; it does not change
+the existing stock, account, or phase-1 empties functions.
 
 The shared `fn_check_reversal_integrity` must retain its
 `account_ledger_entries` branch and `note` exemption. Before a production

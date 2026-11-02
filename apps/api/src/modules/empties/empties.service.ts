@@ -20,6 +20,7 @@ import {
 } from "../../lib/tx.js";
 import type { TxTimeouts } from "../../lib/tx-options.js";
 import { assertNotInFuture } from "../sales/sales.validation.js";
+import { createEmptiesCustomerService } from "./empties-customer.service.js";
 import type {
   CreateMovementBody,
   CreateOwnerBody,
@@ -80,6 +81,7 @@ interface MovementRow {
   occurredAt: Date;
   createdById: string;
   reversesEntryId: string | null;
+  customerReturnMovementId?: string | null;
   createdAt: Date;
 }
 
@@ -156,6 +158,7 @@ export interface EmptiesMovementDto {
   occurredAt: string;
   createdById: string;
   reversesEntryId: string | null;
+  customerReturnMovementId: string | null;
   createdAt: string;
 }
 
@@ -294,6 +297,7 @@ function toMovementDto(movement: MovementRow): EmptiesMovementDto {
     occurredAt: movement.occurredAt.toISOString(),
     createdById: movement.createdById,
     reversesEntryId: movement.reversesEntryId,
+    customerReturnMovementId: movement.customerReturnMovementId ?? null,
     createdAt: movement.createdAt.toISOString(),
   };
 }
@@ -326,6 +330,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
     log: options.log,
     txTimeouts: options.txTimeouts,
   });
+  const customerService = createEmptiesCustomerService(options);
 
   // ---------- locks ----------
   async function lockOwner(ctx: TxContext, id: string): Promise<OwnerRow> {
@@ -394,6 +399,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
   }
 
   return {
+    ...customerService,
     // ================================================================
     // Owners
     // ================================================================
@@ -1135,7 +1141,12 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
         conditions.length > 0 ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}` : Prisma.empty;
       const rows = await prisma.$queryRaw<MovementRow[]>`
         SELECT m.id, m."typeId", m."movementType"::text AS "movementType", m.quantity, m.note,
-               m."occurredAt", m."createdById", m."reversesEntryId", m."createdAt"
+               m."occurredAt", m."createdById", m."reversesEntryId", m."createdAt",
+               (SELECT cm.id
+                  FROM empties_customer_movements cm
+                 WHERE cm."emptiesMovementId" = m.id
+                   AND cm."movementType" = 'RETURNED'
+                 LIMIT 1) AS "customerReturnMovementId"
           FROM empties_movements m
           ${where}
          ORDER BY m."occurredAt" DESC, m.id DESC
@@ -1184,6 +1195,22 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
                 movementId: id,
                 reversesEntryId: target.reversesEntryId,
               });
+            }
+            counted(ctx);
+            const linkedCustomerReturns = await ctx.tx.$queryRaw<Array<{ id: string }>>`
+              SELECT id
+                FROM empties_customer_movements
+               WHERE "emptiesMovementId" = ${id}
+                 AND "movementType" = 'RETURNED'
+               LIMIT 1`;
+            if (linkedCustomerReturns[0] !== undefined) {
+              throw businessRuleError(
+                "This on-hand movement belongs to a customer return. Reverse the customer crate movement instead.",
+                {
+                  movementId: id,
+                  customerMovementId: linkedCustomerReturns[0].id,
+                },
+              );
             }
             const type = await lockType(ctx, target.typeId);
             if (type === null) {

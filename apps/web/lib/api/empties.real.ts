@@ -14,6 +14,12 @@ import type {
   ProductOwnerDto,
   EmptiesTypeDto,
   EmptiesTypeListOptions,
+  EmptiesCustomerBalanceListOptions,
+  EmptiesCustomerBalanceListPage,
+  EmptiesCustomerMovementListOptions,
+  EmptiesCustomerMovementListPage,
+  EmptiesCustomerMovementDto,
+  CreateEmptiesCustomerMovementInput,
 } from "./empties.api";
 
 function query(values: Record<string, string | undefined>): string {
@@ -62,6 +68,33 @@ export function productOwnersQuery(options: ProductOwnerListOptions = {}): strin
     assigned: options.assigned === undefined || options.assigned === "all" ? undefined : options.assigned,
     cursor: options.cursor ?? undefined,
     limit: options.limit === undefined ? undefined : String(options.limit),
+  });
+}
+
+export function customerBalancesQuery(
+  options: EmptiesCustomerBalanceListOptions = {},
+): string {
+  return query({
+    customerId: options.customerId,
+    ownerId: options.ownerId,
+    typeId: options.typeId,
+    q: nonEmpty(options.q),
+    onlyOwing: String(options.onlyOwing ?? true),
+    cursor: options.cursor ?? undefined,
+    limit: String(options.limit ?? 50),
+  });
+}
+
+export function customerMovementsQuery(
+  options: EmptiesCustomerMovementListOptions = {},
+): string {
+  return query({
+    from: options.from,
+    to: options.to,
+    customerId: options.customerId,
+    typeId: options.typeId,
+    cursor: options.cursor ?? undefined,
+    limit: String(options.limit ?? 50),
   });
 }
 
@@ -184,6 +217,40 @@ export const emptiesRealApi: EmptiesApi = {
   async reverseMovement(id, reason, idempotencyKey) {
     return requestJson<EmptiesMovementDto>(
       `/empties/movements/${encodeURIComponent(id)}/reverse`,
+      { method: "POST", body: { reason }, idempotencyKey },
+    );
+  },
+
+  async listCustomerBalances(options = {}) {
+    return requestJson<EmptiesCustomerBalanceListPage>(
+      `/empties/customer-balances${customerBalancesQuery(options)}`,
+    );
+  },
+
+  async listCustomerMovements(options = {}) {
+    return requestJson<EmptiesCustomerMovementListPage>(
+      `/empties/customer-movements${customerMovementsQuery(options)}`,
+    );
+  },
+
+  async createCustomerMovement(input: CreateEmptiesCustomerMovementInput, idempotencyKey) {
+    return requestJson<EmptiesCustomerMovementDto>("/empties/customer-movements", {
+      method: "POST",
+      body: {
+        customerId: input.customerId,
+        typeId: input.typeId,
+        movementType: input.movementType,
+        quantity: input.quantity,
+        ...(nonEmpty(input.note) === undefined ? {} : { note: nonEmpty(input.note) }),
+        ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),
+      },
+      idempotencyKey,
+    });
+  },
+
+  async reverseCustomerMovement(id, reason, idempotencyKey) {
+    return requestJson<EmptiesCustomerMovementDto>(
+      `/empties/customer-movements/${encodeURIComponent(id)}/reverse`,
       { method: "POST", body: { reason }, idempotencyKey },
     );
   },

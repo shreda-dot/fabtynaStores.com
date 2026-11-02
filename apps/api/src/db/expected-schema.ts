@@ -82,6 +82,7 @@ export const EXPECTED_MIGRATIONS = [
   // reversal integrity that `20261024000000_empties` silently reverted.
   "20261024000200_reversal_integrity_note_fix",
   "20261031000000_empties_product_owners",
+  "20261101000000_empties_customer_movements",
 ] as const;
 
 /**
@@ -108,6 +109,9 @@ export const EXPECTED_TABLES = [
   "empties_types",
   "empties_movements",
   "empties_balances",
+  // 20261101000000_empties_customer_movements
+  "empties_customer_movements",
+  "empties_customer_balances",
   // 20261031000000_empties_product_owners
   "empties_product_owners",
 ] as const;
@@ -151,6 +155,13 @@ export const EXPECTED_INDEXES = [
   // An EXPRESSION index (ownerId, kind, lower(btrim(label))) — Prisma cannot
   // model it, which is exactly why it is pinned here.
   "empties_types_owner_kind_label_key",
+  // 20261101000000_empties_customer_movements
+  "empties_customer_movements_pkey",
+  "empties_customer_movements_customer_type_occurred_idx",
+  "empties_customer_movements_type_occurred_idx",
+  "empties_customer_movements_empties_movement_idx",
+  "empties_customer_balances_pkey",
+  "empties_customer_balances_type_customer_idx",
 ] as const;
 
 /**
@@ -254,6 +265,13 @@ export const EXPECTED_CHECK_CONSTRAINTS = [
   "ck_empties_movements_note_required",
   "ck_empties_movements_sign",
   "ck_empties_balances_nonnegative",
+
+  // 20261101000000_empties_customer_movements
+  "ck_empties_customer_movements_quantity_nonzero",
+  "ck_empties_customer_movements_note_required",
+  "ck_empties_customer_movements_sign",
+  "ck_empties_customer_movements_return_link",
+  "ck_empties_customer_balances_nonnegative",
 ] as const;
 
 /**
@@ -376,6 +394,26 @@ export const EXPECTED_TRIGGERS = [
   "trg_empties_movement_apply",
   "trg_empties_balances_guard",
   "trg_empties_balances_no_truncate",
+
+  // 20261101000000_empties_customer_movements
+  "trg_empties_customer_movement_immutable",
+  "trg_empties_customer_movement_no_truncate",
+  "trg_empties_customer_movement_return_link",
+  "trg_empties_customer_movement_reversal_integrity",
+  "trg_empties_customer_movement_apply",
+  "trg_empties_customer_balances_guard",
+  "trg_empties_customer_balances_no_truncate",
+] as const;
+
+/** Hand-written trigger functions required by the migrations. */
+export const EXPECTED_FUNCTIONS = [
+  // 20261101000000_empties_customer_movements
+  "fn_empties_customer_movement_immutable",
+  "fn_check_empties_customer_return_link",
+  "fn_check_empties_customer_movement_reversal_integrity",
+  "fn_apply_empties_customer_movement",
+  "fn_empties_customer_balance_direct_write_guard",
+  "fn_empties_customer_balance_no_truncate",
 ] as const;
 
 /**
@@ -427,6 +465,10 @@ export const EXPECTED_PARTIAL_INDEXES = [
   // 20261024000000_empties
   "ux_empties_movement_opening_active",
   "ux_empties_movement_reversed_once",
+
+  // 20261101000000_empties_customer_movements
+  "ux_empties_customer_movement_reversed_once",
+  "ux_empties_customer_movement_received_link",
 ] as const;
 
 /**
@@ -471,6 +513,15 @@ export const EXPECTED_FOREIGN_KEYS = [
   "fk_empties_movements_type",
   "fk_empties_movements_created_by",
   "fk_empties_balances_type",
+
+  // 20261101000000_empties_customer_movements
+  "fk_empties_customer_movements_customer",
+  "fk_empties_customer_movements_type",
+  "fk_empties_customer_movements_created_by",
+  "fk_empties_customer_movements_empties_movement",
+  "fk_empties_customer_movements_reversal",
+  "fk_empties_customer_balances_customer",
+  "fk_empties_customer_balances_type",
 
   // 20261031000000_empties_product_owners
   "fk_empties_product_owners_product",

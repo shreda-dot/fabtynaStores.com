@@ -6,6 +6,12 @@ export type EmptiesMovementType =
   | "RETURNED_TO_OWNER"
   | "ADJUSTMENT";
 
+export type EmptiesCustomerMovementType =
+  | "TAKEN"
+  | "RETURNED"
+  | "KEPT"
+  | "ADJUSTMENT";
+
 export type EmptiesOwnerDto = {
   id: string;
   name: string;
@@ -38,6 +44,8 @@ export type EmptiesMovementDto = {
   createdById: string;
   /** Set when this row reverses another movement; such rows cannot be reversed. */
   reversesEntryId: string | null;
+  /** Set when this RECEIVED row is paired with a customer return; reverse from customer history. */
+  customerReturnMovementId: string | null;
   createdAt: string;
 };
 
@@ -163,6 +171,77 @@ export type EmptiesMovementListPage = {
   to: string | null;
 };
 
+export type EmptiesCustomerBalanceDto = {
+  customerId: string;
+  customerName: string;
+  typeId: string;
+  label: string;
+  kind: EmptiesKind;
+  ownerId: string;
+  ownerName: string;
+  quantity: number;
+  valueKobo: string | null;
+  lastMovementAt: string;
+};
+
+export type EmptiesCustomerBalanceListOptions = {
+  customerId?: string;
+  ownerId?: string;
+  typeId?: string;
+  q?: string;
+  onlyOwing?: boolean;
+  cursor?: string | null;
+  limit?: number;
+};
+
+export type EmptiesCustomerBalanceListPage = {
+  items: EmptiesCustomerBalanceDto[];
+  totalsByOwner: Array<{
+    ownerId: string;
+    ownerName: string;
+    quantity: number;
+    valueKobo: string | null;
+  }>;
+  nextCursor: string | null;
+};
+
+export type EmptiesCustomerMovementDto = {
+  id: string;
+  customerId: string;
+  customerName: string;
+  typeId: string;
+  label: string;
+  kind: EmptiesKind;
+  ownerId: string;
+  ownerName: string;
+  movementType: EmptiesCustomerMovementType;
+  quantity: number;
+  valueKobo: string | null;
+  note: string | null;
+  occurredAt: string;
+  createdById: string;
+  emptiesMovementId: string | null;
+  reversesEntryId: string | null;
+  reversedByEntryId: string | null;
+  createdAt: string;
+};
+
+export type EmptiesCustomerMovementListOptions = {
+  from?: string;
+  to?: string;
+  customerId?: string;
+  typeId?: string;
+  cursor?: string | null;
+  limit?: number;
+};
+
+export type EmptiesCustomerMovementListPage = {
+  items: EmptiesCustomerMovementDto[];
+  nextCursor: string | null;
+  from: string | null;
+  to: string | null;
+};
+
 export type CreateEmptiesOwnerInput = {
   name: string;
 };
@@ -192,6 +271,16 @@ export type CreateEmptiesMovementInput = {
   occurredAt?: string;
 };
 
+export type CreateEmptiesCustomerMovementInput = {
+  customerId: string;
+  typeId: string;
+  movementType: EmptiesCustomerMovementType;
+  /** Positive for typed movements; signed for ADJUSTMENT. */
+  quantity: number;
+  note?: string | null;
+  occurredAt?: string;
+};
+
 export interface EmptiesApi {
   getOverview(): Promise<EmptiesOverviewDto>;
   listProductOwners(options?: ProductOwnerListOptions): Promise<ProductOwnerListPage>;
@@ -216,4 +305,19 @@ export interface EmptiesApi {
   listMovements(options?: EmptiesMovementListOptions): Promise<EmptiesMovementListPage>;
   createMovement(input: CreateEmptiesMovementInput, idempotencyKey?: string): Promise<EmptiesMovementDto>;
   reverseMovement(id: string, reason: string, idempotencyKey?: string): Promise<EmptiesMovementDto>;
+  listCustomerBalances(
+    options?: EmptiesCustomerBalanceListOptions,
+  ): Promise<EmptiesCustomerBalanceListPage>;
+  listCustomerMovements(
+    options?: EmptiesCustomerMovementListOptions,
+  ): Promise<EmptiesCustomerMovementListPage>;
+  createCustomerMovement(
+    input: CreateEmptiesCustomerMovementInput,
+    idempotencyKey?: string,
+  ): Promise<EmptiesCustomerMovementDto>;
+  reverseCustomerMovement(
+    id: string,
+    reason: string,
+    idempotencyKey?: string,
+  ): Promise<EmptiesCustomerMovementDto>;
 }

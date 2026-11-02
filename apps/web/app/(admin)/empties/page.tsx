@@ -447,7 +447,9 @@ export default function EmptiesPage() {
       header: "Actions",
       align: "right",
       render: (m) =>
-        m.reversesEntryId !== null ? (
+        m.customerReturnMovementId !== null ? (
+          <span className="text-xs text-muted-foreground">Reverse from customer history</span>
+        ) : m.reversesEntryId !== null ? (
           <span className="text-xs text-muted-foreground">Reversal</span>
         ) : (
           <Button
@@ -481,6 +483,9 @@ export default function EmptiesPage() {
             </Link>
             <Link href="/empties/products" className={buttonClasses({ variant: "secondary" })}>
               Assign products
+            </Link>
+            <Link href="/empties/customers" className={buttonClasses({ variant: "secondary" })}>
+              Crates customers owe
             </Link>
             <Link href="/empties/types" className={buttonClasses({ variant: "secondary" })}>
               <Boxes aria-hidden="true" className="h-4 w-4" />

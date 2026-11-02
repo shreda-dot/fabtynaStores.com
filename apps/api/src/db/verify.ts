@@ -8,6 +8,7 @@ import { databaseNameOf } from "../lib/db-target.js";
 import {
   EXPECTED_CHECK_CONSTRAINTS,
   EXPECTED_FOREIGN_KEYS,
+  EXPECTED_FUNCTIONS,
   EXPECTED_INDEXES,
   EXPECTED_MIGRATIONS,
   EXPECTED_PARTIAL_INDEXES,
@@ -39,6 +40,7 @@ export type VerifyKind =
   | "trigger"
   | "partial index"
   | "foreign key"
+  | "function"
   | "sequence"
   | "index";
 
@@ -70,6 +72,7 @@ export interface VerifyResult {
     triggers: string[];
     partialIndexes: string[];
     foreignKeys: string[];
+    functions: string[];
     sequences: string[];
     indexes: string[];
   };
@@ -142,6 +145,15 @@ export async function runDbVerify(connectionString: string): Promise<VerifyResul
         ORDER BY conname`,
     );
 
+    const functionRows = await client.query<{ proname: string }>(
+      `SELECT p.proname
+         FROM pg_proc p
+         JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND p.prokind = 'f'
+        ORDER BY p.proname`,
+    );
+
     const tableRows = await client.query<{ relname: string }>(
       `SELECT c.relname
          FROM pg_class c
@@ -176,6 +188,7 @@ export async function runDbVerify(connectionString: string): Promise<VerifyResul
     const foundTriggers = triggerRows.rows.map((row) => row.tgname);
     const foundPartialIndexes = indexRows.rows.map((row) => row.indexname);
     const foundForeignKeys = foreignKeyRows.rows.map((row) => row.conname);
+    const foundFunctions = functionRows.rows.map((row) => row.proname);
     const foundTables = tableRows.rows.map((row) => row.relname);
 
     const items: VerifyItem[] = [];
@@ -259,6 +272,17 @@ export async function runDbVerify(connectionString: string): Promise<VerifyResul
       );
     }
 
+    // Hand-written trigger functions are pinned one-directionally: Prisma
+    // manages application functions separately and overloads may share names.
+    const foundFunctionSet = new Set(foundFunctions);
+    for (const name of EXPECTED_FUNCTIONS) {
+      items.push(
+        foundFunctionSet.has(name)
+          ? { kind: "function", name, ok: true }
+          : { kind: "function", name, ok: false, detail: "missing from the database" },
+      );
+    }
+
     // Hand-written tables are checked one-directionally for the same reason:
     // every table the Prisma schema declares would otherwise be an unexpected
     // name. Only the names listed here are pinned.
@@ -309,6 +333,7 @@ export async function runDbVerify(connectionString: string): Promise<VerifyResul
         triggers: foundTriggers,
         partialIndexes: foundPartialIndexes,
         foreignKeys: foundForeignKeys,
+        functions: foundFunctions,
         sequences: foundSequences,
         indexes: foundIndexes,
       },

@@ -199,33 +199,41 @@ enum EmptiesMovementType {
   ADJUSTMENT
 }
 
+enum EmptiesCustomerMovementType {
+  TAKEN
+  RETURNED
+  KEPT
+  ADJUSTMENT
+}
+
 // =====================================================================
 // Identity and audit
 // =====================================================================
 
 model AdminUser {
-  id               String            @id @default(cuid())
-  email            String            @unique
-  passwordHash     String
+  id                       String                    @id @default(cuid())
+  email                    String                    @unique
+  passwordHash             String
   /// Not enforced anywhere yet — see the `AdminRole` comment above.
-  role             AdminRole         @default(STAFF)
+  role                     AdminRole                 @default(STAFF)
   /// Accounts are deactivated, never deleted: `Purchase`, `Sale`,
   /// `StockTransfer` and `StockAdjustment` reference this table with
   /// `onDelete: Restrict`, so a hard delete would strip the actor from history.
-  isActive         Boolean           @default(true)
+  isActive                 Boolean                   @default(true)
   /// Updated after a successful password sign-in; stored as `timestamptz`.
-  lastLoginAt      DateTime?         @db.Timestamptz(3)
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  purchases        Purchase[]
-  sales            Sale[]
-  stockTransfers   StockTransfer[]
-  stockAdjustments StockAdjustment[]
-  auditLogs        AuditLog[]
-  sessions         AdminSession[]
-  idempotencyKeys  IdempotencyKey[]
-  resetTokens      PasswordResetToken[]
-  emptiesMovements EmptiesMovement[]
+  lastLoginAt              DateTime?                 @db.Timestamptz(3)
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  purchases                Purchase[]
+  sales                    Sale[]
+  stockTransfers           StockTransfer[]
+  stockAdjustments         StockAdjustment[]
+  auditLogs                AuditLog[]
+  sessions                 AdminSession[]
+  idempotencyKeys          IdempotencyKey[]
+  resetTokens              PasswordResetToken[]
+  emptiesMovements         EmptiesMovement[]
+  emptiesCustomerMovements EmptiesCustomerMovement[]
 
   @@map("admin_users")
 }
@@ -291,14 +299,14 @@ model AuditLog {
 /// and purged after `expiresAt`. New claims are scoped to an admin; NULL actor
 /// rows are preserved legacy claims and block cross-actor replay until expiry.
 model IdempotencyKey {
-  id             String   @id @default(cuid())
+  id             String     @id @default(cuid())
   key            String
   route          String
   actorId        String?
   requestHash    String
   responseStatus Int?
   responseBody   Json?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime   @default(now())
   expiresAt      DateTime
   actor          AdminUser? @relation(fields: [actorId], references: [id], onDelete: Restrict, map: "fk_idempotency_keys_admin_user")
 
@@ -363,19 +371,21 @@ model Supplier {
 }
 
 model Customer {
-  id              String                @id @default(cuid())
-  name            String
-  type            CustomerType          @default(RETAIL)
-  creditLimitKobo BigInt                @default(0)
-  phone           String?
-  email           String?
-  address         String?
-  notes           String?
-  deletedAt       DateTime?
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
-  sales           Sale[]
-  ledgerEntries   CustomerLedgerEntry[]
+  id               String                    @id @default(cuid())
+  name             String
+  type             CustomerType              @default(RETAIL)
+  creditLimitKobo  BigInt                    @default(0)
+  phone            String?
+  email            String?
+  address          String?
+  notes            String?
+  deletedAt        DateTime?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+  sales            Sale[]
+  ledgerEntries    CustomerLedgerEntry[]
+  emptiesMovements EmptiesCustomerMovement[]
+  emptiesBalances  EmptiesCustomerBalance[]
 
   @@index([name])
   @@index([phone])
@@ -1037,11 +1047,11 @@ model CashSnapshot {
 /// system rows: every owner is created by an admin. Deactivated, never
 /// deleted (`trg_empties_owner_guard`).
 model EmptiesOwner {
-  id            String         @id @default(cuid())
+  id            String                @id @default(cuid())
   name          String
-  normalizedKey String         @unique(map: "empties_owners_normalizedKey_key")
-  isActive      Boolean        @default(true)
-  createdAt     DateTime       @default(now())
+  normalizedKey String                @unique(map: "empties_owners_normalizedKey_key")
+  isActive      Boolean               @default(true)
+  createdAt     DateTime              @default(now())
   types         EmptiesType[]
   products      EmptiesProductOwner[]
 
@@ -1052,10 +1062,10 @@ model EmptiesOwner {
 
 /// Mutable assignment of a returnable product to the brewery that owns its crates.
 model EmptiesProductOwner {
-  productId String   @id(map: "empties_product_owners_pkey")
+  productId String       @id(map: "empties_product_owners_pkey")
   ownerId   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
   product   Product      @relation(fields: [productId], references: [id], onDelete: Restrict, map: "fk_empties_product_owners_product")
   owner     EmptiesOwner @relation(fields: [ownerId], references: [id], onDelete: Restrict, map: "fk_empties_product_owners_owner")
 
@@ -1071,16 +1081,18 @@ model EmptiesProductOwner {
 /// hand-written EXPRESSION index (`empties_types_owner_kind_label_key`), which
 /// Prisma cannot express — it is deliberately not modelled here.
 model EmptiesType {
-  id            String          @id @default(cuid())
-  ownerId       String
-  kind          EmptiesKind
-  label         String
-  unitValueKobo BigInt?
-  isActive      Boolean         @default(true)
-  createdAt     DateTime        @default(now())
-  owner         EmptiesOwner    @relation(fields: [ownerId], references: [id], onDelete: Restrict, map: "fk_empties_types_owner")
-  movements     EmptiesMovement[]
-  balance       EmptiesBalance?
+  id                String                    @id @default(cuid())
+  ownerId           String
+  kind              EmptiesKind
+  label             String
+  unitValueKobo     BigInt?
+  isActive          Boolean                   @default(true)
+  createdAt         DateTime                  @default(now())
+  owner             EmptiesOwner              @relation(fields: [ownerId], references: [id], onDelete: Restrict, map: "fk_empties_types_owner")
+  movements         EmptiesMovement[]
+  balance           EmptiesBalance?
+  customerMovements EmptiesCustomerMovement[]
+  customerBalances  EmptiesCustomerBalance[]
 
   // `char_length(btrim(label)) BETWEEN 1 AND 40` and
   // `"unitValueKobo" IS NULL OR "unitValueKobo" >= 0` are hand-written CHECKs.
@@ -1094,21 +1106,22 @@ model EmptiesType {
 /// `trg_empties_movement_immutable`, `trg_empties_movement_reversal_target`,
 /// `trg_empties_movement_reversal_integrity`).
 model EmptiesMovement {
-  id              String              @id @default(cuid())
+  id              String                    @id @default(cuid())
   typeId          String
   movementType    EmptiesMovementType
   quantity        Int
   note            String?
   /// Business timestamp, stored as a naive UTC `timestamp(3)` like every other
   /// `occurredAt` in this schema.
-  occurredAt      DateTime            @default(now())
+  occurredAt      DateTime                  @default(now())
   createdById     String
   reversesEntryId String?
-  createdAt       DateTime            @default(now())
-  type            EmptiesType         @relation(fields: [typeId], references: [id], onDelete: Restrict, map: "fk_empties_movements_type")
-  createdBy       AdminUser           @relation(fields: [createdById], references: [id], onDelete: Restrict, map: "fk_empties_movements_created_by")
-  reversesEntry   EmptiesMovement?    @relation("EmptiesMovementReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
-  reversedBy      EmptiesMovement[]   @relation("EmptiesMovementReversals")
+  createdAt       DateTime                  @default(now())
+  type            EmptiesType               @relation(fields: [typeId], references: [id], onDelete: Restrict, map: "fk_empties_movements_type")
+  createdBy       AdminUser                 @relation(fields: [createdById], references: [id], onDelete: Restrict, map: "fk_empties_movements_created_by")
+  reversesEntry   EmptiesMovement?          @relation("EmptiesMovementReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversedBy      EmptiesMovement[]         @relation("EmptiesMovementReversals")
+  customerReturns EmptiesCustomerMovement[] @relation("EmptiesCustomerReturnLink")
 
   // `quantity <> 0`, the ADJUSTMENT-needs-a-note rule and the sign rule are
   // hand-written CHECKs; `ux_empties_movement_opening_active` and
@@ -1127,12 +1140,53 @@ model EmptiesMovement {
 /// Never write this table from the application. `trg_empties_balances_guard`
 /// rejects any write that did not come from the trigger.
 model EmptiesBalance {
-  typeId    String   @id
-  quantity  Int      @default(0)
+  typeId    String      @id
+  quantity  Int         @default(0)
   /// Set by the trigger on every applied movement, not by `@updatedAt`.
-  updatedAt DateTime @default(now())
+  updatedAt DateTime    @default(now())
   type      EmptiesType @relation(fields: [typeId], references: [id], onDelete: Restrict, map: "fk_empties_balances_type")
 
   // `ck_empties_balances_nonnegative` is hand-written SQL.
   @@map("empties_balances")
+}
+
+/// Customer-side crate ledger. A RETURNED row links to the matching
+/// `RECEIVED` row in `empties_movements`; both are inserted atomically.
+model EmptiesCustomerMovement {
+  id                String                      @id(map: "empties_customer_movements_pkey") @default(cuid())
+  customerId        String
+  typeId            String
+  movementType      EmptiesCustomerMovementType
+  quantity          Int
+  note              String?
+  occurredAt        DateTime                    @db.Timestamptz(3)
+  createdById       String
+  emptiesMovementId String?
+  reversesEntryId   String?
+  createdAt         DateTime                    @default(now()) @db.Timestamptz(3)
+  customer          Customer                    @relation(fields: [customerId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_customer_movements_customer")
+  type              EmptiesType                 @relation(fields: [typeId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_customer_movements_type")
+  createdBy         AdminUser                   @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_customer_movements_created_by")
+  emptiesMovement   EmptiesMovement?            @relation("EmptiesCustomerReturnLink", fields: [emptiesMovementId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_customer_movements_empties_movement")
+  reversesEntry     EmptiesCustomerMovement?    @relation("EmptiesCustomerMovementReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_customer_movements_reversal")
+  reversedBy        EmptiesCustomerMovement[]   @relation("EmptiesCustomerMovementReversals")
+
+  @@index([customerId, typeId, occurredAt, id], map: "empties_customer_movements_customer_type_occurred_idx")
+  @@index([typeId, occurredAt, id], map: "empties_customer_movements_type_occurred_idx")
+  @@index([emptiesMovementId], map: "empties_customer_movements_empties_movement_idx")
+  @@map("empties_customer_movements")
+}
+
+/// Trigger-maintained balance cache keyed by customer and empties type.
+model EmptiesCustomerBalance {
+  customerId String
+  typeId     String
+  quantity   Int         @default(0)
+  updatedAt  DateTime    @default(now()) @db.Timestamptz(3)
+  customer   Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_customer_balances_customer")
+  type       EmptiesType @relation(fields: [typeId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_customer_balances_type")
+
+  @@id([customerId, typeId], map: "empties_customer_balances_pkey")
+  @@index([typeId, customerId], map: "empties_customer_balances_type_customer_idx")
+  @@map("empties_customer_balances")
 }

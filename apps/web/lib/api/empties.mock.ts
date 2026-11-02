@@ -27,4 +27,8 @@ export const emptiesMockApi: EmptiesApi = {
   listMovements: async () => notAvailable(),
   createMovement: async () => notAvailable(),
   reverseMovement: async () => notAvailable(),
+  listCustomerBalances: async () => notAvailable(),
+  listCustomerMovements: async () => notAvailable(),
+  createCustomerMovement: async () => notAvailable(),
+  reverseCustomerMovement: async () => notAvailable(),
 };

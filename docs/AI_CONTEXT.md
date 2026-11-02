@@ -39,7 +39,7 @@ phone on slow networks, so the web app is mobile-first with a network status bar
   products, customers, suppliers, debtors/payables, stock, loans, transfers,
   adjustments, expense categories, expenses, accounts, and empties (see §6).
   - Schema: `apps/api/prisma/schema.prisma`; migrations:
-    `apps/api/prisma/migrations/` (**36** migrations); generated client output:
+    `apps/api/prisma/migrations/` (**39** migrations in the current tree); generated client output:
     `apps/api/generated/prisma/` (git-ignored).
   - `src/db/`: `expected-schema.ts`, `verify.ts`, `audit.ts`.
   - `src/lib/`: `env.ts`, `prisma.ts` (`createPrismaClient`), `password.ts`
@@ -202,8 +202,10 @@ must print "-- This is an empty migration." and exit 0.
   one OPENING per type **for the life of the type**: the original row is
   immutable, so reversing it never frees the slot — later corrections go through
   an ADJUSTMENT, exactly like `ux_account_ledger_opening_balance_active`.
-  Out of scope for phase 1: empties customers owe, empties on sale/purchase
-  screens, and deposits in cash reports.
+  Customer-owned empties are added separately by
+  `20261101000000_empties_customer_movements`; they do not change sales,
+  purchases, profit, cash, or financial-position code. Recording crates on
+  sale/purchase screens and deposits in cash reports remain out of scope.
 
 Empties phase 2 adds `empties_product_owners`, a separate mutable mapping from
 product to brewery; every real assignment change is audit-logged. It does not
@@ -219,7 +221,9 @@ to both dev and test.
 
 ## 6. Current status (verified)
 
-- Migrations: **38** (listed in `expected-schema.ts` → `EXPECTED_MIGRATIONS`).
+- Migration folders: **39** (listed in `expected-schema.ts` →
+  `EXPECTED_MIGRATIONS`). The customer-owned empties migration is the newest
+  source migration; it must be applied and verified separately before rollout.
   The three `202610240...` migrations are empties tracking phase 1 (counts only):
   `20261024000000_empties` adds `empties_owners`, `empties_types`, the
   append-only `empties_movements`, the derived `empties_balances`, three couples
@@ -241,6 +245,9 @@ to both dev and test.
   object. `20261031000000_empties_product_owners` adds the separate product to
   brewery mapping table for phase 2; it adds no trigger and changes no stock,
   product DTO or financial data.
+  `20261101000000_empties_customer_movements` adds the immutable customer
+  movement ledger and its trigger-maintained per-customer/type balance cache.
+  It is an additive migration and does not depend on product ownership.
   The four before them add dynamic expense categories, make `OTHER_INCOME`
   source-less, correct the category-index names, and make ordinary expense
   details immutable with a single void transition.
@@ -715,7 +722,11 @@ adapting an existing shared/mock DTO shape; no row below is blocked.
 | `GET /empties/balances?includeInactive` | query boolean | `{items,totalsByOwner,totalsByKind}` with integer counts and string kobo values | `400 VALIDATION` issues | `EmptiesBalancesDto` / MATCH |
 | `POST /empties/movements` | `{typeId,movementType,quantity,note?,occurredAt?}`; the count is POSITIVE and the server applies the sign for a return; an ADJUSTMENT carries its own non-zero sign and needs a note | movement row | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` `Only N … on hand`; `409 CONFLICT` on `ux_empties_movement_opening_active` for a second opening | `CreateEmptiesMovementInput` → `EmptiesMovementDto` / MATCH |
 | `GET /empties/movements?from&to&typeId&ownerId&limit&cursor` | Lagos dates + keyset cursor | `{items,nextCursor,from,to}` | `400 VALIDATION` issues, date cap, `from > to` | `EmptiesMovementListPage` / MATCH |
-| `POST /empties/movements/:id/reverse` | `{reason}` (1–500 chars) | reversal movement row | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` if already reversed or the target is itself a reversal | `EmptiesMovementDto` / MATCH |
+| `POST /empties/movements/:id/reverse` | `{reason}` (1–500 chars) | reversal movement row | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` if already reversed, the target is itself a reversal, or it is paired with a customer return | `EmptiesMovementDto` / MATCH |
+| `GET /empties/customer-balances?customerId&ownerId&typeId&q&onlyOwing&limit&cursor` | searchable balance filters; `onlyOwing` defaults true | `{items,totalsByOwner,nextCursor}`; value is display-only integer-kobo text or null | `400 VALIDATION` issues | `EmptiesCustomerBalanceListPage` / MATCH |
+| `GET /empties/customer-movements?from&to&customerId&typeId&limit&cursor` | Lagos date range + customer/type + keyset cursor | `{items,nextCursor,from,to}` | `400 VALIDATION` issues, date cap, `from > to` | `EmptiesCustomerMovementListPage` / MATCH |
+| `POST /empties/customer-movements` | `{customerId,typeId,movementType,quantity,note?,occurredAt?}`; positive integer for typed movements, signed non-zero integer for ADJUSTMENT | immutable customer movement; RETURNED also writes linked `RECEIVED` on-hand movement in the same transaction | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` when customer owes fewer than requested | `CreateEmptiesCustomerMovementInput` → `EmptiesCustomerMovementDto` / MATCH |
+| `POST /empties/customer-movements/:id/reverse` | `{reason}` (1–500 chars) | reversal row; a linked RETURNED reversal also reverses its on-hand movement atomically | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` if reversed already, balance would go negative, or on-hand is insufficient | `EmptiesCustomerMovementDto` / MATCH |
 | `GET /empties/overview` | none | `{owners,warnings}`; per-owner crate totals and product/location breakdown | authenticated; read-only | `EmptiesOverviewDto` / MATCH |
 | `GET /empties/product-owners?q&assigned&cursor&limit` | search, assignment filter and ID cursor | `{items,nextCursor}` for active products | `400 VALIDATION` issues | `ProductOwnerListPage` / MATCH |
 | `PUT /empties/product-owners/:productId` | `{ownerId:string|null}` | product and current brewery mapping | `400 VALIDATION`; `404 NOT_FOUND`; `409 BUSINESS_RULE` for an inactive brewery | `ProductOwnerDto` / MATCH |
@@ -880,7 +891,7 @@ run `pnpm --filter @fabtyna/api db:audit` on dev: expect zero rows.
   (API) consistently; `WEB_ORIGIN` and `NEXT_PUBLIC_API_BASE_URL` must use the
   same host name as the browser address or cookies and CORS fail.
 
-### Empties (phase 1; counts only; real mode only)
+### Empties (real mode only)
 
 - Nav entry "Empties" → `/empties`; owner/type management at `/empties/types`.
 - `/empties` (mobile first): one `StatCard` per owner plus one per kind
@@ -897,6 +908,23 @@ run `pnpm --filter @fabtyna/api db:audit` on dev: expect zero rows.
 - `/empties/types`: create/rename/deactivate/reactivate owners, and
   create/patch/deactivate/reactivate types. The API rejects deactivating an
   owner that still has active types, or a type with a non-zero count.
+- `/empties/customers`: searchable, cursor-paged customer balances by brewery
+  empties type; the picker searches `GET /customers` using cursor paging rather
+  than loading only the first page. Customer detail also shows the same
+  "Crates owed" actions and date-filtered movement history.
+- Customer movement kinds are `TAKEN` (positive owed), `RETURNED` (reduces owed
+  and atomically adds an on-hand `RECEIVED` movement), `KEPT` (reduces owed,
+  requires a note, does not alter on-hand), and signed `ADJUSTMENT` (requires a
+  reason). Customer balances are trigger-maintained per customer/type and
+  display values are `quantity × unitValueKobo` only; they never enter money or
+  profit reports.
+- A linked on-hand `RECEIVED` movement cannot be reversed from the general
+  empties screen. Reverse its customer movement instead; the customer and
+  on-hand reversal rows are committed together.
+- The new customer movement and balance tables use new, table-specific
+  immutability, reversal, and balance-maintainer functions. They deliberately
+  do not use or replace the shared `fn_check_reversal_integrity` or phase-1
+  empties balance functions.
 - Mock mode (`isMockApiMode`) renders "Not available with demo data" instead of
   the panels.
 - Query keys live under `queryKeys.empties` (`lib/query-keys.ts`):

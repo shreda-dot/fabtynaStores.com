@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { formatLagosDate } from "@fabtyna/shared";
 import { CustomerSalesTotals } from "@/components/customers/customer-sales-totals";
+import { CustomerCratesPanel } from "@/components/empties/customer-crates";
 import {
   ResponsiveTable,
   type ResponsiveTableColumn,
@@ -135,6 +136,7 @@ export default function CustomerDetailPage() {
         <StatCard label="Unpaid sales" value={unpaidSales.length} />
       </div>
       <CustomerSalesTotals customerId={id} />
+      <CustomerCratesPanel customerId={id} customerName={c.name} />
       <Card>
         <CardHeader title="Contact" />
         <CardBody>

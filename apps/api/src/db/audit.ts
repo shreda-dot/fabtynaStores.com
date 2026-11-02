@@ -490,6 +490,71 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
       HAVING COUNT(*) > 1
        ORDER BY 1`,
   },
+  {
+    name: "empties_customer_balances = Σ empties_customer_movements.quantity",
+    description:
+      "The derived customer crate balance must match the immutable movement log for every customer and type.",
+    severity: "fatal",
+    sql: `
+      SELECT COALESCE(b."customerId", m."customerId") AS "customerId",
+             COALESCE(b."typeId", m."typeId") AS "typeId",
+             COALESCE(b.quantity, 0)::text AS "balanceQuantity",
+             COALESCE(m."movementQuantity", 0)::text AS "movementQuantity"
+        FROM empties_customer_balances b
+        FULL OUTER JOIN (
+          SELECT "customerId", "typeId", SUM(quantity) AS "movementQuantity"
+            FROM empties_customer_movements
+           GROUP BY "customerId", "typeId"
+        ) m ON m."customerId" = b."customerId" AND m."typeId" = b."typeId"
+       WHERE COALESCE(b.quantity, 0) <> COALESCE(m."movementQuantity", 0)
+       ORDER BY 1, 2`,
+  },
+  {
+    name: "every live customer RETURNED movement has one live RECEIVED movement",
+    description:
+      "A customer return must be paired with exactly one unreversed on-hand RECEIVED movement of equal quantity and type.",
+    severity: "fatal",
+    sql: `
+      SELECT cm.id AS "customerMovementId",
+             cm."emptiesMovementId",
+             COUNT(em.id) AS "liveReceivedCount"
+        FROM empties_customer_movements cm
+        LEFT JOIN empties_movements em
+          ON em.id = cm."emptiesMovementId"
+         AND em."reversesEntryId" IS NULL
+         AND em."movementType" = 'RECEIVED'
+         AND em."typeId" = cm."typeId"
+         AND em.quantity = abs(cm.quantity)
+       WHERE cm."movementType" = 'RETURNED'
+         AND cm."reversesEntryId" IS NULL
+         AND NOT EXISTS (
+           SELECT 1
+             FROM empties_customer_movements reversal
+            WHERE reversal."reversesEntryId" = cm.id
+         )
+       GROUP BY cm.id, cm."emptiesMovementId"
+      HAVING COUNT(em.id) <> 1
+       ORDER BY 1`,
+  },
+  {
+    name: "empties customer movement: original + reversal = 0",
+    description: "A reversed customer crate movement must be perfectly negated.",
+    severity: "fatal",
+    sql: `
+      SELECT cm.id AS "customerMovementId",
+             SUM(linked.quantity)::text AS "netQuantity"
+        FROM empties_customer_movements cm
+        JOIN empties_customer_movements linked
+          ON linked.id = cm.id OR linked."reversesEntryId" = cm.id
+       WHERE cm."reversesEntryId" IS NULL
+       GROUP BY cm.id
+      HAVING SUM(linked.quantity) <> 0
+         AND EXISTS (
+           SELECT 1 FROM empties_customer_movements reversal
+            WHERE reversal."reversesEntryId" = cm.id
+         )
+       ORDER BY 1`,
+  },
 ];
 
 export async function runDbAudit(connectionString: string): Promise<AuditResult> {

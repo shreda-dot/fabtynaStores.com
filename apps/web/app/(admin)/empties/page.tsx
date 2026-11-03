@@ -473,28 +473,26 @@ export default function EmptiesPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Empties"
-        description="See brewery crate totals and track bottles and crates owed back. Values are for reference only and never enter cash or profit."
-        actions={
-          <div className="flex flex-wrap gap-2">
-            <Link href="/dashboard" className={buttonClasses({ variant: "secondary" })}>
-              <ArrowLeft aria-hidden="true" className="h-4 w-4" />
-              Back to dashboard
-            </Link>
-            <Link href="/empties/products" className={buttonClasses({ variant: "secondary" })}>
-              Assign products
-            </Link>
-            <Link href="/empties/customers" className={buttonClasses({ variant: "secondary" })}>
-              Crates customers owe
-            </Link>
-            <Link href="/empties/types" className={buttonClasses({ variant: "secondary" })}>
-              <Boxes aria-hidden="true" className="h-4 w-4" />
-              Manage owners &amp; types
-            </Link>
-          </div>
-        }
-      />
+    title="Empties"
+    description="See brewery crate totals and track bottles and crates owed back. Values are for reference only and never enter cash or profit."
+  />
 
+  <div className="flex flex-wrap gap-2">
+    <Link href="/dashboard" className={buttonClasses({ variant: "secondary" })}>
+      <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+      Back to dashboard
+    </Link>
+    <Link href="/empties/products" className={buttonClasses({ variant: "secondary" })}>
+      Assign products
+    </Link>
+    <Link href="/empties/customers" className={buttonClasses({ variant: "secondary" })}>
+      Crates customers owe
+    </Link>
+    <Link href="/empties/types" className={buttonClasses({ variant: "secondary" })}>
+      <Boxes aria-hidden="true" className="h-4 w-4" />
+      Manage owners &amp; types
+    </Link>
+  </div>
       {isMockApiMode ? (
         <EmptyState
           title="Not available with demo data"

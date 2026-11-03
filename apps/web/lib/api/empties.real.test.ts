@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   customerBalancesQuery,
   customerMovementsQuery,
+  depositBalancesQuery,
+  depositsQuery,
   emptiesRealApi,
 } from "./empties.real";
 import { customersRealApi } from "./customers.real";
@@ -114,6 +116,16 @@ describe("customer-owned empties query strings", () => {
     ).toBe(
       "?from=2026-10-01&to=2026-10-31&customerId=customer-1&typeId=type-1&cursor=next&limit=25",
     );
+  });
+
+  it("encodes deposit balance and deposit history filters", () => {
+    expect(depositBalancesQuery({})).toBe("?onlyHolding=true&limit=50");
+    expect(depositBalancesQuery({ q: " Ada ", onlyHolding: false, cursor: "c1", limit: 10 })).toBe(
+      "?q=Ada&onlyHolding=false&cursor=c1&limit=10",
+    );
+    expect(
+      depositsQuery({ from: "2026-11-01", to: "2026-11-03", customerId: "customer-1", cursor: "n", limit: 25 }),
+    ).toBe("?from=2026-11-01&to=2026-11-03&customerId=customer-1&cursor=n&limit=25");
   });
 
   it("uses the cursor-paged active customer API for the customer picker", async () => {

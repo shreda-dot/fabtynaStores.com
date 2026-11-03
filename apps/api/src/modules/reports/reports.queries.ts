@@ -355,16 +355,21 @@ export async function getMoneyFlow(
 ) {
   const range = summaryDateRange(query, now, maxDays);
   const [accounts, openingRows, entries, sales, customerBalanceRows] = await Promise.all([
-    prisma.account.findMany({ where: query.accountId === undefined ? {} : { id: query.accountId } }),
+    // The crate-deposit holding account is money held for customers, not business cash.
+    prisma.account.findMany({
+      where: { isHolding: false, ...(query.accountId === undefined ? {} : { id: query.accountId }) },
+    }),
     prisma.$queryRaw<Array<{ accountId: string; amountKobo: bigint }>>`
-      SELECT "accountId", COALESCE(SUM("amountKobo"), 0)::bigint AS "amountKobo"
-        FROM account_ledger_entries
-       WHERE "occurredAt" < ${range.start}
-         ${query.accountId === undefined ? Prisma.empty : Prisma.sql`AND "accountId" = ${query.accountId}`}
-       GROUP BY "accountId"`,
+      SELECT ale."accountId", COALESCE(SUM(ale."amountKobo"), 0)::bigint AS "amountKobo"
+        FROM account_ledger_entries ale
+        JOIN accounts a ON a.id = ale."accountId" AND NOT a."isHolding"
+       WHERE ale."occurredAt" < ${range.start}
+         ${query.accountId === undefined ? Prisma.empty : Prisma.sql`AND ale."accountId" = ${query.accountId}`}
+       GROUP BY ale."accountId"`,
     prisma.accountLedgerEntry.findMany({
       where: {
         occurredAt: { gte: range.start, lt: range.end },
+        account: { isHolding: false },
         ...(query.accountId === undefined ? {} : { accountId: query.accountId }),
       },
       orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
@@ -488,7 +493,9 @@ export async function getFinancialPosition(
         FROM products p LEFT JOIN stock_balances sb ON sb."productId" = p.id
        GROUP BY p.id`,
     prisma.$queryRaw<Array<{ cashKobo: bigint }>>`
-      SELECT COALESCE(SUM("balanceKobo"), 0)::bigint AS "cashKobo" FROM account_balances`,
+      SELECT COALESCE(SUM(ab."balanceKobo"), 0)::bigint AS "cashKobo"
+        FROM account_balances ab
+        JOIN accounts a ON a.id = ab."accountId" AND NOT a."isHolding"`,
     prisma.$queryRaw<Array<{ receivablesKobo: bigint }>>`
       SELECT COALESCE(SUM(balance), 0)::bigint AS "receivablesKobo"
         FROM (SELECT SUM("amountKobo") AS balance FROM customer_ledger_entries

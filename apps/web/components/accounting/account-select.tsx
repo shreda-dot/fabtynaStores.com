@@ -8,7 +8,11 @@ export function defaultAccountId(
   accounts: readonly AccountDto[],
   method?: PaymentMethod,
 ): string {
-  const active = accounts.filter((account) => account.isActive);
+  const active = accounts.filter(
+    (account) =>
+      account.isActive &&
+      (account as AccountDto & { isHolding?: boolean }).isHolding !== true,
+  );
   const preferredType = method === "TRANSFER" ? "BANK" : "CASH";
   return (
     active.find((account) => account.type === preferredType)?.id ??
@@ -34,7 +38,11 @@ export function AccountSelect({
   method?: PaymentMethod;
   disabled?: boolean;
 }) {
-  const activeAccounts = accounts.filter((account) => account.isActive);
+  const activeAccounts = accounts.filter(
+    (account) =>
+      account.isActive &&
+      (account as AccountDto & { isHolding?: boolean }).isHolding !== true,
+  );
   const selectedId = accountId || defaultAccountId(activeAccounts, method);
 
   return (

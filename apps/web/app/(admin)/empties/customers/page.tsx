@@ -42,6 +42,17 @@ export default function EmptiesCustomersPage() {
     enabled: !isMockApiMode,
   });
   const rows = balances.data?.pages.flatMap((page) => page.items) ?? [];
+  const deposits = useInfiniteQuery({
+    queryKey: queryKeys.empties.depositBalancePages({ onlyHolding: true }),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      emptiesApi.listDepositBalances({ onlyHolding: true, limit: PAGE_SIZE, cursor: pageParam }),
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    enabled: !isMockApiMode,
+  });
+  const depositRows = deposits.data?.pages.flatMap((page) => page.items) ?? [];
+  const depositTotals = deposits.data?.pages[0]?.totals;
+  const heldByCustomer = new Map(depositRows.map((row) => [row.customerId, row.heldKobo]));
   const totals = balances.data?.pages[0]?.totalsByOwner ?? [];
 
   const rowGroups = new Map<string, EmptiesCustomerBalanceDto[]>();
@@ -104,6 +115,11 @@ export default function EmptiesCustomersPage() {
                             <p className="text-sm text-muted-foreground">
                               Last crate activity: {formatLagosDateTime(first.lastMovementAt)}
                             </p>
+                            {heldByCustomer.has(id) && (
+                              <p className="text-sm">
+                                Deposit held: <Money kobo={heldByCustomer.get(id)!} tone="neutral" />
+                              </p>
+                            )}
                           </div>
                           <Button
                             variant="secondary"
@@ -140,6 +156,44 @@ export default function EmptiesCustomersPage() {
               )}
             </CardBody>
           </Card>
+          <details className="rounded-md border border-border p-3">
+            <summary className="cursor-pointer text-sm font-medium">
+              Deposits{depositTotals ? ` (${depositTotals.customersHolding} customers, ` : ""}
+              {depositTotals ? "held " : ""}
+              {depositTotals ? <Money kobo={depositTotals.heldKobo} tone="neutral" /> : null}
+              {depositTotals ? ")" : ""}
+            </summary>
+            <div className="mt-3 space-y-2">
+              {deposits.isPending ? (
+                <Skeleton variant="row" count={2} />
+              ) : deposits.isError ? (
+                <ErrorState message={toUserMessage(deposits.error)} onRetry={() => void deposits.refetch()} />
+              ) : depositRows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No customer is holding a deposit.</p>
+              ) : (
+                depositRows.map((row) => (
+                  <div key={row.customerId} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted p-3 text-sm">
+                    <span className="font-medium">{row.customerName}</span>
+                    <Money kobo={row.heldKobo} tone="neutral" />
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setSelectedCustomer({ id: row.customerId, name: row.customerName })}
+                    >
+                      Open
+                    </Button>
+                  </div>
+                ))
+              )}
+              {deposits.hasNextPage && (
+                <div className="flex justify-center">
+                  <Button variant="secondary" loading={deposits.isFetchingNextPage} onClick={() => void deposits.fetchNextPage()}>
+                    Load more
+                  </Button>
+                </div>
+              )}
+            </div>
+          </details>
           <CustomerCratesPanel
             key={selectedCustomer?.id ?? "customer-picker"}
             selectedCustomer={selectedCustomer}

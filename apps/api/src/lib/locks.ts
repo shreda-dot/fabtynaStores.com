@@ -84,6 +84,8 @@ export interface LockedAccount {
   name: string;
   type: "CASH" | "BANK" | "POS";
   isActive: boolean;
+  /** The system account that holds customer crate deposits; only the empties module may use it. */
+  isHolding: boolean;
   /** From account_balances; a never-used account has no row and counts as zero. */
   balanceKobo: bigint;
 }
@@ -103,7 +105,14 @@ export async function lockAccounts(
   }
   counted(ctx);
   const rows = await ctx.tx.$queryRaw<
-    Array<{ id: string; name: string; type: LockedAccount["type"]; isActive: boolean; balanceKobo: string }>
+    Array<{
+      id: string;
+      name: string;
+      type: LockedAccount["type"];
+      isActive: boolean;
+      isHolding: boolean;
+      balanceKobo: string;
+    }>
   >`
     WITH locked AS (
       SELECT "accountId", "balanceKobo"
@@ -112,7 +121,8 @@ export async function lockAccounts(
        ORDER BY "accountId"
          FOR UPDATE
     )
-    SELECT a.id, a.name, a.type::text AS type, a."isActive", COALESCE(l."balanceKobo", 0)::text AS "balanceKobo"
+    SELECT a.id, a.name, a.type::text AS type, a."isActive", a."isHolding",
+           COALESCE(l."balanceKobo", 0)::text AS "balanceKobo"
       FROM accounts a
       LEFT JOIN locked l ON l."accountId" = a.id
      WHERE a.id = ANY(${ids}::text[])`;

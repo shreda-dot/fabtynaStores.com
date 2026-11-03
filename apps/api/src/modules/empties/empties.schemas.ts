@@ -222,3 +222,82 @@ export const reverseCustomerMovementSchema = z
   .object({ reason: z.string().trim().min(1).max(500) })
   .strict();
 export type ReverseCustomerMovementBody = z.infer<typeof reverseCustomerMovementSchema>;
+
+// ---------- crate deposits ----------
+const depositAmountKoboSchema = z
+  .string()
+  .regex(/^[1-9]\d*$/, "Must be a positive whole-kobo amount.")
+  .refine((value) => BigInt(value) <= 9_223_372_036_854_775_807n, "The amount is too large.");
+
+export const emptiesDepositMovementTypeSchema = z.enum(["RECEIVED", "REFUNDED", "FORFEITED"]);
+
+/**
+ * RECEIVED and REFUNDED move money in and out of the holding account.
+ * FORFEITED moves it to `toAccountId` and also reduces the crates the customer
+ * owes by `quantity` of `typeId`.
+ */
+export const createDepositSchema = z
+  .object({
+    customerId: idSchema,
+    movementType: emptiesDepositMovementTypeSchema,
+    amountKobo: depositAmountKoboSchema,
+    note: z.string().trim().min(1).max(500).nullable().optional(),
+    occurredAt: isoDateTimeSchema.optional(),
+    typeId: idSchema.optional(),
+    quantity: z.number().int().safe().min(1).max(2_147_483_647).optional(),
+    toAccountId: idSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (body) =>
+      body.movementType === "FORFEITED"
+      || (body.typeId === undefined && body.quantity === undefined && body.toAccountId === undefined),
+    {
+      message: "Crates and a destination account are only used when a deposit is forfeited.",
+      path: ["movementType"],
+    },
+  )
+  .refine(
+    (body) =>
+      body.movementType !== "FORFEITED"
+      || (body.typeId !== undefined && body.quantity !== undefined && body.toAccountId !== undefined),
+    {
+      message: "A forfeit needs the crate type, the number of crates and the account that receives the money.",
+      path: ["typeId"],
+    },
+  )
+  .refine((body) => body.movementType !== "FORFEITED" || (body.note ?? "").trim() !== "", {
+    message: "A note is required when a deposit is forfeited.",
+    path: ["note"],
+  });
+export type CreateDepositBody = z.infer<typeof createDepositSchema>;
+
+export const listDepositBalancesQuerySchema = z
+  .object({
+    q: z.string().trim().min(1).max(100).optional(),
+    onlyHolding: z.enum(["true", "false"]).transform((value) => value === "true").default(true),
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    cursor: z.string().trim().min(1).max(400).optional(),
+  })
+  .strict();
+export type ListDepositBalancesQuery = z.infer<typeof listDepositBalancesQuerySchema>;
+
+export const listDepositsQuerySchema = z
+  .object({
+    from: lagosDateStringSchema.optional(),
+    to: lagosDateStringSchema.optional(),
+    customerId: idSchema.optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    cursor: z.string().trim().min(1).max(400).optional(),
+  })
+  .strict()
+  .refine((query) => query.from === undefined || query.to === undefined || query.from <= query.to, {
+    message: "'from' must not be after 'to'.",
+    path: ["from"],
+  });
+export type ListDepositsQuery = z.infer<typeof listDepositsQuerySchema>;
+
+export const reverseDepositSchema = z
+  .object({ reason: z.string().trim().min(1).max(500) })
+  .strict();
+export type ReverseDepositBody = z.infer<typeof reverseDepositSchema>;

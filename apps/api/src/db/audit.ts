@@ -555,6 +555,87 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
          )
        ORDER BY 1`,
   },
+  {
+    name: "empties_deposit_balances = Σ empties_deposit_movements.amountKobo",
+    description:
+      "The derived deposit held per customer must match the immutable deposit log.",
+    severity: "fatal",
+    sql: `
+      SELECT COALESCE(b."customerId", m."customerId") AS "customerId",
+             COALESCE(b."amountKobo", 0)::text AS "balanceKobo",
+             COALESCE(m."movementKobo", 0)::text AS "movementKobo"
+        FROM empties_deposit_balances b
+        FULL OUTER JOIN (
+          SELECT "customerId", SUM("amountKobo") AS "movementKobo"
+            FROM empties_deposit_movements
+           GROUP BY "customerId"
+        ) m ON m."customerId" = b."customerId"
+       WHERE COALESCE(b."amountKobo", 0) <> COALESCE(m."movementKobo", 0)
+       ORDER BY 1`,
+  },
+  {
+    name: "every live deposit RECEIVED/REFUNDED row has one live account entry",
+    description:
+      "A live crate deposit or refund must own exactly one unreversed ADJUSTMENT entry of equal amount on the holding account.",
+    severity: "fatal",
+    sql: `
+      SELECT dm.id AS "depositMovementId",
+             dm."accountEntryId",
+             COUNT(ale.id) AS "liveEntryCount"
+        FROM empties_deposit_movements dm
+        LEFT JOIN account_ledger_entries ale
+          ON ale.id = dm."accountEntryId"
+         AND ale.type = 'ADJUSTMENT'
+         AND ale."amountKobo" = dm."amountKobo"
+         AND ale."reversesEntryId" IS NULL
+         AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = ale."accountId" AND a."isHolding")
+         AND NOT EXISTS (
+           SELECT 1 FROM account_ledger_entries r WHERE r."reversesEntryId" = ale.id
+         )
+       WHERE dm."movementType" IN ('RECEIVED', 'REFUNDED')
+         AND dm."reversesEntryId" IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM empties_deposit_movements reversal
+            WHERE reversal."reversesEntryId" = dm.id
+         )
+       GROUP BY dm.id, dm."accountEntryId"
+      HAVING COUNT(ale.id) <> 1
+       ORDER BY 1`,
+  },
+  {
+    name: "empties deposit movement: original + reversal = 0",
+    description: "A reversed crate deposit movement must be perfectly negated.",
+    severity: "fatal",
+    sql: `
+      SELECT dm.id AS "depositMovementId",
+             SUM(linked."amountKobo")::text AS "netKobo"
+        FROM empties_deposit_movements dm
+        JOIN empties_deposit_movements linked
+          ON linked.id = dm.id OR linked."reversesEntryId" = dm.id
+       WHERE dm."reversesEntryId" IS NULL
+       GROUP BY dm.id
+      HAVING SUM(linked."amountKobo") <> 0
+         AND EXISTS (
+           SELECT 1 FROM empties_deposit_movements reversal
+            WHERE reversal."reversesEntryId" = dm.id
+         )
+       ORDER BY 1`,
+  },
+  {
+    name: "holding account balance = Σ customer deposits held",
+    description:
+      "The money in the crate-deposit holding account must equal the deposits held for customers.",
+    severity: "fatal",
+    sql: `
+      SELECT a.id AS "accountId",
+             COALESCE(ab."balanceKobo", 0)::text AS "accountKobo",
+             (SELECT COALESCE(SUM("amountKobo"), 0) FROM empties_deposit_balances)::text AS "heldKobo"
+        FROM accounts a
+        LEFT JOIN account_balances ab ON ab."accountId" = a.id
+       WHERE a."isHolding"
+         AND COALESCE(ab."balanceKobo", 0)
+             <> (SELECT COALESCE(SUM("amountKobo"), 0) FROM empties_deposit_balances)`,
+  },
 ];
 
 export async function runDbAudit(connectionString: string): Promise<AuditResult> {

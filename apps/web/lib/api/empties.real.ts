@@ -20,6 +20,12 @@ import type {
   EmptiesCustomerMovementListPage,
   EmptiesCustomerMovementDto,
   CreateEmptiesCustomerMovementInput,
+  EmptiesDepositBalanceListOptions,
+  EmptiesDepositBalanceListPage,
+  EmptiesDepositListOptions,
+  EmptiesDepositListPage,
+  EmptiesDepositDto,
+  CreateEmptiesDepositInput,
 } from "./empties.api";
 
 function query(values: Record<string, string | undefined>): string {
@@ -93,6 +99,25 @@ export function customerMovementsQuery(
     to: options.to,
     customerId: options.customerId,
     typeId: options.typeId,
+    cursor: options.cursor ?? undefined,
+    limit: String(options.limit ?? 50),
+  });
+}
+
+export function depositBalancesQuery(options: EmptiesDepositBalanceListOptions = {}): string {
+  return query({
+    q: nonEmpty(options.q),
+    onlyHolding: String(options.onlyHolding ?? true),
+    cursor: options.cursor ?? undefined,
+    limit: String(options.limit ?? 50),
+  });
+}
+
+export function depositsQuery(options: EmptiesDepositListOptions = {}): string {
+  return query({
+    from: options.from,
+    to: options.to,
+    customerId: options.customerId,
     cursor: options.cursor ?? undefined,
     limit: String(options.limit ?? 50),
   });
@@ -253,5 +278,40 @@ export const emptiesRealApi: EmptiesApi = {
       `/empties/customer-movements/${encodeURIComponent(id)}/reverse`,
       { method: "POST", body: { reason }, idempotencyKey },
     );
+  },
+
+  async listDepositBalances(options = {}) {
+    return requestJson<EmptiesDepositBalanceListPage>(
+      `/empties/deposit-balances${depositBalancesQuery(options)}`,
+    );
+  },
+
+  async listDeposits(options = {}) {
+    return requestJson<EmptiesDepositListPage>(`/empties/deposits${depositsQuery(options)}`);
+  },
+
+  async createDeposit(input: CreateEmptiesDepositInput, idempotencyKey) {
+    return requestJson<EmptiesDepositDto>("/empties/deposits", {
+      method: "POST",
+      body: {
+        customerId: input.customerId,
+        movementType: input.movementType,
+        amountKobo: input.amountKobo,
+        ...(nonEmpty(input.note) === undefined ? {} : { note: nonEmpty(input.note) }),
+        ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),
+        ...(input.typeId === undefined ? {} : { typeId: input.typeId }),
+        ...(input.quantity === undefined ? {} : { quantity: input.quantity }),
+        ...(input.toAccountId === undefined ? {} : { toAccountId: input.toAccountId }),
+      },
+      idempotencyKey,
+    });
+  },
+
+  async reverseDeposit(id, reason, idempotencyKey) {
+    return requestJson<EmptiesDepositDto>(`/empties/deposits/${encodeURIComponent(id)}/reverse`, {
+      method: "POST",
+      body: { reason },
+      idempotencyKey,
+    });
   },
 };

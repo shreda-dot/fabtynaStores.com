@@ -5,6 +5,10 @@ import {
   balanceListQuerySchema,
   assignProductOwnerSchema,
   createCustomerMovementSchema,
+  createDepositSchema,
+  listDepositBalancesQuerySchema,
+  listDepositsQuerySchema,
+  reverseDepositSchema,
   createMovementSchema,
   createOwnerSchema,
   createTypeSchema,
@@ -226,5 +230,37 @@ export function registerEmptiesRoutes(
       reply,
       await deps.service.reverseCustomerMovement(id, parsed.data, actor, readKey(request)),
     );
+  });
+
+  // ---------- customer crate deposits ----------
+  app.get("/empties/deposit-balances", async (request, reply) => {
+    requireActor(request);
+    const parsed = listDepositBalancesQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      throw validationError("The deposit-balance filter is not valid.", parsed.error.issues);
+    }
+    return reply.status(200).send(await deps.service.listDepositBalances(parsed.data));
+  });
+
+  app.get("/empties/deposits", async (request, reply) => {
+    requireActor(request);
+    const parsed = listDepositsQuerySchema.safeParse(request.query);
+    if (!parsed.success) throw validationError("The deposit filter is not valid.", parsed.error.issues);
+    return reply.status(200).send(await deps.service.listDeposits(parsed.data));
+  });
+
+  app.post("/empties/deposits", async (request, reply) => {
+    const actor = requireActor(request);
+    const parsed = createDepositSchema.safeParse(request.body);
+    if (!parsed.success) throw validationError("The deposit is not valid.", parsed.error.issues);
+    return send(reply, await deps.service.createDeposit(parsed.data, actor, readKey(request)));
+  });
+
+  app.post("/empties/deposits/:id/reverse", async (request, reply) => {
+    const actor = requireActor(request);
+    const id = readId(request);
+    const parsed = reverseDepositSchema.safeParse(request.body);
+    if (!parsed.success) throw validationError("The reversal is not valid.", parsed.error.issues);
+    return send(reply, await deps.service.reverseDeposit(id, parsed.data, actor, readKey(request)));
   });
 }

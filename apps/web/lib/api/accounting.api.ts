@@ -19,7 +19,7 @@ export interface AccountMigrationNotice {
   message: string;
 }
 
-export type AccountRecordDto = AccountDto & { balanceKobo?: string };
+export type AccountRecordDto = AccountDto & { balanceKobo?: string; isHolding?: boolean };
 
 export type AccountStatementEntryDto = {
   id: string;

@@ -80,6 +80,7 @@ function accountDto(row: {
   name: string;
   type: string;
   isActive: boolean;
+  isHolding: boolean;
   deactivatedAt: Date | null;
   createdAt: Date;
   balanceKobo: bigint;
@@ -89,6 +90,7 @@ function accountDto(row: {
     name: row.name,
     type: row.type,
     isActive: row.isActive,
+    isHolding: row.isHolding,
     deactivatedAt: row.deactivatedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     balanceKobo: row.balanceKobo.toString(),
@@ -126,7 +128,17 @@ async function requireLockedAccount(ctx: TxContext, accountId: string): Promise<
   const locked = await lockAccounts(ctx, [accountId]);
   const account = locked.get(accountId);
   if (account === undefined) throw new AppError(404, "NOT_FOUND", "Account not found.", { accountId });
+  assertNotHoldingAccount(account);
   return account;
+}
+
+/** The crate-deposit holding account is only ever moved by the empties module. */
+function assertNotHoldingAccount(account: Pick<LockedAccount, "isHolding" | "name">): void {
+  if (account.isHolding) {
+    throw businessRuleError(
+      `${account.name} holds customer crate deposits and is managed from Empties; it cannot be changed here.`,
+    );
+  }
 }
 
 export function createAccountsService(options: AccountsServiceOptions) {
@@ -180,6 +192,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
   ): Promise<AccountLedgerEntry[]> {
     const accountIds = targets.map((entry) => entry.accountId);
     const locked = await lockAccounts(ctx, accountIds);
+    for (const account of locked.values()) assertNotHoldingAccount(account);
     const accounts = [...locked.values()].map(asDomainAccount);
     const existing = await loadEntries(ctx, accountIds);
     return mapDomainError(() =>
@@ -194,11 +207,12 @@ export function createAccountsService(options: AccountsServiceOptions) {
         name: string;
         type: "CASH" | "BANK" | "POS";
         isActive: boolean;
+        isHolding: boolean;
         deactivatedAt: Date | null;
         createdAt: Date;
         balanceKobo: bigint;
       }>>`
-        SELECT a.id, a.name, a.type::text AS type, a."isActive", a."deactivatedAt", a."createdAt",
+        SELECT a.id, a.name, a.type::text AS type, a."isActive", a."isHolding", a."deactivatedAt", a."createdAt",
                COALESCE(ab."balanceKobo", 0)::bigint AS "balanceKobo"
           FROM accounts a
           LEFT JOIN account_balances ab ON ab."accountId" = a.id
@@ -365,6 +379,8 @@ export function createAccountsService(options: AccountsServiceOptions) {
         const to = locked.get(body.toAccountId);
         if (from === undefined) throw new AppError(404, "NOT_FOUND", "Source account not found.", { accountId: body.fromAccountId });
         if (to === undefined) throw new AppError(404, "NOT_FOUND", "Destination account not found.", { accountId: body.toAccountId });
+        assertNotHoldingAccount(from);
+        assertNotHoldingAccount(to);
         const occurredAt = body.occurredAt ? new Date(body.occurredAt) : now();
         assertNotFutureOccurredAt(occurredAt, getLagosBusinessDate(now()));
         const built = mapDomainError(() =>

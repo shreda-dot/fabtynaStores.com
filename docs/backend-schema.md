@@ -85,6 +85,7 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261024000200_reversal_integrity_note_fix`  | Function body only. Restores the `account_ledger_entries` `note` exemption in the shared `fn_check_reversal_integrity` that `20261024000000_empties` silently reverted when it rewrote the function to add the empties magnitude column. No object is created, renamed or dropped. See §4.9.                                                                                                                                                                                                                                                                                                      |
 | `20261031000000_empties_product_owners`       | Adds `empties_product_owners`, a mutable product-to-brewery mapping with product PK and RESTRICT FKs to products and empties owners, plus the owner index. It does not change products, stock, financial data, or shared trigger functions.                                                                                                                                                                                                                                                                                                      |
 | `20261101000000_empties_customer_movements`  | Adds immutable customer-owned empties movements and the trigger-derived customer/type balance cache. Adds table-specific sign/note/link checks, RESTRICT FKs, reverse-once and live-return-link partial indexes, immutable/reversal/balance triggers, and six new functions. It does not replace shared reversal functions or depend on product ownership. |
+| `20261103000000_empties_customer_deposits`   | Adds `accounts."isHolding"` (at most one holding account, guarded against rename, retype, deactivation and non-ADJUSTMENT/TRANSFER_OUT entries), the immutable `empties_deposit_movements` log and the trigger-derived `empties_deposit_balances` cache. Eight new functions; no existing function is replaced. See §4.9. |
 
 ## 3. Tables
 
@@ -199,6 +200,8 @@ value column is the only kobo anywhere in this feature.
 | `empties_product_owners` | Mutable mapping from a product to its brewery. Reassignment is allowed and real changes are audit-logged; products and their DTOs remain unchanged. | `productId` (PK, FK RESTRICT), `ownerId` (FK RESTRICT), `createdAt`, `updatedAt` |
 | `empties_customer_movements` | Immutable customer-side ledger for crates taken, returned, kept, or adjusted. `RETURNED` rows point to their paired on-hand `RECEIVED` row; a customer return and its on-hand movement are written in one transaction. Reversals preserve all links and negate the target exactly. | `customerId` (FK RESTRICT), `typeId` (FK RESTRICT), `movementType`, signed `quantity`, `note`, `occurredAt` (`timestamptz`), `createdById`, `emptiesMovementId`, `reversesEntryId` |
 | `empties_customer_balances` | Trigger-maintained cache of `Σ empties_customer_movements.quantity` per customer and type; never directly writable and never negative. | `customerId` + `typeId` (composite PK, FKs RESTRICT), `quantity`, `updatedAt` |
+| `empties_deposit_movements` | Immutable log of crate deposits: `RECEIVED` (+), `REFUNDED` (−), `FORFEITED` (−). RECEIVED/REFUNDED link to an ADJUSTMENT entry on the holding account; FORFEITED links to the transfer out of the holding account and to the KEPT crate row that reduces crates owed. Reversals negate the target exactly. | `customerId` (FK RESTRICT), `movementType`, signed `amountKobo`, `accountEntryId`, `accountTransferId`, `customerMovementId`, `note`, `occurredAt`, `createdById`, `reversesEntryId` |
+| `empties_deposit_balances` | Trigger-maintained cache of `Σ empties_deposit_movements.amountKobo` per customer; never directly writable, never negative (`ck_empties_deposit_balances_nonnegative`). | `customerId` (PK, FK RESTRICT), `amountKobo`, `updatedAt` |
 
 `empties_types` has no `code` column and no `normalizedKey` column: every row is
 user-managed (unlike `expense_categories`, which seeds protected system rows),
@@ -474,6 +477,36 @@ its target on type and every source column (account_ledger_entries)`, which
 - Three fatal `db:audit` checks compare customer balance caches with ledger
   sums, verify each live customer return has its matching live on-hand receipt,
   and ensure reversed customer movements net to zero.
+- **Customer crate deposits** (`20261103000000`). A deposit is money a customer
+  leaves when taking crates without empties. It is not sales revenue, profit or
+  an expense. It is held in ONE system "holding" account
+  (`accounts."isHolding" = true`, name "Crate deposits (held)", created lazily),
+  not in business cash. `RECEIVED`/`REFUNDED` post an `ADJUSTMENT` entry on that
+  account (notes "Crate deposit received - <customer>" / "refunded"). A
+  `FORFEITED` deposit is a real account transfer from the holding account to a
+  main account chosen by the owner, plus a `KEPT` crate row so the crates owed
+  fall by the same quantity, all in one transaction.
+- The holding account is protected in the database (row guard and ledger guard:
+  only `ADJUSTMENT` and `TRANSFER_OUT` entries) and in the accounts API
+  (rename, deactivate, opening balance, reconcile, movements, transfers and
+  account-entry reversals are refused). Reverse a forfeit only through
+  `POST /empties/deposits/:id/reverse`; reversing its crate row or transfer
+  alone is refused.
+- Lock order for deposit writes: deposit balance row, crate type and crate
+  balance, then `account_balances` (via `lockAccounts`), consistent with the
+  global order (document, products, stock, accounts, party). The balance
+  maintainer is UPDATE-first for the same reason as `stock_balances` (see §8).
+- Reports: financial position and money flow exclude the holding account, so
+  held deposits are neither business cash nor profit. Forfeited money appears as
+  a transfer in on the receiving account.
+- New fatal `db:audit` checks: deposit balances equal movement sums; every live
+  RECEIVED/REFUNDED row has exactly one live account entry of equal amount on
+  the holding account; reversed deposit rows net to zero; the holding account
+  balance equals the sum of held deposits.
+- Known limitations: deposits held are not shown as a liability in financial
+  position (they are simply excluded from cash); the holding account is hidden
+  from the web account lists; a client that posts the holding account to another
+  module directly gets a raw database error rather than a friendly message.
 
 ---
 
@@ -737,7 +770,10 @@ The customer-empties balance maintainer follows the same UPDATE-first rule for
 its own non-negative cache. It is implemented by new
 `fn_apply_empties_customer_movement` and
 `fn_empties_customer_balance_direct_write_guard` functions; it does not change
-the existing stock, account, or phase-1 empties functions.
+the existing stock, account, or phase-1 empties functions. The deposit
+maintainer `fn_apply_empties_deposit_movement` and its guard
+`fn_empties_deposit_balance_direct_write_guard` (raises at
+`pg_trigger_depth() <= 1`) follow the same pattern.
 
 The shared `fn_check_reversal_integrity` must retain its
 `account_ledger_entries` branch and `note` exemption. Before a production

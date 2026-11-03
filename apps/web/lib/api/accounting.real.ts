@@ -23,6 +23,7 @@ type WireAccount = {
   name: string;
   type: "CASH" | "BANK" | "POS";
   isActive: boolean;
+  isHolding?: boolean;
   deactivatedAt: string | null;
   createdAt: string;
   balanceKobo: string;
@@ -76,7 +77,9 @@ export const accountingRealApi: AccountingApi = {
   },
 
   async listPaymentAccounts() {
-    return accountingRealApi.listAccounts(false);
+    return (await accountingRealApi.listAccounts(false)).filter(
+      (account) => account.isHolding !== true,
+    );
   },
 
   async createAccount(input: CreateAccountDto, idempotencyKey) {

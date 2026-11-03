@@ -83,6 +83,7 @@ export const EXPECTED_MIGRATIONS = [
   "20261024000200_reversal_integrity_note_fix",
   "20261031000000_empties_product_owners",
   "20261101000000_empties_customer_movements",
+  "20261103000000_empties_customer_deposits",
 ] as const;
 
 /**
@@ -112,7 +113,9 @@ export const EXPECTED_TABLES = [
   // 20261101000000_empties_customer_movements
   "empties_customer_movements",
   "empties_customer_balances",
-  // 20261031000000_empties_product_owners
+  // 20261103000000_empties_customer_deposits
+  "empties_deposit_movements",
+  "empties_deposit_balances",
   "empties_product_owners",
 ] as const;
 
@@ -162,6 +165,11 @@ export const EXPECTED_INDEXES = [
   "empties_customer_movements_empties_movement_idx",
   "empties_customer_balances_pkey",
   "empties_customer_balances_type_customer_idx",
+  // 20261103000000_empties_customer_deposits
+  "empties_deposit_movements_pkey",
+  "empties_deposit_movements_customer_occurred_idx",
+  "empties_deposit_movements_occurred_idx",
+  "empties_deposit_balances_pkey",
 ] as const;
 
 /**
@@ -272,6 +280,13 @@ export const EXPECTED_CHECK_CONSTRAINTS = [
   "ck_empties_customer_movements_sign",
   "ck_empties_customer_movements_return_link",
   "ck_empties_customer_balances_nonnegative",
+
+  // 20261103000000_empties_customer_deposits
+  "ck_empties_deposit_movements_amount_nonzero",
+  "ck_empties_deposit_movements_sign",
+  "ck_empties_deposit_movements_links",
+  "ck_empties_deposit_movements_note_required",
+  "ck_empties_deposit_balances_nonnegative",
 ] as const;
 
 /**
@@ -403,6 +418,17 @@ export const EXPECTED_TRIGGERS = [
   "trg_empties_customer_movement_apply",
   "trg_empties_customer_balances_guard",
   "trg_empties_customer_balances_no_truncate",
+
+  // 20261103000000_empties_customer_deposits
+  "trg_accounts_holding_row_guard",
+  "trg_account_holding_ledger_guard",
+  "trg_empties_deposit_movement_immutable",
+  "trg_empties_deposit_movement_no_truncate",
+  "trg_empties_deposit_movement_links",
+  "trg_empties_deposit_movement_reversal_integrity",
+  "trg_empties_deposit_movement_apply",
+  "trg_empties_deposit_balances_guard",
+  "trg_empties_deposit_balances_no_truncate",
 ] as const;
 
 /** Hand-written trigger functions required by the migrations. */
@@ -414,6 +440,16 @@ export const EXPECTED_FUNCTIONS = [
   "fn_apply_empties_customer_movement",
   "fn_empties_customer_balance_direct_write_guard",
   "fn_empties_customer_balance_no_truncate",
+
+  // 20261103000000_empties_customer_deposits
+  "fn_accounts_holding_row_guard",
+  "fn_account_holding_ledger_guard",
+  "fn_empties_deposit_movement_immutable",
+  "fn_check_empties_deposit_links",
+  "fn_check_empties_deposit_reversal_integrity",
+  "fn_apply_empties_deposit_movement",
+  "fn_empties_deposit_balance_direct_write_guard",
+  "fn_empties_deposit_balance_no_truncate",
 ] as const;
 
 /**
@@ -469,6 +505,13 @@ export const EXPECTED_PARTIAL_INDEXES = [
   // 20261101000000_empties_customer_movements
   "ux_empties_customer_movement_reversed_once",
   "ux_empties_customer_movement_received_link",
+
+  // 20261103000000_empties_customer_deposits
+  "ux_accounts_single_holding",
+  "ux_empties_deposit_movement_reversed_once",
+  "ux_empties_deposit_movement_account_entry",
+  "ux_empties_deposit_movement_customer_movement",
+  "ux_empties_deposit_movement_forfeit_transfer",
 ] as const;
 
 /**
@@ -523,6 +566,14 @@ export const EXPECTED_FOREIGN_KEYS = [
   "fk_empties_customer_balances_customer",
   "fk_empties_customer_balances_type",
 
+  // 20261103000000_empties_customer_deposits
+  "fk_empties_deposit_movements_customer",
+  "fk_empties_deposit_movements_account_entry",
+  "fk_empties_deposit_movements_account_transfer",
+  "fk_empties_deposit_movements_customer_movement",
+  "fk_empties_deposit_movements_created_by",
+  "fk_empties_deposit_movements_reversal",
+  "fk_empties_deposit_balances_customer",
   // 20261031000000_empties_product_owners
   "fk_empties_product_owners_product",
   "fk_empties_product_owners_owner",

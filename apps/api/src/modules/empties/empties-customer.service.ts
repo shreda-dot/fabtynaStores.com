@@ -29,7 +29,7 @@ import type {
 
 type CustomerMovementType = "TAKEN" | "RETURNED" | "KEPT" | "ADJUSTMENT";
 
-interface CustomerTypeRow {
+export interface CustomerTypeRow {
   id: string;
   ownerId: string;
   ownerName: string;
@@ -120,7 +120,7 @@ function customerMovementDto(
   };
 }
 
-function insufficientCustomerEmpties(
+export function insufficientCustomerEmpties(
   customerName: string,
   type: CustomerTypeRow,
   owed: number,
@@ -560,6 +560,16 @@ export function createEmptiesCustomerService(options: EmptiesCustomerServiceOpti
             const type = await lockType(ctx, target.typeId);
             if (type === null) {
               throw validationError("That empties type no longer exists.", { typeId: target.typeId });
+            }
+            counted(ctx);
+            const forfeits = await ctx.tx.$queryRaw<Array<{ id: string }>>`
+              SELECT id FROM empties_deposit_movements
+               WHERE "customerMovementId" = ${id} LIMIT 1`;
+            if (forfeits.length > 0) {
+              throw businessRuleError(
+                "These crates were kept when a deposit was forfeited; reverse the forfeited deposit instead.",
+                { movementId: id },
+              );
             }
             counted(ctx);
             const customers = await ctx.tx.$queryRaw<Array<{ name: string }>>`

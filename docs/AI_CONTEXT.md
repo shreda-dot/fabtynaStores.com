@@ -248,6 +248,14 @@ to both dev and test.
   `20261101000000_empties_customer_movements` adds the immutable customer
   movement ledger and its trigger-maintained per-customer/type balance cache.
   It is an additive migration and does not depend on product ownership.
+  `20261103000000_empties_customer_deposits` adds the crate-deposit holding
+  account flag (`accounts."isHolding"`), the immutable deposit log and the
+  deposit balance cache. Deposits are held outside business cash; a forfeit is
+  an account transfer to a main account and reduces crates owed by the same
+  quantity. Applied to dev and test; production still needs the rehearsal
+  procedure in DEPLOY.md section 6. Financial position and money flow exclude
+  the holding account; held deposits are not shown as a liability (known
+  limitation).
   The four before them add dynamic expense categories, make `OTHER_INCOME`
   source-less, correct the category-index names, and make ordinary expense
   details immutable with a single void transition.

@@ -206,6 +206,12 @@ enum EmptiesCustomerMovementType {
   ADJUSTMENT
 }
 
+enum EmptiesDepositMovementType {
+  RECEIVED
+  REFUNDED
+  FORFEITED
+}
+
 // =====================================================================
 // Identity and audit
 // =====================================================================
@@ -234,6 +240,7 @@ model AdminUser {
   resetTokens              PasswordResetToken[]
   emptiesMovements         EmptiesMovement[]
   emptiesCustomerMovements EmptiesCustomerMovement[]
+  emptiesDepositMovements  EmptiesDepositMovement[]
 
   @@map("admin_users")
 }
@@ -386,6 +393,8 @@ model Customer {
   ledgerEntries    CustomerLedgerEntry[]
   emptiesMovements EmptiesCustomerMovement[]
   emptiesBalances  EmptiesCustomerBalance[]
+  depositMovements EmptiesDepositMovement[]
+  depositBalance   EmptiesDepositBalance?
 
   @@index([name])
   @@index([phone])
@@ -783,6 +792,9 @@ model Account {
   name             String
   type             AccountType
   isActive         Boolean              @default(true)
+  /// The one system account that holds customer crate deposits. Created by the
+  /// API on first use; `trg_accounts_holding_row_guard` freezes it.
+  isHolding        Boolean              @default(false)
   deactivatedAt    DateTime?
   note             String?
   createdAt        DateTime             @default(now())
@@ -808,7 +820,7 @@ model Account {
 /// own source column, enforced by `ck_account_ledger_single_source` and
 /// `trg_account_ledger_source`.
 model AccountLedgerEntry {
-  id                String               @id @default(cuid())
+  id                String                   @id @default(cuid())
   accountId         String
   type              AccountEntryType
   amountKobo        BigInt
@@ -824,17 +836,18 @@ model AccountLedgerEntry {
   loanRepaymentId   String?
   reversesEntryId   String?
   note              String?
-  occurredAt        DateTime             @default(now())
-  account           Account              @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  salePayment       SalePayment?         @relation(fields: [salePaymentId], references: [id], onDelete: Restrict)
-  supplierPayment   SupplierPayment?     @relation(fields: [supplierPaymentId], references: [id], onDelete: Restrict)
-  purchase          Purchase?            @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
-  expense           Expense?             @relation(fields: [expenseId], references: [id], onDelete: Restrict)
-  accountTransfer   AccountTransfer?     @relation(fields: [accountTransferId], references: [id], onDelete: Restrict)
-  loan              Loan?                @relation(fields: [loanId], references: [id], onDelete: Restrict)
-  loanRepayment     LoanRepayment?       @relation(fields: [loanRepaymentId], references: [id], onDelete: Restrict)
-  reversesEntry     AccountLedgerEntry?  @relation("AccountLedgerReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
-  reversedBy        AccountLedgerEntry[] @relation("AccountLedgerReversals")
+  occurredAt        DateTime                 @default(now())
+  account           Account                  @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  salePayment       SalePayment?             @relation(fields: [salePaymentId], references: [id], onDelete: Restrict)
+  supplierPayment   SupplierPayment?         @relation(fields: [supplierPaymentId], references: [id], onDelete: Restrict)
+  purchase          Purchase?                @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+  expense           Expense?                 @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  accountTransfer   AccountTransfer?         @relation(fields: [accountTransferId], references: [id], onDelete: Restrict)
+  loan              Loan?                    @relation(fields: [loanId], references: [id], onDelete: Restrict)
+  loanRepayment     LoanRepayment?           @relation(fields: [loanRepaymentId], references: [id], onDelete: Restrict)
+  reversesEntry     AccountLedgerEntry?      @relation("AccountLedgerReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversedBy        AccountLedgerEntry[]     @relation("AccountLedgerReversals")
+  depositMovements  EmptiesDepositMovement[]
 
   @@index([accountId, occurredAt])
   @@index([salePaymentId])
@@ -856,16 +869,17 @@ model AccountLedgerEntry {
 /// keyed by `ux_account_ledger_transfer_type_active`, which allows exactly one
 /// live entry of each direction per transfer.
 model AccountTransfer {
-  id            String               @id @default(cuid())
-  fromAccountId String
-  toAccountId   String
-  amountKobo    BigInt
-  note          String?
-  occurredAt    DateTime             @default(now())
-  createdAt     DateTime             @default(now())
-  fromAccount   Account              @relation("AccountTransfersFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
-  toAccount     Account              @relation("AccountTransfersTo", fields: [toAccountId], references: [id], onDelete: Restrict)
-  ledgerEntries AccountLedgerEntry[]
+  id               String                   @id @default(cuid())
+  fromAccountId    String
+  toAccountId      String
+  amountKobo       BigInt
+  note             String?
+  occurredAt       DateTime                 @default(now())
+  createdAt        DateTime                 @default(now())
+  fromAccount      Account                  @relation("AccountTransfersFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
+  toAccount        Account                  @relation("AccountTransfersTo", fields: [toAccountId], references: [id], onDelete: Restrict)
+  ledgerEntries    AccountLedgerEntry[]
+  depositMovements EmptiesDepositMovement[]
 
   // `ck_account_transfers_amount_positive` and
   // `ck_account_transfers_different_accounts` are hand-written SQL.
@@ -1170,6 +1184,7 @@ model EmptiesCustomerMovement {
   emptiesMovement   EmptiesMovement?            @relation("EmptiesCustomerReturnLink", fields: [emptiesMovementId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_customer_movements_empties_movement")
   reversesEntry     EmptiesCustomerMovement?    @relation("EmptiesCustomerMovementReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_customer_movements_reversal")
   reversedBy        EmptiesCustomerMovement[]   @relation("EmptiesCustomerMovementReversals")
+  depositMovements  EmptiesDepositMovement[]
 
   @@index([customerId, typeId, occurredAt, id], map: "empties_customer_movements_customer_type_occurred_idx")
   @@index([typeId, occurredAt, id], map: "empties_customer_movements_type_occurred_idx")
@@ -1189,4 +1204,44 @@ model EmptiesCustomerBalance {
   @@id([customerId, typeId], map: "empties_customer_balances_pkey")
   @@index([typeId, customerId], map: "empties_customer_balances_type_customer_idx")
   @@map("empties_customer_balances")
+}
+
+/// Money a customer paid as a crate deposit. RECEIVED and REFUNDED each own one
+/// ADJUSTMENT entry on the holding account; FORFEITED owns the transfer out of
+/// the holding account and the KEPT crate movement written with it.
+model EmptiesDepositMovement {
+  id                 String                     @id(map: "empties_deposit_movements_pkey") @default(cuid())
+  customerId         String
+  movementType       EmptiesDepositMovementType
+  amountKobo         BigInt
+  accountEntryId     String?
+  accountTransferId  String?
+  customerMovementId String?
+  note               String?
+  occurredAt         DateTime                   @db.Timestamptz(3)
+  createdById        String
+  reversesEntryId    String?
+  createdAt          DateTime                   @default(now()) @db.Timestamptz(3)
+  customer           Customer                   @relation(fields: [customerId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_deposit_movements_customer")
+  accountEntry       AccountLedgerEntry?        @relation(fields: [accountEntryId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_deposit_movements_account_entry")
+  accountTransfer    AccountTransfer?           @relation(fields: [accountTransferId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_deposit_movements_account_transfer")
+  customerMovement   EmptiesCustomerMovement?   @relation(fields: [customerMovementId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_deposit_movements_customer_movement")
+  createdBy          AdminUser                  @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_deposit_movements_created_by")
+  reversesEntry      EmptiesDepositMovement?    @relation("EmptiesDepositMovementReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_deposit_movements_reversal")
+  reversedBy         EmptiesDepositMovement[]   @relation("EmptiesDepositMovementReversals")
+
+  @@index([customerId, occurredAt, id], map: "empties_deposit_movements_customer_occurred_idx")
+  @@index([occurredAt, id], map: "empties_deposit_movements_occurred_idx")
+  @@map("empties_deposit_movements")
+}
+
+/// Trigger-maintained deposit held per customer.
+model EmptiesDepositBalance {
+  customerId String
+  amountKobo BigInt   @default(0)
+  updatedAt  DateTime @default(now()) @db.Timestamptz(3)
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_deposit_balances_customer")
+
+  @@id([customerId], map: "empties_deposit_balances_pkey")
+  @@map("empties_deposit_balances")
 }

@@ -17,7 +17,7 @@ import {
   type ReconcileAccountDto,
   type UpdateAccountDto,
 } from "@fabtyna/shared";
-import type { AccountStatementEntryDto } from "@/lib/api/accounting.api";
+import type { AccountRecordDto, AccountStatementEntryDto } from "@/lib/api/accounting.api";
 import { MoneyInput } from "@/components/money-input";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -64,7 +64,7 @@ type AccountOperation =
       };
     };
 
-const EMPTY_ACCOUNTS: AccountDto[] = [];
+const EMPTY_ACCOUNTS: AccountRecordDto[] = [];
 const EMPTY_LEDGER_ENTRIES: AccountLedgerEntryDto[] = [];
 
 const ENTRY_LABELS: Record<AccountEntryType, string> = {
@@ -194,7 +194,9 @@ export default function AccountsPage() {
       });
     },
   });
-  const accounts = accountsQuery.data ?? EMPTY_ACCOUNTS;
+  const allAccounts = accountsQuery.data ?? EMPTY_ACCOUNTS;
+  const holdingAccounts = allAccounts.filter((account) => account.isHolding === true);
+  const accounts = allAccounts.filter((account) => account.isHolding !== true);
   const accountIds = accounts.map((account) => account.id).join(",");
   const ledgerQuery = useQuery({
     queryKey: ["accounting", "all-account-ledgers", accountIds],
@@ -658,6 +660,34 @@ export default function AccountsPage() {
         />
       ) : (
         <>
+          {holdingAccounts.length > 0 && (
+            <Card>
+              <CardHeader
+                title="Held for customers"
+                description="Crate deposits are held for customers and are not business cash. Forfeits are transferred from Empties."
+                action={
+                  <Money
+                    kobo={holdingAccounts
+                      .reduce((total, account) => total + displayedAccountBalance(account, entries), 0n)
+                      .toString()}
+                    className="text-lg font-semibold"
+                  />
+                }
+              />
+              <CardBody className="space-y-2">
+                {holdingAccounts.map((account) => (
+                  <div
+                    key={account.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted p-3 text-sm"
+                  >
+                    <span className="font-medium">{account.name}</span>
+                    <span>{account.type} · System-managed</span>
+                    <Money kobo={displayedAccountBalance(account, entries).toString()} tone="neutral" />
+                  </div>
+                ))}
+              </CardBody>
+            </Card>
+          )}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {accounts.map((account) => (
               <Card key={account.id}>

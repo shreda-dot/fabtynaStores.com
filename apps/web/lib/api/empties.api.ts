@@ -242,6 +242,82 @@ export type EmptiesCustomerMovementListPage = {
   to: string | null;
 };
 
+export type EmptiesDepositMovementType = "RECEIVED" | "REFUNDED" | "FORFEITED";
+
+export type EmptiesDepositBalanceDto = {
+  customerId: string;
+  customerName: string;
+  heldKobo: string;
+  lastMovementAt: string | null;
+  crates: Array<{
+    typeId: string;
+    label: string;
+    ownerName: string;
+    quantity: number;
+    valueKobo: string | null;
+  }>;
+};
+
+export type EmptiesDepositBalanceListOptions = {
+  q?: string;
+  onlyHolding?: boolean;
+  cursor?: string | null;
+  limit?: number;
+};
+
+export type EmptiesDepositBalanceListPage = {
+  items: EmptiesDepositBalanceDto[];
+  totals: { heldKobo: string; customersHolding: number };
+  holdingAccount: { id: string | null; balanceKobo: string };
+  nextCursor: string | null;
+};
+
+export type EmptiesDepositDto = {
+  id: string;
+  customerId: string;
+  customerName: string;
+  movementType: EmptiesDepositMovementType;
+  amountKobo: string;
+  note: string | null;
+  occurredAt: string;
+  createdById: string;
+  accountEntryId: string | null;
+  accountTransferId: string | null;
+  customerMovementId: string | null;
+  crateQuantity: number | null;
+  crateLabel: string | null;
+  reversesEntryId: string | null;
+  reversedByEntryId: string | null;
+  createdAt: string;
+};
+
+export type EmptiesDepositListOptions = {
+  from?: string;
+  to?: string;
+  customerId?: string;
+  cursor?: string | null;
+  limit?: number;
+};
+
+export type EmptiesDepositListPage = {
+  items: EmptiesDepositDto[];
+  nextCursor: string | null;
+  from: string | null;
+  to: string | null;
+};
+
+export type CreateEmptiesDepositInput = {
+  customerId: string;
+  movementType: EmptiesDepositMovementType;
+  amountKobo: string;
+  note?: string | null;
+  occurredAt?: string;
+  /** Forfeit only: the crates written off and the main account that receives the money. */
+  typeId?: string;
+  quantity?: number;
+  toAccountId?: string;
+};
+
 export type CreateEmptiesOwnerInput = {
   name: string;
 };
@@ -320,4 +396,10 @@ export interface EmptiesApi {
     reason: string,
     idempotencyKey?: string,
   ): Promise<EmptiesCustomerMovementDto>;
+  listDepositBalances(
+    options?: EmptiesDepositBalanceListOptions,
+  ): Promise<EmptiesDepositBalanceListPage>;
+  listDeposits(options?: EmptiesDepositListOptions): Promise<EmptiesDepositListPage>;
+  createDeposit(input: CreateEmptiesDepositInput, idempotencyKey?: string): Promise<EmptiesDepositDto>;
+  reverseDeposit(id: string, reason: string, idempotencyKey?: string): Promise<EmptiesDepositDto>;
 }

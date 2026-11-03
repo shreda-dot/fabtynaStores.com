@@ -21,6 +21,7 @@ import {
 import type { TxTimeouts } from "../../lib/tx-options.js";
 import { assertNotInFuture } from "../sales/sales.validation.js";
 import { createEmptiesCustomerService } from "./empties-customer.service.js";
+import { createEmptiesDepositService } from "./empties-deposit.service.js";
 import type {
   CreateMovementBody,
   CreateOwnerBody,
@@ -331,6 +332,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
     txTimeouts: options.txTimeouts,
   });
   const customerService = createEmptiesCustomerService(options);
+  const depositService = createEmptiesDepositService(options);
 
   // ---------- locks ----------
   async function lockOwner(ctx: TxContext, id: string): Promise<OwnerRow> {
@@ -400,6 +402,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
 
   return {
     ...customerService,
+    ...depositService,
     // ================================================================
     // Owners
     // ================================================================

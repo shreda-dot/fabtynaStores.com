@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatLagosDateTime, getLagosBusinessDate } from "@fabtyna/shared";
 import { DateRangeFilter, defaultListRange } from "@/components/date-range-filter";
+import { CustomerDepositSection } from "@/components/empties/customer-deposit";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -434,6 +435,9 @@ export function CustomerCratesPanel({
                 showFieldErrors
               />
             </form>
+          )}
+          {selectedId !== undefined && selected && (
+            <CustomerDepositSection customerId={selectedId} customerName={selected.name} />
           )}
         </CardBody>
       </Card>

@@ -154,5 +154,9 @@ export const queryKeys = {
       key("empties", "customer-movements", filters),
     customerMovementPages: (filters: unknown) =>
       key("empties", "customer-movement-pages", filters),
+    depositBalances: (filters: unknown) => key("empties", "deposit-balances", filters),
+    depositBalancePages: (filters: unknown) => key("empties", "deposit-balance-pages", filters),
+    deposits: (filters: unknown) => key("empties", "deposits", filters),
+    depositPages: (filters: unknown) => key("empties", "deposit-pages", filters),
   },
 };

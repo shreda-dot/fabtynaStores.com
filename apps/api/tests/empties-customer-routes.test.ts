@@ -155,7 +155,8 @@ describe("customer-owned empties movements", () => {
       payload: { reason: "Return recorded in error" },
     });
     expect(reversal.statusCode, reversal.body).toBe(201);
-    expect(latestCustomerReverseStatementCount()).toBe(11);
+    // 11 before deposits, plus one lookup refusing a crate row that belongs to a deposit forfeit.
+    expect(latestCustomerReverseStatementCount()).toBe(12);
     expect(await customerBalanceOf(customer.id, type.id)).toBe(8);
     expect(await onHandOf(type.id)).toBe(0);
     // Hand calculation: reversing the -4 return restores 4 owed and removes 4 on-hand.

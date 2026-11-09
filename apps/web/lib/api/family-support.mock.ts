@@ -147,9 +147,13 @@ const implementation: FamilySupportApi = {
       const member = store.familyMembers.find((item) => item.id === drawing.beneficiaryId);
       const account = store.accounts.find((item) => item.id === entry?.accountId);
       if (!entry || !member || !account) throw new Error("Drawing data is incomplete.");
+      const sourceExpense = drawing.sourceExpenseId === null
+        ? null : store.expenses.find((item) => item.id === drawing.sourceExpenseId);
+      if (drawing.sourceExpenseId !== null && !sourceExpense) throw new Error("Drawing source expense is missing.");
       return {
         ...drawing, beneficiaryName: member.name, accountId: account.id, accountName: account.name,
-        amountKobo: -entry.amountKobo, occurredAt: entry.occurredAt, note: entry.note,
+        amountKobo: -entry.amountKobo, occurredAt: sourceExpense?.expenseDate ?? entry.occurredAt,
+        postedAt: entry.occurredAt, note: entry.note,
         reversed: store.accountLedgerEntries.some((item) => item.reversesEntryId === entry.id),
       };
 
@@ -161,9 +165,12 @@ const implementation: FamilySupportApi = {
         (!filter.beneficiaryId || row.beneficiaryId === filter.beneficiaryId) &&
         (!filter.purpose || row.purpose === filter.purpose) &&
         (!filter.accountId || row.accountId === filter.accountId);
-    }).sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+    }).sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime() || b.id.localeCompare(a.id));
     return {
-      items: items.map((row) => ({ ...row, amountKobo: row.amountKobo.toString(), occurredAt: row.occurredAt.toISOString() })),
+      items: items.map((row) => ({
+        ...row, amountKobo: row.amountKobo.toString(),
+        occurredAt: row.occurredAt.toISOString(), postedAt: row.postedAt.toISOString(),
+      })),
       report: {
         count: report.count, totalKobo: report.totalKobo.toString(),
         byBeneficiary: report.byBeneficiary.map((row) => ({ ...total(row), byPurpose: row.byPurpose.map(total) })),

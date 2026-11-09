@@ -2,7 +2,9 @@
 
 Database: **PostgreSQL (Neon)**. Schema source: [`apps/api/prisma/schema.prisma`](../apps/api/prisma/schema.prisma).
 
-> **Deployment status:** Family Support has not been deployed to production.
+> **Deployment status:** the owner reported that the initial Family Support
+> feature was deployed to production. The later source-expense date-reporting
+> change is local and must be deployed and verified separately before a move.
 > Migration `20261109000000_family_support` was applied to `fabtyna_test` and
 > `fabtyna_dev`; it must not be edited. On 2026-11-09, the full verification
 > suite passed and both databases passed `db:verify` and `db:audit`. Production
@@ -14,8 +16,10 @@ Database: **PostgreSQL (Neon)**. Schema source: [`apps/api/prisma/schema.prisma`
 Family Support records a `drawings` document against an original
 `OWNER_DRAWING` account-ledger entry. The beneficiary and purpose are required,
 and entries are corrected by ledger reversal rather than editing the document.
-The history report excludes currently reversed documents and groups by the
-original Lagos date. Money flow shows reversal movements on their posting date;
+The history report excludes currently reversed documents and uses the original
+expense date for source-linked drawings; other drawings use their ledger date.
+Money flow and account statements use ledger posting dates. The date-reporting
+change must be deployed before reclassifying expenses. Money flow shows reversal movements on their posting date;
 the financial-position withdrawal lines are lifetime net movements already
 included in account balances, not additional deductions. The two specifically
 identified Blue Money entries are labelled as legacy loan repayments; other

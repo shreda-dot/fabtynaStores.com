@@ -4,7 +4,9 @@ Briefing for a new AI session working on this repo with no other history.
 Everything below was reviewed against the repository on 2026-10-21. Docs only:
 this file does not change code, migrations or `.env`.
 
-> Family Support is implemented but has not been deployed to production.
+> The owner reported that the initial Family Support feature was deployed to
+> production. A subsequent source-expense date-reporting change is local and
+> requires separate deployment and verification before any expense move.
 > Migration `20261109000000_family_support` has been applied to `fabtyna_test`
 > and `fabtyna_dev`; never edit it. On 2026-11-09, `pnpm verify` passed and both
 > databases passed `db:verify` and `db:audit`. Production deployment and expense
@@ -12,6 +14,9 @@ this file does not change code, migrations or `.env`.
 > `OWNER_DRAWING` entries as family drawings. The two entries identified by the
 > owner are displayed as legacy loan repayments only; this does not create or
 > reconcile a loan payment.
+> For a drawing linked to an expense, Family Support history uses that
+> expense's immutable original date; account statements and money flow use the
+> account ledger's posting date. The move itself remains separately gated.
 
 Repository root: `c:\Users\Shreda\fabtyna-stores` (Windows, PowerShell).
 pnpm workspace (`pnpm-workspace.yaml`: `apps/*`, `packages/*`), `packageManager: pnpm@10.15.1`.

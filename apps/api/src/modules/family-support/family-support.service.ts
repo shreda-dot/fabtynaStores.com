@@ -166,21 +166,32 @@ export function createFamilySupportService(options: {
         where: {
           ...(filter.beneficiaryId ? { beneficiaryId: filter.beneficiaryId } : {}),
           ...(filter.purpose ? { purpose: filter.purpose } : {}),
-          entry: { occurredAt: { gte: start, lt: end }, ...(filter.accountId ? { accountId: filter.accountId } : {}) },
+          ...(filter.accountId ? { entry: { accountId: filter.accountId } } : {}),
+          OR: [
+            { sourceExpenseId: null, entry: { occurredAt: { gte: start, lt: end } } },
+            { sourceExpense: { is: { expenseDate: { gte: start, lt: end } } } },
+          ],
         },
-        include: { beneficiary: true, entry: { include: { account: true, reversedBy: { select: { id: true } } } } },
-        orderBy: [{ entry: { occurredAt: "desc" } }, { id: "desc" }],
+        include: {
+          beneficiary: true,
+          sourceExpense: { select: { expenseDate: true } },
+          entry: { include: { account: true, reversedBy: { select: { id: true } } } },
+        },
       });
       const data = rows.map((row) => ({
         id: row.id, entryId: row.entryId, beneficiaryId: row.beneficiaryId, beneficiaryName: row.beneficiary.name,
         purpose: row.purpose, accountId: row.entry.accountId, accountName: row.entry.account.name,
-        amountKobo: -row.entry.amountKobo, occurredAt: row.entry.occurredAt,
+        amountKobo: -row.entry.amountKobo, occurredAt: row.sourceExpense?.expenseDate ?? row.entry.occurredAt,
+        postedAt: row.entry.occurredAt,
         note: row.entry.note, reversed: row.entry.reversedBy.length > 0, sourceExpenseId: row.sourceExpenseId,
-      }));
+      })).sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime() || b.id.localeCompare(a.id));
       const report = drawingReport(data, filter);
       const total = (row: { id: string; name: string; amountKobo: bigint; count: number }) => ({ ...row, amountKobo: row.amountKobo.toString() });
       return {
-        items: data.map((row) => ({ ...row, amountKobo: row.amountKobo.toString(), occurredAt: row.occurredAt.toISOString() })),
+        items: data.map((row) => ({
+          ...row, amountKobo: row.amountKobo.toString(),
+          occurredAt: row.occurredAt.toISOString(), postedAt: row.postedAt.toISOString(),
+        })),
         report: {
           count: report.count, totalKobo: report.totalKobo.toString(),
           byBeneficiary: report.byBeneficiary.map((row) => ({ ...total(row), byPurpose: row.byPurpose.map(total) })),

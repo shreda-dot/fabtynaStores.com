@@ -130,7 +130,7 @@ export default function FamilySupportPage() {
         </form>
         <ul className="space-y-2">{members.data?.map((m) => <li key={m.id} className="flex flex-wrap items-center gap-2 border-t border-border pt-2"><span className="mr-auto">{m.name} — {m.relationship}{!m.isActive && " (inactive)"}</span><Button size="sm" variant="secondary" disabled={flow.pending} onClick={() => { change(); setEditing(m); setName(m.name); setRelationship(m.relationship); }}>Edit</Button><Button size="sm" variant="secondary" disabled={flow.pending} onClick={() => { change(); void perform({ message: "familyMember.active", run: (key) => familySupportApi.setMemberActive(m.id, !m.isActive, key) }); }}>{m.isActive ? "Deactivate" : "Reactivate"}</Button></li>)}</ul>
       </CardBody></Card>
-      <Card><CardHeader title="Drawing history and totals" description="Totals exclude reversed drawings." /><CardBody className="space-y-4">
+      <Card><CardHeader title="Drawing history and totals" description="Totals exclude reversed drawings. Reclassified expenses appear on their original expense date." /><CardBody className="space-y-4">
         <div className="grid gap-3 md:grid-cols-5">
           <FormField id="history-from" label="From"><Input id="history-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></FormField>
           <FormField id="history-to" label="To"><Input id="history-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></FormField>
@@ -148,7 +148,7 @@ export default function FamilySupportPage() {
             <div><h3 className="font-semibold">By account</h3>{drawings.data.report.byAccount.map((r) => <div key={r.id}>{r.name}: <Money kobo={BigInt(r.amountKobo)} /></div>)}</div>
           </div>
           {drawings.data.items.length === 0 && <p>No drawings in this range.</p>}
-          <ul className="space-y-2">{drawings.data.items.map((row) => <li key={row.id} className="flex flex-wrap items-center gap-2 border-t border-border pt-2"><div className="mr-auto">{formatLagosDate(new Date(row.occurredAt))} — {row.beneficiaryName} — {label(row.purpose)} — {row.accountName} — <Money kobo={BigInt(row.amountKobo)} />{row.reversed && " (reversed)"}{row.note && <div className="text-sm text-muted-foreground">{row.note}</div>}</div>{!row.reversed && <Button size="sm" variant="secondary" disabled={flow.pending} onClick={() => { change(); setReverseId(row.id); }}>Reverse</Button>}</li>)}</ul>
+          <ul className="space-y-2">{drawings.data.items.map((row) => <li key={row.id} className="flex flex-wrap items-center gap-2 border-t border-border pt-2"><div className="mr-auto">{formatLagosDate(new Date(row.occurredAt))} — {row.beneficiaryName} — {label(row.purpose)} — {row.accountName} — <Money kobo={BigInt(row.amountKobo)} />{row.reversed && " (reversed)"}{row.sourceExpenseId && <div className="text-sm text-muted-foreground">Reclassified expense{row.postedAt && ` · posted ${formatLagosDate(new Date(row.postedAt))}`}</div>}{row.note && <div className="text-sm text-muted-foreground">{row.note}</div>}</div>{!row.reversed && <Button size="sm" variant="secondary" disabled={flow.pending} onClick={() => { change(); setReverseId(row.id); }}>Reverse</Button>}</li>)}</ul>
         </>}
       </CardBody></Card>
       <Modal open={reverseId !== ""} title="Reverse drawing" description="The amount will be returned to its original account." busy={flow.pending} onClose={() => setReverseId("")}>

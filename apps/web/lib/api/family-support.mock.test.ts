@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
-import { getLagosBusinessDate } from "@fabtyna/shared";
+import { buildAccountLedgerEntry, getLagosBusinessDate } from "@fabtyna/shared";
 import { accountingMockApi } from "./accounting.mock";
 import { familySupportMockApi } from "./family-support.mock";
-import { resetDemoData, readMockStore } from "./mock-store";
+import { resetDemoData, readMockStore, transactMockStore } from "./mock-store";
 
 describe("mock family support", () => {
   beforeEach(() => {
@@ -54,5 +54,33 @@ describe("mock family support", () => {
     expect(report.report.byBeneficiary[0]).toMatchObject({ name: "Renamed", amountKobo: "500" });
     expect(report.report.byAccount[0]).toMatchObject({ id: bank.id, amountKobo: "500" });
     expect((await accountingMockApi.listAccounts()).find((account) => account.id === bank.id)?.balanceKobo).toBe("500");
+  });
+
+  it("reports a source-linked drawing on its expense date without changing its ledger posting date", async () => {
+    const member = await familySupportMockApi.createMember({ name: "Original date", relationship: "Family" });
+    const bank = (await accountingMockApi.listAccounts()).find((account) => account.type === "BANK")!;
+    const postedAt = new Date();
+    await accountingMockApi.recordOpeningBalance({ accountId: bank.id, amountKobo: "10000", note: null, occurredAt: postedAt.toISOString() });
+    const expenseDate = new Date("2020-10-30T23:30:00.000Z");
+    transactMockStore((store) => {
+      store.expenses.push({
+        id: "history-expense", channel: "BOTH", category: "OTHER", description: "Test",
+        amountKobo: 10000n, expenseDate, loanRepaymentId: null,
+        voidedAt: postedAt, voidReason: "Test classification", createdAt: postedAt, updatedAt: postedAt,
+      });
+      const entry = buildAccountLedgerEntry({
+        accountId: bank.id, type: "OWNER_DRAWING", amountKobo: -10000n,
+        occurredAt: postedAt, note: "Test classification",
+      }, () => "history-entry");
+      store.accountLedgerEntries.push(entry);
+      store.drawings.push({ id: "history-drawing", entryId: entry.id, beneficiaryId: member.id, purpose: "MEDICAL", sourceExpenseId: "history-expense" });
+    });
+    const history = await familySupportMockApi.listDrawings({ from: "2020-10-31", to: "2020-10-31", accountId: bank.id });
+    expect(history.report).toMatchObject({ count: 1, totalKobo: "10000" });
+    expect(history.items[0]).toMatchObject({ occurredAt: expenseDate.toISOString(), postedAt: postedAt.toISOString() });
+    const today = getLagosBusinessDate(postedAt);
+    expect((await familySupportMockApi.listDrawings({ from: today, to: today, accountId: bank.id })).report.count).toBe(0);
+    const flow = await accountingMockApi.moneyFlow(today, today, bank.id);
+    expect(flow.rows[0].categories).toContainEqual({ key: "OWNER_DRAWING", moneyInKobo: "0", moneyOutKobo: "10000" });
   });
 });

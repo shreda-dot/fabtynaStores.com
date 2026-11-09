@@ -29,6 +29,7 @@ export type DrawingItem = MockDrawing & {
   accountName: string;
   amountKobo: string;
   occurredAt: string;
+  postedAt: string;
   note: string | null;
   reversed: boolean;
 };

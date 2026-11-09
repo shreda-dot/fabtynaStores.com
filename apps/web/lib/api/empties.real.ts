@@ -26,6 +26,7 @@ import type {
   EmptiesDepositListPage,
   EmptiesDepositDto,
   CreateEmptiesDepositInput,
+  EmptiesProductPackagingInput,
 } from "./empties.api";
 
 function query(values: Record<string, string | undefined>): string {
@@ -138,6 +139,13 @@ export const emptiesRealApi: EmptiesApi = {
     return requestJson<ProductOwnerDto>(
       `/empties/product-owners/${encodeURIComponent(productId)}`,
       { method: "PUT", body: { ownerId }, idempotencyKey },
+    );
+  },
+
+  async assignProductPackaging(productId, input: EmptiesProductPackagingInput, idempotencyKey) {
+    return requestJson(
+      `/empties/products/${encodeURIComponent(productId)}/packaging`,
+      { method: "PUT", body: input, idempotencyKey },
     );
   },
 

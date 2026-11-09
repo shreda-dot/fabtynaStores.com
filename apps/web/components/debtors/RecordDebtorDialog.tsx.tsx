@@ -128,6 +128,7 @@ export function RecordDebtorDialog({ open, onClose }: Props) {
 
       void queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.empties.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
       close();

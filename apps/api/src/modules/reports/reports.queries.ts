@@ -3,6 +3,7 @@ import {
   computeFinancialPosition,
   getLagosBusinessDate,
   getLagosBusinessDayRange,
+  ownerWithdrawalTotals,
   salesSummary,
   stockWorthAtCost,
   stockWorthAtRetail,
@@ -386,6 +387,13 @@ export async function getMoneyFlow(
     throw new AppError(404, "NOT_FOUND", "Account not found.", { accountId: query.accountId });
   }
   const expenseIds = [...new Set(entries.flatMap((entry) => entry.expenseId === null ? [] : [entry.expenseId]))];
+  const drawingEntryIds = [...new Set(entries.flatMap((entry) =>
+    entry.type === "OWNER_DRAWING" ? [entry.reversesEntryId ?? entry.id] : [],
+  ))];
+  const drawingRows = await prisma.drawing.findMany({
+    where: { entryId: { in: drawingEntryIds } },
+    select: { entryId: true },
+  });
   const expenseRows = expenseIds.length === 0
     ? []
     : await prisma.expense.findMany({
@@ -432,6 +440,7 @@ export async function getMoneyFlow(
     range.start,
     range.end,
     query.accountId,
+    new Set(drawingRows.map((row) => row.entryId)),
   );
   const transferEntries = entries.filter((entry) => entry.type === "TRANSFER_IN" || entry.type === "TRANSFER_OUT");
   const transferIn = transferEntries.reduce((sum, entry) => sum + (entry.amountKobo > 0n ? entry.amountKobo : 0n), 0n);
@@ -481,7 +490,7 @@ export async function getFinancialPosition(
   now: Date,
 ) {
   const today = getLagosBusinessDate(now);
-  const [stockRows, cashRows, receivableRows, payableRows, loanRows, obligationRows] = await Promise.all([
+  const [stockRows, cashRows, receivableRows, payableRows, loanRows, obligationRows, withdrawalRows] = await Promise.all([
     prisma.$queryRaw<Array<{
       productId: string; productName: string; unitsPerPack: number; warehouseUnits: number;
       fridgeUnits: number; retailPriceKobo: bigint; wholesalePriceKobo: bigint; averageCostKobo: bigint;
@@ -525,7 +534,17 @@ export async function getFinancialPosition(
       ) obligations
       ORDER BY "dueDate" ASC NULLS LAST, id
       LIMIT 50`,
+    prisma.$queryRaw<Array<{ id: string; type: "OWNER_DRAWING"; amountKobo: bigint; reversesEntryId: string | null; drawingEntryId: string | null }>>`
+      SELECT ale.id, ale.type::text AS type, ale."amountKobo", ale."reversesEntryId", d."entryId" AS "drawingEntryId"
+        FROM account_ledger_entries ale
+        JOIN accounts a ON a.id = ale."accountId" AND NOT a."isHolding"
+        LEFT JOIN drawings d ON d."entryId" = COALESCE(ale."reversesEntryId", ale.id)
+       WHERE ale.type = 'OWNER_DRAWING'`,
   ]);
+  const withdrawalTotals = ownerWithdrawalTotals(
+    withdrawalRows,
+    new Set(withdrawalRows.flatMap((row) => row.drawingEntryId === null ? [] : [row.drawingEntryId])),
+  );
   const products: FinancialPositionProductInput[] = stockRows
     .filter((row) => row.warehouseUnits > 0 || row.fridgeUnits > 0)
     .map((row) => ({
@@ -579,5 +598,6 @@ export async function getFinancialPosition(
     scenarios: stringify(result.scenarios),
     liabilitiesBreakdown: stringify(result.liabilitiesBreakdown),
     obligations: stringify(result.obligations),
+    ownerWithdrawals: stringify(withdrawalTotals),
   };
 }

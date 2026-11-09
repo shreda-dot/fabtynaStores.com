@@ -58,6 +58,7 @@ export const navItems: NavItem[] = [
   { label: "Adjustments", href: "/adjustments", icon: ClipboardList, enabled: true, group: "Inventory" },
 
   { label: "Expenses", href: "/expenses", icon: Receipt, enabled: true, group: "Money" },
+  { label: "Family Support", href: "/family-support", icon: Users, enabled: true, group: "Money" },
   { label: "Overview", href: "/accounting", icon: Calculator, enabled: true, group: "Money", exact: true },
   { label: "Accounts", href: "/accounting/accounts", icon: Banknote, enabled: true, group: "Money" },
   { label: "Payables", href: "/accounting/payables", icon: FileText, enabled: true, group: "Money" },

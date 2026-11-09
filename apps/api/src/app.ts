@@ -22,6 +22,8 @@ import { registerExpensesRoutes } from "./modules/expenses/expenses.routes.js";
 import { createExpensesService } from "./modules/expenses/expenses.service.js";
 import { registerAccountsRoutes } from "./modules/accounts/accounts.routes.js";
 import { createAccountsService } from "./modules/accounts/accounts.service.js";
+import { registerFamilySupportRoutes } from "./modules/family-support/family-support.routes.js";
+import { createFamilySupportService } from "./modules/family-support/family-support.service.js";
 import { registerLoansRoutes } from "./modules/loans/loans.routes.js";
 import { createLoansService } from "./modules/loans/loans.service.js";
 import { registerSalesRoutes } from "./modules/sales/sales.routes.js";
@@ -195,6 +197,10 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     log,
   });
   registerAccountsRoutes(app, { service: accountsService });
+  const familySupportService = createFamilySupportService({
+    prisma: options.prisma, now: options.now, txTimeouts: options.txTimeouts, log,
+  });
+  registerFamilySupportRoutes(app, { service: familySupportService, accounts: accountsService });
   const loansService = createLoansService({
     prisma: options.prisma,
     now: options.now,

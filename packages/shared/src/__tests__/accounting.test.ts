@@ -859,7 +859,7 @@ describe("migrateMockStoreData", () => {
 
     const result = migrateMockStoreData(3, v3);
     expect(result).not.toBeNull();
-    expect(result!.version).toBe(7);
+    expect(result!.version).toBe(8);
 
     const purchases = result!.data.purchases as Array<Record<string, unknown>>;
     // Legacy purchase with no paidKobo defaults to fully paid.
@@ -917,7 +917,7 @@ describe("migrateMockStoreData", () => {
 
     const result = migrateMockStoreData(5, v5);
     expect(result).not.toBeNull();
-    expect(result!.version).toBe(7);
+    expect(result!.version).toBe(8);
 
     const repayments = result!.data.loanRepayments as Array<Record<string, unknown>>;
     expect(repayments).toHaveLength(2);

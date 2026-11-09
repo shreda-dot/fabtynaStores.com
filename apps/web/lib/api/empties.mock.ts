@@ -15,6 +15,7 @@ export const emptiesMockApi: EmptiesApi = {
   getOverview: async () => notAvailable(),
   listProductOwners: async () => notAvailable(),
   assignProductOwner: async () => notAvailable(),
+  assignProductPackaging: async () => notAvailable(),
   listOwners: async () => notAvailable(),
   createOwner: async () => notAvailable(),
   renameOwner: async () => notAvailable(),

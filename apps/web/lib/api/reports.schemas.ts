@@ -170,6 +170,7 @@ export const financialPositionResponseSchema = z.object({
       urgency: z.enum(["OVERDUE", "DUE_IN_7_DAYS", "LATER"]),
     }),
   ),
+  ownerWithdrawals: z.object({ drawingsKobo: koboString, legacyLoanKobo: koboString, unclassifiedKobo: koboString }),
 });
 
 export type MoneyFlowResponse = z.infer<typeof moneyFlowResponseSchema>;

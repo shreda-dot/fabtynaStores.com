@@ -39,6 +39,7 @@ import type {
   EmptiesKind,
   EmptiesMovementDto,
   EmptiesMovementType,
+  CreateEmptiesMovementType,
 } from "@/lib/api/empties.api";
 import { formatEmptiesCount, overviewCountRows } from "@/lib/empties-overview";
 import { parseEmptiesQuantityText } from "@/lib/empties-quantity";
@@ -54,6 +55,7 @@ const MOVEMENT_LABEL: Record<EmptiesMovementType, string> = {
   OPENING: "Opening count",
   RECEIVED: "Received from customers",
   RETURNED_TO_OWNER: "Returned to brewery",
+  ISSUED_TO_CUSTOMER: "Issued to customer",
   ADJUSTMENT: "Adjustment",
 };
 
@@ -79,7 +81,7 @@ function RecordMovementPanel({
   onClose,
 }: {
   type: EmptiesBalanceDto;
-  movementType: EmptiesMovementType;
+  movementType: CreateEmptiesMovementType;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -336,7 +338,7 @@ export default function EmptiesPage() {
   const problem = validateReportRange(range.from, range.to);
   const [action, setAction] = useState<{
     type: EmptiesBalanceDto;
-    movementType: EmptiesMovementType;
+    movementType: CreateEmptiesMovementType;
   } | null>(null);
   const [reverseTarget, setReverseTarget] = useState<EmptiesMovementDto | null>(null);
 
@@ -447,7 +449,9 @@ export default function EmptiesPage() {
       header: "Actions",
       align: "right",
       render: (m) =>
-        m.customerReturnMovementId !== null ? (
+        m.saleId !== null ? (
+          <span className="text-xs text-muted-foreground">Reverse with sale</span>
+        ) : m.customerReturnMovementId !== null ? (
           <span className="text-xs text-muted-foreground">Reverse from customer history</span>
         ) : m.reversesEntryId !== null ? (
           <span className="text-xs text-muted-foreground">Reversal</span>

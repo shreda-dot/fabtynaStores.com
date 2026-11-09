@@ -4,6 +4,7 @@ import { validationError } from "../../lib/errors.js";
 import {
   balanceListQuerySchema,
   assignProductOwnerSchema,
+  assignProductPackagingSchema,
   createCustomerMovementSchema,
   createDepositSchema,
   listDepositBalancesQuerySchema,
@@ -162,6 +163,19 @@ export function registerEmptiesRoutes(
     return send(
       reply,
       await deps.service.assignProductOwner(productId, parsed.data, actor, readKey(request)),
+    );
+  });
+
+  app.put("/empties/products/:productId/packaging", async (request, reply) => {
+    const actor = requireActor(request);
+    const productId = readProductId(request);
+    const parsed = assignProductPackagingSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw validationError("The product packaging settings are not valid.", parsed.error.issues);
+    }
+    return send(
+      reply,
+      await deps.service.assignProductPackaging(productId, parsed.data, actor, readKey(request)),
     );
   });
 

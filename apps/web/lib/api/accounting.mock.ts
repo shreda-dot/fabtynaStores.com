@@ -19,6 +19,8 @@ import {
   getLagosBusinessDate,
   getLagosBusinessDayRange,
   loanOutstandingKobo,
+  ownerWithdrawalTotals,
+  ownerWithdrawalCategory,
   reconcileAccountDtoSchema,
   purchaseBalanceKobo,
   stockByProductAndLocation,
@@ -194,7 +196,7 @@ export const accountingMockApi: AccountingApi = {
       obligations,
     });
 
-    return result;
+    return { ...result, ownerWithdrawals: ownerWithdrawalTotals(store.accountLedgerEntries, new Set(store.drawings.map((drawing) => drawing.entryId))) };
   },
 
   async moneyFlow(from, to, accountId) {
@@ -213,6 +215,7 @@ export const accountingMockApi: AccountingApi = {
       start,
       end,
       accountId,
+      new Set(store.drawings.map((drawing) => drawing.entryId)),
     );
     return {
       totalsExcludeTransfers: false,
@@ -248,13 +251,14 @@ export const accountingMockApi: AccountingApi = {
 
   async listAccounts() {
     await delay();
-    const accounts = readMockStore().accounts
+    const store = readMockStore();
+    const accounts = store.accounts
       .slice()
       .sort((a, b) => {
         if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
         return a.name.localeCompare(b.name);
       })
-      .map(toAccountDto);
+      .map((account) => ({ ...toAccountDto(account), balanceKobo: accountBalanceKobo(account.id, store.accountLedgerEntries).toString() }));
     return jsonClone(accounts);
   },
 
@@ -406,6 +410,7 @@ export const accountingMockApi: AccountingApi = {
 
   async recordManualEntry(input) {
     await delay();
+    if (input.type === "OWNER_DRAWING") throw new Error("Use Family Support to record an owner drawing.");
     const accountId = input.accountId.trim();
     const type = input.type as AccountEntryType;
     const amountKobo = input.amountKobo;
@@ -456,6 +461,44 @@ export const accountingMockApi: AccountingApi = {
       .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
       .map(toAccountLedgerEntryDto);
     return jsonClone(entries);
+  },
+
+  async statementPage(accountId, options = {}) {
+    await delay();
+    const store = readMockStore();
+    const account = findAccount(store.accounts, accountId);
+    if (options.from && options.to && options.from > options.to) throw new RangeError("From date must be on or before to date.");
+    const all = store.accountLedgerEntries.filter((entry) => entry.accountId === accountId)
+      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || a.id.localeCompare(b.id));
+    const drawingIds = new Set(store.drawings.map((drawing) => drawing.entryId));
+    const reversedIds = new Map(all.filter((entry) => entry.reversesEntryId !== null).map((entry) => [entry.reversesEntryId, entry.id]));
+    let opening = 0n;
+    let running = 0n;
+    const ranged = all.flatMap((entry) => {
+      const date = getLagosBusinessDate(entry.occurredAt);
+      if (options.to && date > options.to) return [];
+      running += entry.amountKobo;
+      if (options.from && date < options.from) { opening += entry.amountKobo; return []; }
+      const withdrawal = entry.type === "OWNER_DRAWING" ? ownerWithdrawalCategory(entry, drawingIds) : null;
+      const label = withdrawal === "OWNER_DRAWING" ? "Owner drawing"
+        : withdrawal === "LEGACY_LOAN_REPAYMENT" ? "Legacy loan repayment"
+          : withdrawal === "UNCLASSIFIED_WITHDRAWAL" ? "Unclassified legacy withdrawal" : entry.note ?? entry.type.replaceAll("_", " ");
+      return [{
+        id: entry.id, type: entry.type, amountKobo: entry.amountKobo.toString(), occurredAt: entry.occurredAt.toISOString(),
+        note: entry.note, sourceDescription: label, isReversal: entry.reversesEntryId !== null,
+        reversesEntryId: entry.reversesEntryId, reversedByEntryId: reversedIds.get(entry.id) ?? null,
+        runningBalanceKobo: running.toString(),
+      }];
+    });
+    const offset = options.cursor ? Number(options.cursor) : 0;
+    const limit = options.limit ?? 50;
+    if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 200) throw new RangeError("Invalid statement page.");
+    return {
+      account: { id: account.id, name: account.name }, from: options.from || null, to: options.to || null,
+      openingBalanceKobo: opening.toString(), closingBalanceKobo: running.toString(),
+      entries: ranged.slice(offset, offset + limit),
+      nextCursor: offset + limit < ranged.length ? String(offset + limit) : null,
+    };
   },
 
   async getMigrationNotice() {

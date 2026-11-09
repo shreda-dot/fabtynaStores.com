@@ -38,6 +38,8 @@ import type { DebtorsApi } from "./debtors.api";
 import type { EmptiesApi } from "./empties.api";
 import type { CashApi } from "./cash.api";
 import { reportsRealApi } from "./reports.real";
+import { familySupportMockApi } from "./family-support.mock";
+import { familySupportRealApi } from "./family-support.real";
 
 function notImplemented(): never {
   throw createNotConnectedError();
@@ -81,6 +83,7 @@ export const loansApi = apiMode === "mock" ? instrumentApi(loansMockApi) : loans
 export const cashApi = apiMode === "mock" ? instrumentApi(cashMockApi) : cashRealApi;
 export const accountingApi = apiMode === "mock" ? instrumentApi(accountingMockApi) : accountingRealApi;
 export const authApi: AuthApi = apiMode === "mock" ? authMockApi : authRealApi;
+export const familySupportApi = apiMode === "mock" ? familySupportMockApi : familySupportRealApi;
 export const isMockApiMode = apiMode === "mock";
 
 export { resetDemoData };

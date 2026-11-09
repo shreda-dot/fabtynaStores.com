@@ -28,7 +28,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await h.close();
+  if (h) await h.close();
 });
 
 const now = () => new Date().toISOString();
@@ -205,7 +205,7 @@ describe("POST /sales/:id/payments/:paymentId/reverse", () => {
     const { saleId, paymentId, account } = await saleWithLaterPayment("5000");
     await h.pg.query(
       `INSERT INTO account_ledger_entries (id, "accountId", type, "amountKobo", note)
-       VALUES ($1, $2, 'OWNER_DRAWING', -5000, 'spent')`,
+       VALUES ($1, $2, 'BANK_OR_POS_CHARGE', -5000, 'spent')`,
       [newId("rev_draw"), account.id],
     );
     const res = await reverseSale(saleId, paymentId);
@@ -284,7 +284,7 @@ describe("POST /sales/:id/payments/:paymentId/reverse", () => {
     // An account can only be deactivated at zero, so the money is spent first.
     await h.pg.query(
       `INSERT INTO account_ledger_entries (id, "accountId", type, "amountKobo", note)
-       VALUES ($1, $2, 'OWNER_DRAWING', -10000, 'spent')`,
+       VALUES ($1, $2, 'BANK_OR_POS_CHARGE', -10000, 'spent')`,
       [newId("rev_draw"), account.id],
     );
     await h.pg.query(`UPDATE accounts SET "isActive" = false, "deactivatedAt" = now() WHERE id = $1`, [account.id]);

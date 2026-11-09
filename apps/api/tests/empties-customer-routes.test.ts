@@ -4,7 +4,7 @@ import { connectionString, createHarness, newId, seedCustomer, type Harness } fr
 
 let h!: Harness;
 
-const createCustomerType = async () => {
+const createCustomerType = async (openingQuantity: number) => {
   const customer = await seedCustomer(h.pg);
   const ownerResponse = await h.app.inject({
     method: "POST",
@@ -25,6 +25,12 @@ const createCustomerType = async () => {
   });
   expect(typeResponse.statusCode, typeResponse.body).toBe(201);
   const type = typeResponse.json<{ id: string; label: string }>();
+  const opening = await h.app.inject({
+    method: "POST",
+    url: "/empties/movements",
+    payload: { typeId: type.id, movementType: "OPENING", quantity: openingQuantity },
+  });
+  expect(opening.statusCode, opening.body).toBe(201);
   return { customer, owner, type };
 };
 
@@ -103,16 +109,16 @@ describe("customer empties route enumeration", () => {
 
 describe("customer-owned empties movements", () => {
   it("tracks taken, returned and kept crates, couples on-hand receipts, and reverses atomically", async () => {
-    const { customer, owner, type } = await createCustomerType();
+    const { customer, owner, type } = await createCustomerType(10);
 
     const taken = await customerMovement(customer.id, type.id, "TAKEN", 10);
     expect(taken.statusCode, taken.body).toBe(201);
-    expect(latestStatementCount("POST /empties/customer-movements")).toBe(5);
+    expect(latestStatementCount("POST /empties/customer-movements")).toBe(7);
     expect(await customerBalanceOf(customer.id, type.id)).toBe(10);
 
     const returned = await customerMovement(customer.id, type.id, "RETURNED", 4);
     expect(returned.statusCode, returned.body).toBe(201);
-    expect(latestStatementCount("POST /empties/customer-movements")).toBe(7);
+    expect(latestStatementCount("POST /empties/customer-movements")).toBe(8);
     const returnedDto = returned.json<{
       id: string;
       quantity: number;
@@ -146,7 +152,7 @@ describe("customer-owned empties movements", () => {
     });
     expect(directOnHandReverse.statusCode).toBe(409);
     expect(directOnHandReverse.json<{ error: { message: string } }>().error.message).toContain(
-      "Reverse the customer crate movement instead",
+      "Reverse the customer movement instead",
     );
 
     const reversal = await h.app.inject({
@@ -177,7 +183,7 @@ describe("customer-owned empties movements", () => {
   }, 120_000);
 
   it("refuses a return reversal when the returned crates are no longer on hand", async () => {
-    const { customer, type } = await createCustomerType();
+    const { customer, type } = await createCustomerType(3);
     expect((await customerMovement(customer.id, type.id, "TAKEN", 3)).statusCode).toBe(201);
     const returned = await customerMovement(customer.id, type.id, "RETURNED", 3);
     expect(returned.statusCode, returned.body).toBe(201);
@@ -204,7 +210,7 @@ describe("customer-owned empties movements", () => {
   }, 120_000);
 
   it("applies reasoned signed adjustments to the customer balance only", async () => {
-    const { customer, type } = await createCustomerType();
+    const { customer, type } = await createCustomerType(3);
     expect((await customerMovement(customer.id, type.id, "TAKEN", 3)).statusCode).toBe(201);
     const decrease = await customerMovement(
       customer.id,
@@ -231,7 +237,7 @@ describe("customer-owned empties movements", () => {
 
   it("serializes concurrent returns of the same last customer crates", async () => {
     for (let iteration = 0; iteration < 3; iteration += 1) {
-      const { customer, type } = await createCustomerType();
+      const { customer, type } = await createCustomerType(5);
       expect((await customerMovement(customer.id, type.id, "TAKEN", 5)).statusCode).toBe(201);
 
       const responses = await Promise.all([
@@ -249,7 +255,7 @@ describe("customer-owned empties movements", () => {
   }, 120_000);
 
   it("requires a kept/adjustment note, replays idempotently, and keeps ledger tables immutable", async () => {
-    const { customer, type } = await createCustomerType();
+    const { customer, type } = await createCustomerType(2);
     const noNote = await customerMovement(customer.id, type.id, "KEPT", 1);
     expect(noNote.statusCode).toBe(400);
 
@@ -262,6 +268,8 @@ describe("customer-owned empties movements", () => {
       {},
       { "idempotency-key": key },
     );
+    expect(first.statusCode, first.body).toBe(201);
+    expect(latestStatementCount("POST /empties/customer-movements")).toBe(11);
     const replay = await customerMovement(
       customer.id,
       type.id,
@@ -270,7 +278,6 @@ describe("customer-owned empties movements", () => {
       {},
       { "idempotency-key": key },
     );
-    expect(first.statusCode, first.body).toBe(201);
     expect(replay.statusCode, replay.body).toBe(201);
     expect(replay.headers["idempotent-replayed"]).toBe("true");
     expect(replay.json<{ id: string }>().id).toBe(first.json<{ id: string }>().id);
@@ -297,7 +304,7 @@ describe("customer-owned empties movements", () => {
   }, 120_000);
 
   it("returns customer balances and movement pages and passes the database audit", async () => {
-    const { customer, type } = await createCustomerType();
+    const { customer, type } = await createCustomerType(2);
     expect((await customerMovement(customer.id, type.id, "TAKEN", 2)).statusCode).toBe(201);
     const balancePage = await h.app.inject({
       method: "GET",

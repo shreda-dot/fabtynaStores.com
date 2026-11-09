@@ -84,6 +84,10 @@ export const EXPECTED_MIGRATIONS = [
   "20261031000000_empties_product_owners",
   "20261101000000_empties_customer_movements",
   "20261103000000_empties_customer_deposits",
+  "20261105000000_empties_issue_movement_type",
+  "20261105000100_sale_empties_tracking",
+  "20261106000000_fix_empties_inventory_link",
+  "20261109000000_family_support",
 ] as const;
 
 /**
@@ -117,6 +121,9 @@ export const EXPECTED_TABLES = [
   "empties_deposit_movements",
   "empties_deposit_balances",
   "empties_product_owners",
+  "empties_product_packaging",
+  "family_members",
+  "drawings",
 ] as const;
 
 /**
@@ -152,6 +159,11 @@ export const EXPECTED_INDEXES = [
   "password_reset_tokens_expiresAt_idx",
   // 20261024000000_empties
   "empties_owners_normalizedKey_key",
+  "empties_product_owners_product_owner_key",
+  "empties_types_owner_id_kind_key",
+  "empties_product_packaging_pkey",
+  "empties_product_packaging_type_idx",
+  "empties_movements_sale_type_idx",
   // 20261031000000_empties_product_owners
   "empties_product_owners_pkey",
   "empties_product_owners_ownerId_idx",
@@ -170,6 +182,10 @@ export const EXPECTED_INDEXES = [
   "empties_deposit_movements_customer_occurred_idx",
   "empties_deposit_movements_occurred_idx",
   "empties_deposit_balances_pkey",
+  "family_members_normalizedKey_key",
+  "drawings_entryId_key",
+  "drawings_sourceExpenseId_key",
+  "drawings_beneficiaryId_purpose_idx",
 ] as const;
 
 /**
@@ -272,13 +288,16 @@ export const EXPECTED_CHECK_CONSTRAINTS = [
   "ck_empties_movements_quantity_nonzero",
   "ck_empties_movements_note_required",
   "ck_empties_movements_sign",
+  "ck_empties_movements_sale_source",
   "ck_empties_balances_nonnegative",
 
   // 20261101000000_empties_customer_movements
   "ck_empties_customer_movements_quantity_nonzero",
   "ck_empties_customer_movements_note_required",
   "ck_empties_customer_movements_sign",
-  "ck_empties_customer_movements_return_link",
+  "ck_empties_customer_movements_inventory_link",
+  "ck_empties_product_packaging_counts_nonnegative",
+  "ck_empties_product_packaging_counts_nonzero",
   "ck_empties_customer_balances_nonnegative",
 
   // 20261103000000_empties_customer_deposits
@@ -287,6 +306,9 @@ export const EXPECTED_CHECK_CONSTRAINTS = [
   "ck_empties_deposit_movements_links",
   "ck_empties_deposit_movements_note_required",
   "ck_empties_deposit_balances_nonnegative",
+  "ck_family_members_name",
+  "ck_family_members_normalized_key",
+  "ck_family_members_relationship",
 ] as const;
 
 /**
@@ -413,7 +435,7 @@ export const EXPECTED_TRIGGERS = [
   // 20261101000000_empties_customer_movements
   "trg_empties_customer_movement_immutable",
   "trg_empties_customer_movement_no_truncate",
-  "trg_empties_customer_movement_return_link",
+  "trg_empties_customer_movement_inventory_link",
   "trg_empties_customer_movement_reversal_integrity",
   "trg_empties_customer_movement_apply",
   "trg_empties_customer_balances_guard",
@@ -429,13 +451,23 @@ export const EXPECTED_TRIGGERS = [
   "trg_empties_deposit_movement_apply",
   "trg_empties_deposit_balances_guard",
   "trg_empties_deposit_balances_no_truncate",
+  "trg_drawing_check_entry",
+  "trg_drawing_immutable",
+  "trg_drawing_no_truncate",
+  "trg_family_member_no_delete",
+  "trg_family_member_no_truncate",
+  "trg_account_drawing_requires_document",
 ] as const;
 
 /** Hand-written trigger functions required by the migrations. */
 export const EXPECTED_FUNCTIONS = [
+  "fn_drawing_check_entry",
+  "fn_account_drawing_requires_document",
   // 20261101000000_empties_customer_movements
   "fn_empties_customer_movement_immutable",
   "fn_check_empties_customer_return_link",
+  "fn_check_empties_customer_inventory_link",
+  "fn_check_empties_customer_inventory_link_v2",
   "fn_check_empties_customer_movement_reversal_integrity",
   "fn_apply_empties_customer_movement",
   "fn_empties_customer_balance_direct_write_guard",
@@ -501,10 +533,11 @@ export const EXPECTED_PARTIAL_INDEXES = [
   // 20261024000000_empties
   "ux_empties_movement_opening_active",
   "ux_empties_movement_reversed_once",
+  "ux_empties_movement_sale_type_active",
 
   // 20261101000000_empties_customer_movements
   "ux_empties_customer_movement_reversed_once",
-  "ux_empties_customer_movement_received_link",
+  "ux_empties_customer_movement_inventory_link",
 
   // 20261103000000_empties_customer_deposits
   "ux_accounts_single_holding",
@@ -555,6 +588,7 @@ export const EXPECTED_FOREIGN_KEYS = [
   "fk_empties_types_owner",
   "fk_empties_movements_type",
   "fk_empties_movements_created_by",
+  "fk_empties_movements_sale",
   "fk_empties_balances_type",
 
   // 20261101000000_empties_customer_movements
@@ -577,4 +611,6 @@ export const EXPECTED_FOREIGN_KEYS = [
   // 20261031000000_empties_product_owners
   "fk_empties_product_owners_product",
   "fk_empties_product_owners_owner",
+  "fk_empties_product_packaging_product_owner",
+  "fk_empties_product_packaging_type",
 ] as const;

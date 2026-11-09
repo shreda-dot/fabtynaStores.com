@@ -200,7 +200,7 @@ export function validateAccount(account: Account): void {
 }
 
 export function validateAccountLedgerEntry(entry: AccountLedgerEntry): void {
-    validateAccountLedgerAmount(entry.type, entry.amountKobo);
+    validateAccountLedgerAmount(entry.type, entry.reversesEntryId === null ? entry.amountKobo : -entry.amountKobo);
     if (!Number.isFinite(entry.occurredAt.getTime())) {
         throw new RangeError("An account ledger entry must have a valid date.");
     }
@@ -551,7 +551,40 @@ export interface AccountMoneyFlowResult {
 
 export type AccountMoneyFlowCategoryKey =
     | AccountEntryType
+    | "LEGACY_LOAN_REPAYMENT"
+    | "UNCLASSIFIED_WITHDRAWAL"
     | `EXPENSE:${Expense["category"]}`;
+
+// Owner-confirmed labels only; these entries are not linked to loan documents.
+const LEGACY_LOAN_REPAYMENT_ENTRY_IDS: ReadonlySet<string> = new Set([
+    "0fac2710-1e88-4b4f-b320-1da3176cedaa",
+    "f3f94b83-4bcc-4f20-89e9-00d8217e6915",
+]);
+
+export function ownerWithdrawalCategory(
+    entry: Pick<AccountLedgerEntry, "id" | "reversesEntryId">,
+    drawingEntryIds: ReadonlySet<string>,
+): "OWNER_DRAWING" | "LEGACY_LOAN_REPAYMENT" | "UNCLASSIFIED_WITHDRAWAL" {
+    const originalId = entry.reversesEntryId ?? entry.id;
+    if (drawingEntryIds.has(originalId)) return "OWNER_DRAWING";
+    if (LEGACY_LOAN_REPAYMENT_ENTRY_IDS.has(originalId)) return "LEGACY_LOAN_REPAYMENT";
+    return "UNCLASSIFIED_WITHDRAWAL";
+}
+
+export function ownerWithdrawalTotals(
+    entries: readonly Pick<AccountLedgerEntry, "id" | "type" | "amountKobo" | "reversesEntryId">[],
+    drawingEntryIds: ReadonlySet<string>,
+): { drawingsKobo: bigint; legacyLoanKobo: bigint; unclassifiedKobo: bigint } {
+    const totals = { drawingsKobo: 0n, legacyLoanKobo: 0n, unclassifiedKobo: 0n };
+    for (const entry of entries) {
+        if (entry.type !== "OWNER_DRAWING") continue;
+        const category = ownerWithdrawalCategory(entry, drawingEntryIds);
+        const key = category === "OWNER_DRAWING" ? "drawingsKobo"
+            : category === "LEGACY_LOAN_REPAYMENT" ? "legacyLoanKobo" : "unclassifiedKobo";
+        totals[key] -= entry.amountKobo;
+    }
+    return totals;
+}
 
 export interface AccountMoneyFlowCategory {
     key: AccountMoneyFlowCategoryKey;
@@ -655,6 +688,7 @@ export function accountMoneyFlowReport(
     from: Date,
     to: Date,
     accountId?: string,
+    drawingEntryIds?: ReadonlySet<string>,
 ): AccountMoneyFlowReport {
     if (from.getTime() > to.getTime()) {
         throw new RangeError("From date must be on or before to date.");
@@ -691,7 +725,9 @@ export function accountMoneyFlowReport(
                 ? expenseById.get(entry.expenseId)
                 : undefined;
         const key: AccountMoneyFlowCategoryKey =
-            expense === undefined ? entry.type : `EXPENSE:${expense.category}`;
+            entry.type === "OWNER_DRAWING" && drawingEntryIds !== undefined
+                ? ownerWithdrawalCategory(entry, drawingEntryIds)
+                : expense === undefined ? entry.type : `EXPENSE:${expense.category}`;
         let category = row.categories.find((candidate) => candidate.key === key);
         if (!category) {
             category = { key, moneyInKobo: 0n, moneyOutKobo: 0n };

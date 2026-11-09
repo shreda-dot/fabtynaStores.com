@@ -38,6 +38,16 @@ async function createExpenseCategory(name: string) {
   return response.json<{ id: string }>();
 }
 
+async function createBeneficiary() {
+  const response = await h.app.inject({
+    method: "POST",
+    url: "/family-members",
+    payload: { name: newId("beneficiary"), relationship: "Family" },
+  });
+  expect(response.statusCode, response.body).toBe(201);
+  return response.json<{ id: string }>();
+}
+
 describe("4A close-out coverage gaps", () => {
   it("summarizes by category and allocates odd BOTH amounts without losing kobo", async () => {
     const account = await createAccount(`Summary ${newId("account")}`);
@@ -139,11 +149,14 @@ describe("4A close-out coverage gaps", () => {
       payload: { amountKobo: "10000", occurredAt: priorDay.toISOString() },
     });
     expect(opening.statusCode).toBe(201);
+    const beneficiary = await createBeneficiary();
     const outflow = await h.app.inject({
       method: "POST",
-      url: `/accounts/${account.id}/movements`,
+      url: "/drawings",
       payload: {
-        type: "OWNER_DRAWING",
+        beneficiaryId: beneficiary.id,
+        purpose: "OTHER",
+        accountId: account.id,
         amountKobo: "3000",
         note: "Statement outflow",
         occurredAt: movementTime(1),
@@ -220,10 +233,14 @@ describe("4A close-out coverage gaps", () => {
     });
     expect(inflow.statusCode).toBe(201);
     const entryId = inflow.json<{ id: string }>().id;
+    const beneficiary = await createBeneficiary();
     const outflow = await h.app.inject({
       method: "POST",
-      url: `/accounts/${account.id}/movements`,
-      payload: { type: "OWNER_DRAWING", amountKobo: "1000", note: "Spend income" },
+      url: "/drawings",
+      payload: {
+        beneficiaryId: beneficiary.id, purpose: "OTHER", accountId: account.id,
+        amountKobo: "1000", note: "Spend income", occurredAt: new Date().toISOString(),
+      },
     });
     expect(outflow.statusCode).toBe(201);
     const before = await h.pg.query(
@@ -297,8 +314,9 @@ describe("4A close-out coverage gaps", () => {
     );
   });
 
-  it("records all four manual movement types with the correct sign", async () => {
+  it("records manual movements and classified drawings with the correct sign", async () => {
     const account = await createAccount(`Manual movements ${newId("account")}`);
+    const beneficiary = await createBeneficiary();
     const actions = [
       { type: "OWNER_CAPITAL", amountKobo: "1000", expected: "1000" },
       { type: "OTHER_INCOME", amountKobo: "2000", expected: "2000" },
@@ -307,19 +325,35 @@ describe("4A close-out coverage gaps", () => {
     ] as const;
     const actual: string[] = [];
     for (const action of actions) {
-      const response = await h.app.inject({
-        method: "POST",
-        url: `/accounts/${account.id}/movements`,
-        payload: { type: action.type, amountKobo: action.amountKobo, note: `Record ${action.type}` },
-      });
+      const response = action.type === "OWNER_DRAWING"
+        ? await h.app.inject({
+            method: "POST",
+            url: "/drawings",
+            payload: {
+              beneficiaryId: beneficiary.id, purpose: "OTHER", accountId: account.id,
+              amountKobo: action.amountKobo, note: "Record drawing", occurredAt: new Date().toISOString(),
+            },
+          })
+        : await h.app.inject({
+            method: "POST",
+            url: `/accounts/${account.id}/movements`,
+            payload: { type: action.type, amountKobo: action.amountKobo, note: `Record ${action.type}` },
+          });
       expect(response.statusCode, response.body).toBe(201);
-      actual.push(response.json<{ amountKobo: string }>().amountKobo);
+      if (action.type === "OWNER_DRAWING") {
+        const entryId = response.json<{ entryId: string }>().entryId;
+        const entry = await h.pg.query(`SELECT "amountKobo"::text AS amount FROM account_ledger_entries WHERE id = $1`, [entryId]);
+        actual.push(entry.rows[0].amount as string);
+      } else {
+        actual.push(response.json<{ amountKobo: string }>().amountKobo);
+      }
       expect(actual.at(-1)).toBe(action.expected);
     }
     expect(await accountBalanceOf(h.pg, account.id)).toBe(2250n);
   });
 
   it("serializes competing spends on a zero-after-one balance (10 iterations)", async () => {
+    const beneficiaries = [await createBeneficiary(), await createBeneficiary()];
     for (let iteration = 0; iteration < 10; iteration += 1) {
       const account = await createAccount(`Concurrent ${iteration} ${newId("account")}`);
       const opening = await h.app.inject({
@@ -329,16 +363,19 @@ describe("4A close-out coverage gaps", () => {
       });
       expect(opening.statusCode).toBe(201);
       const responses = await Promise.all(
-        [0, 1].map(() =>
+        beneficiaries.map((beneficiary) =>
           h.app.inject({
             method: "POST",
-            url: `/accounts/${account.id}/movements`,
-            payload: { type: "OWNER_DRAWING", amountKobo: "100", note: "Concurrent spend" },
+            url: "/drawings",
+            payload: {
+              beneficiaryId: beneficiary.id, purpose: "OTHER", accountId: account.id,
+              amountKobo: "100", note: "Concurrent spend", occurredAt: new Date().toISOString(),
+            },
           }),
         ),
       );
       expect(responses.filter((response) => response.statusCode === 201)).toHaveLength(1);
-      expect(responses.filter((response) => response.statusCode !== 201)).toHaveLength(1);
+      expect(responses.filter((response) => response.statusCode === 409)).toHaveLength(1);
       expect(await accountBalanceOf(h.pg, account.id)).toBe(0n);
     }
   }, 90_000);

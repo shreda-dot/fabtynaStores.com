@@ -23,7 +23,7 @@ async function insertAccountEntry(
   entry: {
     id: string;
     accountId: string;
-    type: "OWNER_CAPITAL" | "OWNER_DRAWING";
+    type: "OWNER_CAPITAL" | "BANK_OR_POS_CHARGE";
     amountKobo: bigint;
     note?: string;
     reversesEntryId?: string;
@@ -80,19 +80,19 @@ describe("account_balances", () => {
         amountKobo: openingKobo,
       });
 
-      const spendIds = [newId("owner_drawing"), newId("owner_drawing")];
+      const spendIds = [newId("account_charge"), newId("account_charge")];
       const results = await Promise.allSettled([
         insertAccountEntry(spenderA, {
           id: spendIds[0],
           accountId,
-          type: "OWNER_DRAWING",
+          type: "BANK_OR_POS_CHARGE",
           amountKobo: -spendKobo,
           note: "Concurrency regression test spend",
         }),
         insertAccountEntry(spenderB, {
           id: spendIds[1],
           accountId,
-          type: "OWNER_DRAWING",
+          type: "BANK_OR_POS_CHARGE",
           amountKobo: -spendKobo,
           note: "Concurrency regression test spend",
         }),
@@ -120,9 +120,9 @@ describe("account_balances", () => {
       } finally {
         for (const spendId of fulfilled) {
           await insertAccountEntry(setupClient, {
-            id: newId("owner_drawing_reversal"),
+            id: newId("account_charge_reversal"),
             accountId,
-            type: "OWNER_DRAWING",
+            type: "BANK_OR_POS_CHARGE",
             amountKobo: spendKobo,
             note: "Concurrency regression test spend",
             reversesEntryId: spendId,

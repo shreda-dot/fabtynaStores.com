@@ -19,7 +19,7 @@ import {
 import type { Actor } from "../../auth/actor.js";
 import { AppError, businessRuleError, validationError } from "../../lib/errors.js";
 import { hashRequestBody } from "../../lib/idempotency.js";
-import { createWriteRunner } from "../../lib/tx.js";
+import { counted, createWriteRunner } from "../../lib/tx.js";
 import type { TxTimeouts } from "../../lib/tx-options.js";
 import {
   insertLaterPayment,
@@ -109,8 +109,9 @@ function syntheticMovement(product: Product, location: CreateSaleDto["location"]
  *   3. stock_balances, by productId, location
  *   4. account_balances, sorted by accountId (read together with accounts)
  *   5. customer rows, sorted by id
+ *   6. empties types, then balances, sorted by type id
  *
- * `acquireLocks` below takes 2-5 in that order, one statement per table; the
+ * `acquireLocks` below takes 2-6 in that order; the
  * caller takes 1 first. Anything that depends on a lock is checked only after
  * it is held.
  * ------------------------------------------------------------------ */
@@ -120,6 +121,23 @@ interface LockPlan {
   stockKeys: readonly StockKey[];
   accountIds: readonly string[];
   customerIds: readonly string[];
+  emptiesTypeIds: readonly string[];
+}
+
+interface SalePackagingRow {
+  productId: string;
+  typeId: string;
+  kind: "BOTTLE" | "CRATE";
+  label: string;
+  retailQuantityPerUnit: number;
+  wholesaleQuantityPerPack: number;
+}
+
+interface LockedEmptiesBalance {
+  typeId: string;
+  quantity: number;
+  label: string;
+  ownerName: string;
 }
 
 interface Locked {
@@ -128,14 +146,86 @@ interface Locked {
   stock: Map<string, number>;
   accounts: Map<string, LockedAccount>;
   customers: Map<string, LockedCustomer>;
+  emptiesBalances: Map<string, LockedEmptiesBalance>;
+  packagingByProduct: Map<string, SalePackagingRow[]>;
 }
 
-async function acquireLocks(ctx: TxContext, plan: LockPlan): Promise<Locked> {
+async function loadSalePackaging(
+  ctx: TxContext,
+  productIds: readonly string[],
+): Promise<SalePackagingRow[]> {
+  const ids = [...new Set(productIds)].sort();
+  if (ids.length === 0) return [];
+  counted(ctx);
+  return ctx.tx.$queryRaw<SalePackagingRow[]>`
+    SELECT ep."productId", ep."typeId", ep.kind::text AS kind, t.label,
+           ep."retailQuantityPerUnit", ep."wholesaleQuantityPerPack"
+      FROM empties_product_packaging ep
+      JOIN empties_types t ON t.id = ep."typeId"
+     WHERE ep."productId" = ANY(${ids}::text[])
+     ORDER BY ep."productId", ep.kind, ep."typeId"`;
+}
+
+async function lockEmptiesBalances(
+  ctx: TxContext,
+  typeIds: readonly string[],
+): Promise<Map<string, LockedEmptiesBalance>> {
+  const ids = [...new Set(typeIds)].sort();
+  if (ids.length === 0) return new Map();
+
+  counted(ctx);
+  const types = await ctx.tx.$queryRaw<Array<{ typeId: string; label: string; ownerName: string }>>`
+    SELECT t.id AS "typeId", t.label, o.name AS "ownerName"
+      FROM empties_types t
+      JOIN empties_owners o ON o.id = t."ownerId"
+     WHERE t.id = ANY(${ids}::text[])
+     ORDER BY t.id
+     FOR UPDATE OF t`;
+  counted(ctx);
+  const balances = await ctx.tx.$queryRaw<Array<{ typeId: string; quantity: number }>>`
+    SELECT "typeId", quantity
+      FROM empties_balances
+     WHERE "typeId" = ANY(${ids}::text[])
+     ORDER BY "typeId"
+     FOR UPDATE`;
+  const quantityById = new Map(balances.map((row) => [row.typeId, row.quantity]));
+  return new Map(
+    types.map((type) => [
+      type.typeId,
+      { ...type, quantity: quantityById.get(type.typeId) ?? 0 },
+    ]),
+  );
+}
+
+async function acquireLocks(
+  ctx: TxContext,
+  plan: LockPlan,
+  loadAdditionalPackaging?: () => Promise<SalePackagingRow[]>,
+): Promise<Locked> {
   const products = plan.productIds.length > 0 ? await lockProducts(ctx, plan.productIds) : [];
   const stock = await lockStockBalances(ctx, plan.stockKeys);
   const accounts = await lockAccounts(ctx, plan.accountIds);
   const customers = await lockCustomers(ctx, plan.customerIds);
-  return { products, productById: new Map(products.map((p) => [p.id, p])), stock, accounts, customers };
+  const packaging = loadAdditionalPackaging === undefined ? [] : await loadAdditionalPackaging();
+  const emptiesBalances = await lockEmptiesBalances(ctx, [
+    ...plan.emptiesTypeIds,
+    ...packaging.map((mapping) => mapping.typeId),
+  ]);
+  const packagingByProduct = new Map<string, SalePackagingRow[]>();
+  for (const mapping of packaging) {
+    const mappings = packagingByProduct.get(mapping.productId) ?? [];
+    mappings.push(mapping);
+    packagingByProduct.set(mapping.productId, mappings);
+  }
+  return {
+    products,
+    productById: new Map(products.map((p) => [p.id, p])),
+    stock,
+    accounts,
+    customers,
+    emptiesBalances,
+    packagingByProduct,
+  };
 }
 
 function salePlan(dto: CreateSaleDto): LockPlan {
@@ -145,6 +235,7 @@ function salePlan(dto: CreateSaleDto): LockPlan {
     stockKeys: dto.lines.map((line) => ({ productId: line.productId, location: dto.location })),
     accountIds: paid && dto.accountId ? [dto.accountId] : [],
     customerIds: dto.customerId ? [dto.customerId] : [],
+    emptiesTypeIds: [],
   };
 }
 
@@ -154,6 +245,7 @@ function mergePlans(...plans: LockPlan[]): LockPlan {
     stockKeys: plans.flatMap((p) => [...p.stockKeys]),
     accountIds: plans.flatMap((p) => [...p.accountIds]),
     customerIds: plans.flatMap((p) => [...p.customerIds]),
+    emptiesTypeIds: plans.flatMap((p) => [...p.emptiesTypeIds]),
   };
 }
 
@@ -330,6 +422,69 @@ export function createSalesService(options: SalesServiceOptions) {
       input.clientReference ?? formatSaleReference(soldAt, await nextSaleSequence(ctx));
     const sale = { ...result.sale, reference };
 
+    const fractions = new Map<string, {
+      typeId: string;
+      kind: "BOTTLE" | "CRATE";
+      label: string;
+      productName: string;
+      numerator: bigint;
+      denominator: bigint;
+    }>();
+    for (const line of result.saleLines) {
+      const productName = locked.productById.get(line.productId)?.name ?? line.productId;
+      for (const mapping of locked.packagingByProduct.get(line.productId) ?? []) {
+        const rate =
+          line.unit === "UNIT"
+            ? mapping.retailQuantityPerUnit
+            : mapping.wholesaleQuantityPerPack;
+        if (rate === 0) continue;
+        const denominator = BigInt(line.unitsPerPackSnapshot);
+        const numerator = BigInt(line.quantityUnits) * BigInt(rate)
+          * (line.unit === "UNIT" ? denominator : 1n);
+        const key = `${line.productId}\u0000${mapping.typeId}`;
+        const previous = fractions.get(key);
+        fractions.set(key, {
+          typeId: mapping.typeId,
+          kind: mapping.kind,
+          label: mapping.label,
+          productName,
+          numerator: (previous?.numerator ?? 0n) + numerator,
+          denominator,
+        });
+      }
+    }
+    const emptiesByType = new Map<string, { quantity: number; label: string }>();
+    for (const entry of fractions.values()) {
+      if (entry.kind === "BOTTLE" && entry.numerator % entry.denominator !== 0n) {
+        throw businessRuleError(
+          `The sale quantity for '${entry.productName}' produces a fraction of '${entry.label}'. Update its bottle conversion in Empties settings.`,
+          { productName: entry.productName, typeId: entry.typeId, label: entry.label },
+        );
+      }
+      const count = entry.numerator / entry.denominator;
+      if (count === 0n) continue;
+      const total = BigInt(emptiesByType.get(entry.typeId)?.quantity ?? 0) + count;
+      if (total > 2_147_483_647n) {
+        throw validationError(`The returned '${entry.label}' count for this sale is too large.`, {
+          typeId: entry.typeId,
+          label: entry.label,
+        });
+      }
+      emptiesByType.set(entry.typeId, { quantity: Number(total), label: entry.label });
+    }
+    const emptiesMovements = [...emptiesByType]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([typeId, { quantity }]) => ({
+        id: randomUUID(),
+        typeId,
+        movementType: "RECEIVED" as const,
+        quantity,
+        note: `Sale ${sale.reference}: containers assumed returned`,
+        occurredAt: sale.soldAt,
+        createdById: actor.id,
+        saleId: sale.id,
+      }));
+
     const payments: ReceivedPayment[] =
       result.salePayment !== null && result.accountLedgerEntry !== null
         ? [{ payment: result.salePayment, accountEntry: result.accountLedgerEntry }]
@@ -359,6 +514,7 @@ export function createSalesService(options: SalesServiceOptions) {
         accountId: payment.accountId,
         amountKobo: payment.amountKobo.toString(),
       })),
+      emptiesMovements: emptiesMovements.map(({ typeId, quantity }) => ({ typeId, quantity })),
     };
 
     return insertSale(ctx, {
@@ -368,6 +524,7 @@ export function createSalesService(options: SalesServiceOptions) {
       movements: result.movements,
       customerLedgerEntry: result.customerLedgerEntry,
       payments,
+      emptiesMovements,
       costByProductId,
       actorId: actor.id,
       audit: {
@@ -420,21 +577,69 @@ export function createSalesService(options: SalesServiceOptions) {
     return { parts, history };
   }
 
-  function voidPlan(parts: SaleParts, sale: Sale): LockPlan {
+  function voidPlan(parts: SaleParts, sale: Sale, history: SaleHistory): LockPlan {
     return {
       productIds: parts.lines.map((line) => line.productId),
       stockKeys: parts.lines.map((line) => ({ productId: line.productId, location: line.location })),
       accountIds: parts.payments.map((payment) => payment.accountId),
       customerIds: sale.customerId ? [sale.customerId] : [],
+      emptiesTypeIds: history.emptiesMovements.map((movement) => movement.typeId),
     };
   }
 
-  /** Runs after `acquireLocks`: checks every affected account can give the money back, then reverses everything. */
+  /** Runs after `acquireLocks`: checks money and returned empties before writing reversals. */
   async function executeVoid(
     ctx: TxContext,
-    input: { sale: Sale; parts: SaleParts; history: SaleHistory; locked: Locked; voidedAt: Date },
+    input: {
+      sale: Sale;
+      parts: SaleParts;
+      history: SaleHistory;
+      locked: Locked;
+      voidedAt: Date;
+      actorId: string;
+    },
   ) {
-    const { sale, parts, history, locked, voidedAt } = input;
+    const { sale, parts, history, locked, voidedAt, actorId } = input;
+
+    const reversedEmptiesIds = new Set(
+      history.emptiesMovements
+        .filter((movement) => movement.reversesEntryId !== null)
+        .map((movement) => movement.reversesEntryId),
+    );
+    const liveSaleEmpties = history.emptiesMovements.filter(
+      (movement) =>
+        movement.saleId === sale.id &&
+        movement.reversesEntryId === null &&
+        !reversedEmptiesIds.has(movement.id),
+    );
+    const emptiesByType = new Map<string, number>();
+    for (const movement of liveSaleEmpties) {
+      if (movement.movementType !== "RECEIVED" || movement.quantity <= 0) {
+        throw new AppError(500, "INTERNAL", "A sale-linked empties movement has an invalid direction.", {
+          saleId: sale.id,
+          movementId: movement.id,
+        });
+      }
+      emptiesByType.set(
+        movement.typeId,
+        (emptiesByType.get(movement.typeId) ?? 0) + movement.quantity,
+      );
+    }
+    for (const [typeId, amount] of [...emptiesByType].sort(([a], [b]) => (a < b ? -1 : 1))) {
+      const balance = locked.emptiesBalances.get(typeId);
+      if (balance === undefined) {
+        throw new AppError(500, "INTERNAL", "The sale's empties type no longer exists.", {
+          saleId: sale.id,
+          typeId,
+        });
+      }
+      if (balance.quantity < amount) {
+        throw businessRuleError(
+          `Cannot void or amend this sale: only ${balance.quantity} '${balance.label}' (${balance.ownerName}) empties are on hand, but reversing the sale needs ${amount}.`,
+          { saleId: sale.id, typeId, label: balance.label, onHand: balance.quantity, needed: amount },
+        );
+      }
+    }
 
     // Money taken up front goes back out of the account. If it was already spent, say so by name
     // (the domain's own check would only see this one sale's entries, so the real balance is checked here).
@@ -499,8 +704,24 @@ export function createSalesService(options: SalesServiceOptions) {
       domainAccounts,
     );
 
-    const stored = await insertVoid(ctx, { saleId: sale.id, ...reversal });
-    return { stored, reversal };
+    const reversalEmptiesMovements = liveSaleEmpties.map((movement) => ({
+      id: randomUUID(),
+      typeId: movement.typeId,
+      movementType: "RECEIVED" as const,
+      quantity: -movement.quantity,
+      note: movement.note,
+      occurredAt: voidedAt,
+      createdById: actorId,
+      saleId: sale.id,
+      reversesEntryId: movement.id,
+    }));
+
+    const stored = await insertVoid(ctx, {
+      saleId: sale.id,
+      ...reversal,
+      reversalEmptiesMovements,
+    });
+    return { stored, reversal: { ...reversal, reversalEmptiesMovements } };
   }
 
   function voidAuditData(sale: Sale, reversal: Awaited<ReturnType<typeof executeVoid>>["reversal"]) {
@@ -520,6 +741,7 @@ export function createSalesService(options: SalesServiceOptions) {
           accountId: entry.accountId,
           amountKobo: entry.amountKobo.toString(),
         })),
+        emptiesMovementReversalIds: reversal.reversalEmptiesMovements.map((movement) => movement.id),
       },
     };
   }
@@ -539,7 +761,9 @@ export function createSalesService(options: SalesServiceOptions) {
 
     return runWrite(CREATE_SALE_ROUTE, { lines: dto.lines.length }, (ctx) =>
       withIdempotency(ctx, { actorId: actor.id, route: CREATE_SALE_ROUTE, key: idempotencyKey, requestHash }, async () => {
-        const locked = await acquireLocks(ctx, salePlan(dto));
+        const locked = await acquireLocks(ctx, salePlan(dto), () =>
+          loadSalePackaging(ctx, dto.lines.map((line) => line.productId)),
+        );
         const stored = await recordNewSale(ctx, {
           dto,
           actor,
@@ -576,6 +800,7 @@ export function createSalesService(options: SalesServiceOptions) {
           stockKeys: [],
           accountIds: [dto.accountId],
           customerIds: sale.customerId ? [sale.customerId] : [],
+          emptiesTypeIds: [],
         });
 
         if (sale.status === "VOIDED") {
@@ -681,6 +906,7 @@ export function createSalesService(options: SalesServiceOptions) {
           stockKeys: [],
           accountIds: [rows.payment.accountId],
           customerIds: [sale.customerId],
+          emptiesTypeIds: [],
         });
         const account = locked.accounts.get(rows.payment.accountId);
         if (account === undefined) {
@@ -747,8 +973,15 @@ export function createSalesService(options: SalesServiceOptions) {
           throw new AppError(404, "NOT_FOUND", "Sale not found.", { id: saleId });
         }
         const { parts, history } = await loadVoidable(ctx, sale);
-        const locked = await acquireLocks(ctx, voidPlan(parts, sale));
-        const { stored, reversal } = await executeVoid(ctx, { sale, parts, history, locked, voidedAt: now() });
+        const locked = await acquireLocks(ctx, voidPlan(parts, sale, history));
+        const { stored, reversal } = await executeVoid(ctx, {
+          sale,
+          parts,
+          history,
+          locked,
+          voidedAt: now(),
+          actorId: actor.id,
+        });
 
         const audit = voidAuditData(sale, reversal);
         await insertSaleAudit(ctx, {
@@ -768,6 +1001,7 @@ export function createSalesService(options: SalesServiceOptions) {
               stockMovements: reversal.reversalMovements.length,
               customerLedgerEntries: reversal.reversalCustomerLedgerEntry === null ? 0 : 1,
               accountEntries: reversal.reversalAccountLedgerEntries.length,
+              emptiesMovements: reversal.reversalEmptiesMovements.length,
             },
           },
         };
@@ -799,9 +1033,20 @@ export function createSalesService(options: SalesServiceOptions) {
           throw new AppError(404, "NOT_FOUND", "Sale not found.", { id: saleId });
         }
         const { parts, history } = await loadVoidable(ctx, original);
-        const locked = await acquireLocks(ctx, mergePlans(voidPlan(parts, original), salePlan(dto)));
+        const locked = await acquireLocks(
+          ctx,
+          mergePlans(voidPlan(parts, original, history), salePlan(dto)),
+          () => loadSalePackaging(ctx, dto.lines.map((line) => line.productId)),
+        );
 
-        const voided = await executeVoid(ctx, { sale: original, parts, history, locked, voidedAt: now() });
+        const voided = await executeVoid(ctx, {
+          sale: original,
+          parts,
+          history,
+          locked,
+          voidedAt: now(),
+          actorId: actor.id,
+        });
 
         // The void has just put its stock back; the replacement may use it.
         const availableStock = new Map(locked.stock);

@@ -444,19 +444,28 @@ export function createEmptiesCustomerService(options: EmptiesCustomerServiceOpti
             }
 
             let emptiesMovementId: string | null = null;
-            if (input.movementType === "RETURNED") {
+            if (input.movementType === "TAKEN" || input.movementType === "RETURNED") {
+              const onHand = await lockOnHand(ctx, type.id);
+              if (input.movementType === "TAKEN" && onHand < input.quantity) {
+                throw new AppError(
+                  409,
+                  "BUSINESS_RULE",
+                  `Only ${onHand} of '${type.label}' (${type.ownerName}) is on hand; ${input.quantity} requested for ${customer.name}.`,
+                  { typeId: type.id, label: type.label, ownerName: type.ownerName, onHand, requested: input.quantity },
+                );
+              }
               counted(ctx);
-              const received = await ctx.tx.emptiesMovement.create({
+              const inventoryMovement = await ctx.tx.emptiesMovement.create({
                 data: {
                   typeId: type.id,
-                  movementType: "RECEIVED",
-                  quantity: input.quantity,
+                  movementType: input.movementType === "TAKEN" ? "ISSUED_TO_CUSTOMER" : "RECEIVED",
+                  quantity: input.movementType === "TAKEN" ? -input.quantity : input.quantity,
                   note: input.note ?? null,
                   occurredAt,
                   createdById: actor.id,
                 },
               });
-              emptiesMovementId = received.id;
+              emptiesMovementId = inventoryMovement.id;
             }
 
             counted(ctx);
@@ -597,12 +606,15 @@ export function createEmptiesCustomerService(options: EmptiesCustomerServiceOpti
             }
 
             let reversedEmptiesMovementId: string | null = null;
-            if (target.movementType === "RETURNED") {
+            if (
+              target.movementType === "RETURNED"
+              || (target.movementType === "TAKEN" && target.emptiesMovementId !== null)
+            ) {
               if (target.emptiesMovementId === null) {
                 throw new AppError(
                   500,
                   "INTERNAL",
-                  "The customer return is missing its linked on-hand movement.",
+                  "The customer movement is missing its linked on-hand movement.",
                   { movementId: target.id },
                 );
               }
@@ -624,12 +636,13 @@ export function createEmptiesCustomerService(options: EmptiesCustomerServiceOpti
               if (
                 linked === undefined
                 || linked.typeId !== target.typeId
-                || linked.movementType !== "RECEIVED"
+                || linked.movementType !== (target.movementType === "TAKEN" ? "ISSUED_TO_CUSTOMER" : "RECEIVED")
+                || Math.abs(linked.quantity) !== Math.abs(target.quantity)
               ) {
                 throw new AppError(
                   500,
                   "INTERNAL",
-                  "The customer return's linked on-hand movement is invalid.",
+                  "The customer movement's linked on-hand movement is invalid.",
                   { movementId: target.id, emptiesMovementId: target.emptiesMovementId },
                 );
               }
@@ -651,15 +664,17 @@ export function createEmptiesCustomerService(options: EmptiesCustomerServiceOpti
                 );
               }
 
-              const onHand = await lockOnHand(ctx, type.id);
-              const needed = linked.quantity;
-              if (onHand < needed) throw insufficientOnHand(type, onHand, needed);
+              if (target.movementType === "RETURNED") {
+                const onHand = await lockOnHand(ctx, type.id);
+                const needed = linked.quantity;
+                if (onHand < needed) throw insufficientOnHand(type, onHand, needed);
+              }
 
               counted(ctx);
               const reversal = await ctx.tx.emptiesMovement.create({
                 data: {
                   typeId: linked.typeId,
-                  movementType: "RECEIVED",
+                  movementType: target.movementType === "TAKEN" ? "ISSUED_TO_CUSTOMER" : "RECEIVED",
                   quantity: -linked.quantity,
                   note: linked.note,
                   occurredAt: now(),

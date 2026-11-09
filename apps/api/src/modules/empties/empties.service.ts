@@ -27,6 +27,7 @@ import type {
   CreateOwnerBody,
   CreateTypeBody,
   AssignProductOwnerBody,
+  AssignProductPackagingBody,
   ListBalancesQuery,
   ListMovementsQuery,
   ListTypesQuery,
@@ -52,7 +53,12 @@ import type {
  */
 
 type EmptiesKind = "BOTTLE" | "CRATE";
-type EmptiesMovementType = "OPENING" | "RECEIVED" | "RETURNED_TO_OWNER" | "ADJUSTMENT";
+type EmptiesMovementType =
+  | "OPENING"
+  | "RECEIVED"
+  | "RETURNED_TO_OWNER"
+  | "ISSUED_TO_CUSTOMER"
+  | "ADJUSTMENT";
 
 interface OwnerRow {
   id: string;
@@ -81,6 +87,7 @@ interface MovementRow {
   note: string | null;
   occurredAt: Date;
   createdById: string;
+  saleId: string | null;
   reversesEntryId: string | null;
   customerReturnMovementId?: string | null;
   createdAt: Date;
@@ -130,6 +137,15 @@ interface ProductOwnerRow {
 
 interface ProductOwnerLockRow extends ProductOwnerRow {}
 
+interface ProductPackagingRow {
+  productId: string;
+  typeId: string;
+  kind: EmptiesKind;
+  label: string;
+  retailQuantityPerUnit: number;
+  wholesaleQuantityPerPack: number;
+}
+
 export interface OwnerDto {
   id: string;
   name: string;
@@ -158,6 +174,7 @@ export interface EmptiesMovementDto {
   note: string | null;
   occurredAt: string;
   createdById: string;
+  saleId: string | null;
   reversesEntryId: string | null;
   customerReturnMovementId: string | null;
   createdAt: string;
@@ -240,6 +257,13 @@ export interface ProductOwnerDto {
   ownerId: string | null;
   ownerName: string | null;
   ownerIsActive: boolean | null;
+  packaging: Array<{
+    typeId: string;
+    kind: EmptiesKind;
+    label: string;
+    retailQuantityPerUnit: number;
+    wholesaleQuantityPerPack: number;
+  }>;
 }
 
 export interface ProductOwnerPageDto {
@@ -297,6 +321,7 @@ function toMovementDto(movement: MovementRow): EmptiesMovementDto {
     note: movement.note,
     occurredAt: movement.occurredAt.toISOString(),
     createdById: movement.createdById,
+    saleId: movement.saleId ?? null,
     reversesEntryId: movement.reversesEntryId,
     customerReturnMovementId: movement.customerReturnMovementId ?? null,
     createdAt: movement.createdAt.toISOString(),
@@ -926,9 +951,37 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
          ORDER BY p.id ASC
          LIMIT ${query.limit + 1}`;
       const page = rows.slice(0, query.limit);
+      const productIds = page.map((row) => row.productId);
+      const packagingRows =
+        productIds.length === 0
+          ? []
+          : await prisma.$queryRaw<ProductPackagingRow[]>`
+              SELECT ep."productId", ep."typeId", ep.kind::text AS kind, t.label,
+                     ep."retailQuantityPerUnit", ep."wholesaleQuantityPerPack"
+                FROM empties_product_packaging ep
+                JOIN empties_types t ON t.id = ep."typeId"
+               WHERE ep."productId" = ANY(${productIds}::text[])
+               ORDER BY ep."productId", ep.kind`;
+      const packagingByProduct = new Map<string, ProductPackagingRow[]>();
+      for (const mapping of packagingRows) {
+        const values = packagingByProduct.get(mapping.productId) ?? [];
+        values.push(mapping);
+        packagingByProduct.set(mapping.productId, values);
+      }
       const last = page.at(-1);
       return {
-        items: page,
+        items: page.map((row) => ({
+          ...row,
+          packaging: (packagingByProduct.get(row.productId) ?? []).map(
+            ({ typeId, kind, label, retailQuantityPerUnit, wholesaleQuantityPerPack }) => ({
+              typeId,
+              kind,
+              label,
+              retailQuantityPerUnit,
+              wholesaleQuantityPerPack,
+            }),
+          ),
+        })),
         nextCursor: rows.length > query.limit && last !== undefined ? last.productId : null,
       };
     },
@@ -986,6 +1039,9 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
             }
 
             if (product.ownerId !== input.ownerId) {
+              counted(ctx);
+              await ctx.tx.$executeRaw`
+                DELETE FROM empties_product_packaging WHERE "productId" = ${productId}`;
               if (input.ownerId === null) {
                 counted(ctx);
                 await ctx.tx.$executeRaw`
@@ -1009,6 +1065,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
                 ownerId: targetOwner?.id ?? null,
                 ownerName: targetOwner?.name ?? null,
                 ownerIsActive: targetOwner?.isActive ?? null,
+                packaging: [],
               } satisfies ProductOwnerDto;
               await insertAuditLog(ctx, "Product", {
                 actorId: actor.id,
@@ -1025,6 +1082,14 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
               return { status: 200, body: after };
             }
 
+            counted(ctx);
+            const existingPackaging = await ctx.tx.$queryRaw<ProductPackagingRow[]>`
+              SELECT ep."productId", ep."typeId", ep.kind::text AS kind, t.label,
+                     ep."retailQuantityPerUnit", ep."wholesaleQuantityPerPack"
+                FROM empties_product_packaging ep
+                JOIN empties_types t ON t.id = ep."typeId"
+               WHERE ep."productId" = ${productId}
+               ORDER BY ep.kind`;
             return {
               status: 200,
               body: {
@@ -1035,8 +1100,125 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
                 ownerId: product.ownerId,
                 ownerName: product.ownerName,
                 ownerIsActive: product.ownerIsActive,
+                packaging: existingPackaging.map(
+                  ({ typeId, kind, label, retailQuantityPerUnit, wholesaleQuantityPerPack }) => ({
+                    typeId,
+                    kind,
+                    label,
+                    retailQuantityPerUnit,
+                    wholesaleQuantityPerPack,
+                  }),
+                ),
               } satisfies ProductOwnerDto,
             };
+          },
+        ),
+      );
+    },
+
+    async assignProductPackaging(
+      productId: string,
+      input: AssignProductPackagingBody,
+      actor: Actor,
+      key: string | null,
+    ): Promise<WriteResponse> {
+      const route = routeFor("PUT", `/empties/products/${productId}/packaging`);
+      return runner.runWrite(route, { productId }, (ctx) =>
+        runner.withIdempotency(
+          ctx,
+          { actorId: actor.id, route, key, requestHash: hashRequestBody({ productId, ...input }) },
+          async () => {
+            counted(ctx);
+            const products = await ctx.tx.$queryRaw<Array<{
+              productId: string;
+              productName: string;
+              ownerId: string | null;
+            }>>`
+              SELECT p.id AS "productId", p.name AS "productName", po."ownerId"
+                FROM products p
+                LEFT JOIN empties_product_owners po ON po."productId" = p.id
+               WHERE p.id = ${productId}
+               FOR UPDATE OF p`;
+            const product = products[0];
+            if (product === undefined) {
+              throw new AppError(404, "NOT_FOUND", "Product not found.", { productId });
+            }
+            if (input.mappings.length > 0 && product.ownerId === null) {
+              throw businessRuleError(
+                "Assign this product to a brewery before configuring its empties.",
+              );
+            }
+
+            const typeIds = input.mappings.map((mapping) => mapping.typeId);
+            if (typeIds.length > 0) counted(ctx);
+            const types =
+              typeIds.length === 0
+                ? []
+                : await ctx.tx.$queryRaw<Array<{
+                    id: string;
+                    ownerId: string;
+                    kind: EmptiesKind;
+                    label: string;
+                    isActive: boolean;
+                  }>>`
+                    SELECT id, "ownerId", kind::text AS kind, label, "isActive"
+                      FROM empties_types
+                     WHERE id = ANY(${typeIds}::text[])
+                     ORDER BY id
+                     FOR SHARE`;
+            const typeById = new Map(types.map((type) => [type.id, type]));
+            const mappingsWithLabels: Array<AssignProductPackagingBody["mappings"][number] & {
+              label: string;
+            }> = [];
+            for (const mapping of input.mappings) {
+              const type = typeById.get(mapping.typeId);
+              if (type === undefined || type.ownerId !== product.ownerId || type.kind !== mapping.kind) {
+                throw validationError(
+                  "Choose an empties type of the matching kind owned by this product's brewery.",
+                  { typeId: mapping.typeId, kind: mapping.kind },
+                );
+              }
+              if (!type.isActive) {
+                throw businessRuleError(
+                  `'${type.label}' is deactivated and cannot be assigned to a product.`,
+                  { typeId: type.id },
+                );
+              }
+              mappingsWithLabels.push({ ...mapping, label: type.label });
+            }
+
+            counted(ctx);
+            await ctx.tx.$executeRaw`
+              DELETE FROM empties_product_packaging WHERE "productId" = ${productId}`;
+            if (input.mappings.length > 0 && product.ownerId !== null) {
+              const ownerId = product.ownerId;
+              counted(ctx);
+              await ctx.tx.emptiesProductPackaging.createMany({
+                data: input.mappings.map((mapping) => ({
+                  productId,
+                  ownerId,
+                  typeId: mapping.typeId,
+                  kind: mapping.kind,
+                  retailQuantityPerUnit: mapping.retailQuantityPerUnit,
+                  wholesaleQuantityPerPack: mapping.wholesaleQuantityPerPack,
+                })),
+              });
+            }
+
+            const after = {
+              productId,
+              productName: product.productName,
+              ownerId: product.ownerId,
+              mappings: mappingsWithLabels,
+            };
+            await insertAuditLog(ctx, "Product", {
+              actorId: actor.id,
+              action: "EMPTIES_PRODUCT_PACKAGING_CHANGED",
+              entityId: productId,
+              afterData: after as unknown as Prisma.InputJsonValue,
+              metadata: { idempotencyKey: key, actorEmail: actor.email },
+            });
+            return { status: 200, body: after };
           },
         ),
       );
@@ -1144,11 +1326,11 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
         conditions.length > 0 ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}` : Prisma.empty;
       const rows = await prisma.$queryRaw<MovementRow[]>`
         SELECT m.id, m."typeId", m."movementType"::text AS "movementType", m.quantity, m.note,
-               m."occurredAt", m."createdById", m."reversesEntryId", m."createdAt",
+               m."occurredAt", m."createdById", m."saleId", m."reversesEntryId", m."createdAt",
                (SELECT cm.id
                   FROM empties_customer_movements cm
                  WHERE cm."emptiesMovementId" = m.id
-                   AND cm."movementType" = 'RETURNED'
+                   AND cm."movementType" IN ('RETURNED', 'TAKEN')
                  LIMIT 1) AS "customerReturnMovementId"
           FROM empties_movements m
           ${where}
@@ -1185,7 +1367,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
             counted(ctx);
             const targets = await ctx.tx.$queryRaw<MovementRow[]>`
               SELECT m.id, m."typeId", m."movementType"::text AS "movementType", m.quantity, m.note,
-                     m."occurredAt", m."createdById", m."reversesEntryId", m."createdAt"
+                     m."occurredAt", m."createdById", m."saleId", m."reversesEntryId", m."createdAt"
                 FROM empties_movements m
                WHERE m.id = ${id}
                FOR UPDATE`;
@@ -1199,16 +1381,22 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
                 reversesEntryId: target.reversesEntryId,
               });
             }
+            if (target.saleId !== null) {
+              throw businessRuleError(
+                "Sale-linked empties are reversed together with their sale. Void or amend the sale instead.",
+                { movementId: id, saleId: target.saleId },
+              );
+            }
             counted(ctx);
             const linkedCustomerReturns = await ctx.tx.$queryRaw<Array<{ id: string }>>`
               SELECT id
                 FROM empties_customer_movements
                WHERE "emptiesMovementId" = ${id}
-                 AND "movementType" = 'RETURNED'
+                 AND "movementType" IN ('RETURNED', 'TAKEN')
                LIMIT 1`;
             if (linkedCustomerReturns[0] !== undefined) {
               throw businessRuleError(
-                "This on-hand movement belongs to a customer return. Reverse the customer crate movement instead.",
+                "This on-hand movement belongs to a customer crate movement. Reverse the customer movement instead.",
                 {
                   movementId: id,
                   customerMovementId: linkedCustomerReturns[0].id,
@@ -1251,6 +1439,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
                 note: target.note,
                 occurredAt: now(),
                 createdById: actor.id,
+                saleId: target.saleId,
                 reversesEntryId: target.id,
               },
             });

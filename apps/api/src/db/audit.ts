@@ -67,6 +67,18 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
           OR ab."balanceKobo" <> COALESCE(SUM(ale."amountKobo"), 0)
        ORDER BY 1`,
   },
+  {
+    name: "drawing documents reference original owner withdrawals",
+    description: "Every drawing document must link to an original negative owner withdrawal.",
+    severity: "fatal",
+    sql: `
+      SELECT d.id AS "drawingId", d."entryId"
+        FROM drawings d
+        LEFT JOIN account_ledger_entries ale ON ale.id = d."entryId"
+       WHERE ale.id IS NULL OR ale.type <> 'OWNER_DRAWING'
+          OR ale."reversesEntryId" IS NOT NULL OR ale."amountKobo" >= 0
+       ORDER BY 1`,
+  },
 
   // --- 2. SALE PAYMENTS ---
   {
@@ -478,6 +490,34 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
        ORDER BY 1`,
   },
   {
+    name: "sale-linked empties movement has a matching sale and exact source reversal",
+    description:
+      "A sale-linked container receipt must reference its sale, retain the RECEIVED source type, and any reversal must preserve the sale and type while negating the count.",
+    severity: "fatal",
+    sql: `
+      SELECT m.id AS "movementId", m."saleId", m."typeId",
+             r.id AS "reversalId", r."saleId" AS "reversalSaleId",
+             r."typeId" AS "reversalTypeId", m.quantity, r.quantity AS "reversalQuantity"
+        FROM empties_movements m
+        LEFT JOIN sales s ON s.id = m."saleId"
+        LEFT JOIN empties_movements r ON r."reversesEntryId" = m.id
+       WHERE m."saleId" IS NOT NULL
+         AND m."reversesEntryId" IS NULL
+         AND (
+           s.id IS NULL
+           OR m."movementType" <> 'RECEIVED'
+           OR (s.status = 'VOIDED' AND r.id IS NULL)
+           OR (s.status <> 'VOIDED' AND r.id IS NOT NULL)
+           OR (r.id IS NOT NULL AND (
+             r."saleId" IS DISTINCT FROM m."saleId"
+             OR r."typeId" IS DISTINCT FROM m."typeId"
+             OR r."movementType" <> m."movementType"
+             OR r.quantity::bigint <> -m.quantity::bigint
+           ))
+         )
+       ORDER BY m.id`,
+  },
+  {
     name: "at most one live OPENING per empties type",
     description:
       "A type has a single starting count. The opening row is immutable and keeps `reversesEntryId IS NULL` even after it is reversed, so a second opening is refused for the life of the type; later corrections go through an ADJUSTMENT.",
@@ -510,9 +550,9 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
        ORDER BY 1, 2`,
   },
   {
-    name: "every live customer RETURNED movement has one live RECEIVED movement",
+    name: "every live customer TAKE or RETURN movement has one matching inventory movement",
     description:
-      "A customer return must be paired with exactly one unreversed on-hand RECEIVED movement of equal quantity and type.",
+      "A customer TAKE or RETURN must be paired with an unreversed on-hand issue or receipt of opposite quantity and the same type; legacy unlinked TAKEN rows predate inventory tracking.",
     severity: "fatal",
     sql: `
       SELECT cm.id AS "customerMovementId",
@@ -522,10 +562,17 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
         LEFT JOIN empties_movements em
           ON em.id = cm."emptiesMovementId"
          AND em."reversesEntryId" IS NULL
-         AND em."movementType" = 'RECEIVED'
+         AND em."movementType" = CASE cm."movementType"
+           WHEN 'TAKEN' THEN 'ISSUED_TO_CUSTOMER'::"EmptiesMovementType"
+           ELSE 'RECEIVED'::"EmptiesMovementType"
+         END
          AND em."typeId" = cm."typeId"
-         AND em.quantity = abs(cm.quantity)
-       WHERE cm."movementType" = 'RETURNED'
+         AND em.quantity::bigint = -cm.quantity::bigint
+         AND NOT EXISTS (
+           SELECT 1 FROM empties_movements er WHERE er."reversesEntryId" = em.id
+         )
+       WHERE cm."movementType" IN ('RETURNED', 'TAKEN')
+         AND (cm."movementType" <> 'TAKEN' OR cm."emptiesMovementId" IS NOT NULL)
          AND cm."reversesEntryId" IS NULL
          AND NOT EXISTS (
            SELECT 1
@@ -535,6 +582,23 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
        GROUP BY cm.id, cm."emptiesMovementId"
       HAVING COUNT(em.id) <> 1
        ORDER BY 1`,
+  },
+  {
+    name: "reversed customer inventory movements have matching reversals",
+    description:
+      "A reversed customer TAKE or RETURN that has an inventory link must also reverse that inventory movement.",
+    severity: "fatal",
+    sql: `
+      SELECT cm.id AS "customerMovementId", cm."emptiesMovementId", cr.id AS "customerReversalId"
+        FROM empties_customer_movements cm
+        JOIN empties_customer_movements cr ON cr."reversesEntryId" = cm.id
+        LEFT JOIN empties_movements em ON em.id = cm."emptiesMovementId"
+        LEFT JOIN empties_movements er ON er."reversesEntryId" = em.id
+       WHERE cm."movementType" IN ('TAKEN', 'RETURNED')
+         AND cm."reversesEntryId" IS NULL
+         AND cm."emptiesMovementId" IS NOT NULL
+         AND (er.id IS NULL OR er.quantity::bigint <> -em.quantity::bigint)
+       ORDER BY cm.id`,
   },
   {
     name: "empties customer movement: original + reversal = 0",

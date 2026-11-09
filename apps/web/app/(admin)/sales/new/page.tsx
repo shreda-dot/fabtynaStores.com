@@ -239,6 +239,7 @@ export default function NewSalePage() {
     }
     void queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.stock.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.empties.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.debtors.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });

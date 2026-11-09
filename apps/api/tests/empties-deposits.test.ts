@@ -71,6 +71,12 @@ async function seedCrates(customerId: string, quantity: number) {
   });
   expect(type.statusCode, type.body).toBe(201);
   const typeId = type.json<{ id: string }>().id;
+  const opening = await h.app.inject({
+    method: "POST",
+    url: "/empties/movements",
+    payload: { typeId, movementType: "OPENING", quantity },
+  });
+  expect(opening.statusCode, opening.body).toBe(201);
   const taken = await h.app.inject({
     method: "POST",
     url: "/empties/customer-movements",

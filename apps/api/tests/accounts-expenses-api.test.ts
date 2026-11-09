@@ -147,10 +147,19 @@ describe("expense categories and accounts API", () => {
     expect(reconcile.json<{ type: string; amountKobo: string }>().type).toBe("ADJUSTMENT");
     expect(reconcile.json<{ amountKobo: string }>().amountKobo).toBe("3000");
 
+    const beneficiaryResponse = await h.app.inject({
+      method: "POST", url: "/family-members",
+      payload: { name: newId("beneficiary"), relationship: "Family" },
+    });
+    expect(beneficiaryResponse.statusCode, beneficiaryResponse.body).toBe(201);
+    const beneficiary = beneficiaryResponse.json<{ id: string }>();
     const overspend = await h.app.inject({
       method: "POST",
-      url: `/accounts/${account.id}/movements`,
-      payload: { type: "OWNER_DRAWING", amountKobo: "53001", note: "Owner withdrawal" },
+      url: "/drawings",
+      payload: {
+        beneficiaryId: beneficiary.id, purpose: "OTHER", accountId: account.id,
+        amountKobo: "53001", note: "Owner withdrawal", occurredAt: new Date().toISOString(),
+      },
     });
     expect(overspend.statusCode).toBe(409);
     expect(overspend.json<{ error: { message: string } }>().error.message).toContain(account.name);
@@ -218,8 +227,11 @@ describe("expense categories and accounts API", () => {
 
     const draw = await h.app.inject({
       method: "POST",
-      url: `/accounts/${account.id}/movements`,
-      payload: { type: "OWNER_DRAWING", amountKobo: "53000", note: "Close account" },
+      url: "/drawings",
+      payload: {
+        beneficiaryId: beneficiary.id, purpose: "OTHER", accountId: account.id,
+        amountKobo: "53000", note: "Close account", occurredAt: new Date().toISOString(),
+      },
     });
     expect(draw.statusCode).toBe(201);
     const deactivated = await h.app.inject({

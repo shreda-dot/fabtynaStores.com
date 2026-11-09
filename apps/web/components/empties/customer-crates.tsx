@@ -372,6 +372,12 @@ export function CustomerCratesPanel({
                   ))}
                 </Select>
               </FormField>
+              {movementType === "TAKEN" && (
+                <p className="text-sm text-muted-foreground">
+                  This deducts the crates from on-hand empties and records them as owed.
+                  A deposit is optional; record it separately below if the customer pays one.
+                </p>
+              )}
               <FormField id="customer-crate-type" label="Brewery crate type">
                 <Select
                   id="customer-crate-type"

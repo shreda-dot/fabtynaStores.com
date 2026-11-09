@@ -239,6 +239,15 @@ export default function AccountingOverviewPage() {
         }
       />
 
+      <Card>
+        <CardHeader title="Owner withdrawals" description="Lifetime net movements; already reflected in account balances and not deducted again from net position." />
+        <CardBody className="space-y-2 text-sm">
+          <p>Owner drawings: <Money kobo={result.ownerWithdrawals.drawingsKobo} /></p>
+          <p>Legacy loan repayment: <Money kobo={result.ownerWithdrawals.legacyLoanKobo} /></p>
+          <p>Unclassified legacy withdrawals: <Money kobo={result.ownerWithdrawals.unclassifiedKobo} /></p>
+        </CardBody>
+      </Card>
+
       <div className="space-y-1">
         <ReportToolbar
           dataUpdatedAt={positionQuery.dataUpdatedAt}

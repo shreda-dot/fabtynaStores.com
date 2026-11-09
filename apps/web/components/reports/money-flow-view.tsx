@@ -33,6 +33,9 @@ export function hasReversedPayment(data: MoneyFlowReportDto): boolean {
  */
 export function MoneyFlowView({ data }: { data: MoneyFlowReportDto }) {
   const reversed = hasReversedPayment(data);
+  const withdrawalNet = (key: string) => data.rows.reduce((sum, row) =>
+    sum + row.categories.filter((category) => category.key === key)
+      .reduce((amount, category) => amount + BigInt(category.moneyOutKobo) - BigInt(category.moneyInKobo), 0n), 0n);
 
   return (
     <div className="space-y-5">
@@ -60,6 +63,16 @@ export function MoneyFlowView({ data }: { data: MoneyFlowReportDto }) {
           label="Closing balance"
           amount={data.totals.closingBalanceKobo}
         />
+      </div>
+
+      <div className="rounded-md border border-border p-4">
+        <h3 className="font-semibold">Owner withdrawals and legacy movements</h3>
+        <p className="mt-1 text-xs text-muted-foreground">Net movements in this period, already included in money in and money out above. Reversals appear on their posting date.</p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <FlowSummary label="Owner drawings" amount={withdrawalNet("OWNER_DRAWING").toString()} />
+          <FlowSummary label="Legacy loan repayment" amount={withdrawalNet("LEGACY_LOAN_REPAYMENT").toString()} />
+          <FlowSummary label="Unclassified legacy withdrawals" amount={withdrawalNet("UNCLASSIFIED_WITHDRAWAL").toString()} />
+        </div>
       </div>
 
       {data.transfers && (

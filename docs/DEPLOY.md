@@ -105,6 +105,20 @@ A Linux run has NOT been done: repeat it on the real host (section 8).
 6. Deploy the API first and wait for `/health` to pass. Then rebuild and deploy the web app that consumes the new API contract.
 7. Keep migrations backward compatible with the running API until it is replaced; drain old API instances only after the new version is healthy.
 
+The sale-linked empties migrations `20261105000000_empties_issue_movement_type`,
+`20261105000100_sale_empties_tracking`, and
+`20261106000000_fix_empties_inventory_link` are applied to `fabtyna_test` and
+`fabtyna_dev`; both passed schema verification and audit. Sale-linked tests
+passed, and the named regression guards passed across runs and retries after
+intermittent connection failures. The legacy unlinked TAKE reversal was tested
+at the database level in a rolled-back transaction, not through the API.
+Production still requires the rehearsal and verification above. These changes
+require a coordinated API rollout: older API instances can
+still write unlinked customer TAKEN entries and will be rejected after the new
+inventory-link trigger is installed. Preserve existing TAKEN rows without
+backfilling inventory movements, configure product packaging before expecting
+new sales to be tracked, and do not infer historical sales returns.
+
 ## 7. Backup, restore test and rollback
 
 - **Backup**: rely on Neon point-in-time restore, and create a named branch before risky changes.

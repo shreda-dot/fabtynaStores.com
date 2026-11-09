@@ -79,6 +79,7 @@ import {
   type SupplierLedgerEntry,
   type SupplierPayment,
 } from "@fabtyna/shared";
+import type { FamilyMemberDto, MockDrawing } from "./family-support.api";
 import type {
   AccountDto,
   AccountLedgerEntryDto,
@@ -140,6 +141,9 @@ export type MockStore = {
   accounts: Account[];
   accountLedgerEntries: AccountLedgerEntry[];
   accountTransfers: AccountTransfer[];
+  familyMembers: FamilyMemberDto[];
+  drawings: MockDrawing[];
+  familySupportWrites: { id: string; fingerprint: string; result: unknown }[];
 };
 
 type PersistedMockStore = {
@@ -169,6 +173,9 @@ type PersistedMockStore = {
   accounts: AccountDto[];
   accountLedgerEntries: AccountLedgerEntryDto[];
   accountTransfers: AccountTransferDto[];
+  familyMembers: FamilyMemberDto[];
+  drawings: MockDrawing[];
+  familySupportWrites: { id: string; fingerprint: string; result: unknown }[];
 };
 
 type PersistedPayload = {
@@ -385,6 +392,9 @@ function seedDemoData(): MockStore {
     ],
     accountLedgerEntries: [],
     accountTransfers: [],
+    familyMembers: [],
+    drawings: [],
+    familySupportWrites: [],
   };
 }
 
@@ -416,6 +426,9 @@ function encodeStore(store: MockStore): PersistedMockStore {
     accounts: store.accounts.map(toAccountDto),
     accountLedgerEntries: store.accountLedgerEntries.map(toAccountLedgerEntryDto),
     accountTransfers: store.accountTransfers.map(toAccountTransferDto),
+    familyMembers: store.familyMembers,
+    drawings: store.drawings,
+    familySupportWrites: store.familySupportWrites,
   };
 }
 
@@ -468,6 +481,9 @@ function decodeStore(value: unknown): MockStore {
     "accounts",
     "accountLedgerEntries",
     "accountTransfers",
+    "familyMembers",
+    "drawings",
+    "familySupportWrites",
   ] as const;
   for (const key of keys) {
     const value = raw[key];
@@ -504,6 +520,9 @@ function decodeStore(value: unknown): MockStore {
     accounts: saved.accounts.map(fromAccountDto),
     accountLedgerEntries: saved.accountLedgerEntries.map(fromAccountLedgerEntryDto),
     accountTransfers: saved.accountTransfers.map(fromAccountTransferDto),
+    familyMembers: saved.familyMembers,
+    drawings: saved.drawings,
+    familySupportWrites: saved.familySupportWrites,
   };
 }
 
@@ -713,6 +732,8 @@ function assertImmutability(previous: MockStore, candidate: MockStore): void {
   // reversal rows. The accounts themselves stay editable (rename/deactivate).
   assertRowsImmutable("Account ledger entry", previous.accountLedgerEntries, candidate.accountLedgerEntries, toAccountLedgerEntryDto);
   assertRowsImmutable("Account transfer", previous.accountTransfers, candidate.accountTransfers, toAccountTransferDto);
+  assertRowsImmutable("Drawing", previous.drawings, candidate.drawings, (drawing) => drawing);
+  assertRowsImmutable("Family support write", previous.familySupportWrites, candidate.familySupportWrites, (write) => write);
 }
 
 export function transactMockStore<T>(change: (draft: MockStore) => T): T {

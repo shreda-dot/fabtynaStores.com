@@ -2,6 +2,25 @@
 
 Database: **PostgreSQL (Neon)**. Schema source: [`apps/api/prisma/schema.prisma`](../apps/api/prisma/schema.prisma).
 
+> **Deployment status:** Family Support has not been deployed to production.
+> Migration `20261109000000_family_support` was applied to `fabtyna_test` and
+> `fabtyna_dev`; it must not be edited. On 2026-11-09, the full verification
+> suite passed and both databases passed `db:verify` and `db:audit`. Production
+> deployment and expense reclassification remain separate approval-gated steps.
+> No legacy loan payment or expense has been reclassified by this work. The two
+> owner-identified legacy repayments are display classifications only and remain
+> unchanged in the account ledger.
+
+Family Support records a `drawings` document against an original
+`OWNER_DRAWING` account-ledger entry. The beneficiary and purpose are required,
+and entries are corrected by ledger reversal rather than editing the document.
+The history report excludes currently reversed documents and groups by the
+original Lagos date. Money flow shows reversal movements on their posting date;
+the financial-position withdrawal lines are lifetime net movements already
+included in account balances, not additional deductions. The two specifically
+identified Blue Money entries are labelled as legacy loan repayments; other
+unlinked withdrawals remain unclassified. Neither label changes a ledger or loan.
+
 > **The Prisma migration history is the single source of truth for the database.**
 > There is no `prisma/sql-drafts/` folder any more. Every `CHECK`, partial unique
 > index, trigger and function that Prisma cannot express was authored by hand
@@ -462,6 +481,19 @@ its target on type and every source column (account_ledger_entries)`, which
   customer return inserts the exact customer reversal and reverses the linked
   on-hand row in the same transaction. The general on-hand reversal endpoint
   refuses a linked customer return so it cannot break this pairing.
+- `20261105000000` and `20261105000100` introduce product packaging mappings, sale-linked receipts
+  and `ISSUED_TO_CUSTOMER` on-hand movements. New customer TAKEN entries link
+  to on-hand issues; pre-existing unlinked TAKEN rows retain their historical
+  meaning. Sales and their void/amend reversals are atomic, and on-hand
+  balances must remain nonnegative. Fractional packs count their whole bottles
+  and only whole crates per product per sale. Deposits remain optional and
+  separately recorded. `20261106000000` replaces the inventory-link trigger
+  using a new function to fix an ambiguous `old` alias in the earlier function.
+  All three migrations are applied to dev and test; schema verification and
+  audit passed on both. Sale-linked integration tests passed. A rollback-only
+  test of a historical test row verified the database accepts an unlinked TAKE
+  reversal without changing on-hand inventory; the legacy reversal API path
+  was not independently tested.
 - `empties_customer_balances` has a named non-negative CHECK, direct-write and
   truncate guards, and an AFTER INSERT maintainer. The maintainer uses an
   UPDATE-first loop and inserts only when no cache row exists, retrying after a

@@ -89,6 +89,16 @@ export interface SaleWrite {
   customerLedgerEntry: CustomerLedgerEntry | null;
   /** Money received, as a list: 0 or 1 entries today. */
   payments: ReceivedPayment[];
+  emptiesMovements: Array<{
+    id: string;
+    typeId: string;
+    movementType: "RECEIVED";
+    quantity: number;
+    note: string | null;
+    occurredAt: Date;
+    createdById: string;
+    saleId: string;
+  }>;
   /** Product average cost at sale time, keyed by product id. */
   costByProductId: ReadonlyMap<string, bigint>;
   actorId: string;
@@ -98,7 +108,7 @@ export interface SaleWrite {
 /**
  * Writes the sale in an order that satisfies every foreign key and trigger:
  * sale, lines, stock movements (sorted, so balance rows lock in a fixed order),
- * customer ledger entry, payments, account entries, audit row.
+ * customer ledger entry, payments, account entries, empties receipts, audit row.
  * Returns the stored sale row.
  */
 export async function insertSale(ctx: TxContext, write: SaleWrite) {
@@ -201,6 +211,13 @@ export async function insertSale(ctx: TxContext, write: SaleWrite) {
     });
   }
 
+  if (write.emptiesMovements.length > 0) {
+    counted(ctx);
+    await tx.emptiesMovement.createMany({
+      data: write.emptiesMovements,
+    });
+  }
+
   counted(ctx);
   await tx.auditLog.create({
     data: {
@@ -245,6 +262,17 @@ export interface SaleHistory {
   movements: StockMovement[];
   customerLedger: CustomerLedgerEntry[];
   accountLedger: AccountLedgerEntry[];
+  emptiesMovements: Array<{
+    id: string;
+    typeId: string;
+    movementType: "OPENING" | "RECEIVED" | "RETURNED_TO_OWNER" | "ISSUED_TO_CUSTOMER" | "ADJUSTMENT";
+    quantity: number;
+    note: string | null;
+    saleId: string | null;
+    reversesEntryId: string | null;
+    occurredAt: Date;
+    createdById: string;
+  }>;
 }
 
 /** Every row the domain's voidSale looks at for ONE sale, including rows that already reverse others. */
@@ -265,7 +293,12 @@ export async function loadSaleHistory(ctx: TxContext, parts: SaleParts, saleId: 
     counted(ctx);
     accountLedger = await ctx.tx.accountLedgerEntry.findMany({ where: { salePaymentId: { in: paymentIds } } });
   }
-  return { movements, customerLedger, accountLedger };
+  counted(ctx);
+  const emptiesMovements = await ctx.tx.emptiesMovement.findMany({
+    where: { saleId },
+    orderBy: [{ typeId: "asc" }, { id: "asc" }],
+  });
+  return { movements, customerLedger, accountLedger, emptiesMovements };
 }
 
 /** A payment received later: the payment, the customer's PAYMENT entry, the account entry, and the sale's new paidKobo. */
@@ -329,6 +362,17 @@ export interface VoidWrite {
   reversalMovements: StockMovement[];
   reversalCustomerLedgerEntry: CustomerLedgerEntry | null;
   reversalAccountLedgerEntries: AccountLedgerEntry[];
+  reversalEmptiesMovements: Array<{
+    id: string;
+    typeId: string;
+    movementType: "RECEIVED";
+    quantity: number;
+    note: string | null;
+    occurredAt: Date;
+    createdById: string;
+    saleId: string;
+    reversesEntryId: string;
+  }>;
 }
 
 /**
@@ -394,6 +438,13 @@ export async function insertVoid(ctx: TxContext, write: VoidWrite) {
         note: entry.note,
         occurredAt: entry.occurredAt,
       })),
+    });
+  }
+
+  if (write.reversalEmptiesMovements.length > 0) {
+    counted(ctx);
+    await tx.emptiesMovement.createMany({
+      data: write.reversalEmptiesMovements,
     });
   }
 

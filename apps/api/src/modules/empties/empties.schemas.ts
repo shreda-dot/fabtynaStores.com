@@ -101,6 +101,30 @@ export type ProductOwnerListQuery = z.infer<typeof productOwnerListQuerySchema>;
 export const assignProductOwnerSchema = z.object({ ownerId: idSchema.nullable() }).strict();
 export type AssignProductOwnerBody = z.infer<typeof assignProductOwnerSchema>;
 
+const productPackagingRowSchema = z
+  .object({
+    typeId: idSchema,
+    kind: emptiesKindSchema,
+    retailQuantityPerUnit: z.number().int().safe().min(0).max(2_147_483_647),
+    wholesaleQuantityPerPack: z.number().int().safe().min(0).max(2_147_483_647),
+  })
+  .strict()
+  .refine(
+    (row) => row.retailQuantityPerUnit > 0 || row.wholesaleQuantityPerPack > 0,
+    "At least one sale conversion must be greater than zero.",
+  );
+
+export const assignProductPackagingSchema = z
+  .object({
+    mappings: z.array(productPackagingRowSchema).max(2),
+  })
+  .strict()
+  .refine(
+    (body) => new Set(body.mappings.map((row) => row.kind)).size === body.mappings.length,
+    "A product can map to at most one empties type of each kind.",
+  );
+export type AssignProductPackagingBody = z.infer<typeof assignProductPackagingSchema>;
+
 // ---------- movements ----------
 const movementQuantitySchema = z
   .number()

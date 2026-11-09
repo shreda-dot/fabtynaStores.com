@@ -7,7 +7,7 @@
  * are created empty, and new fields are back-filled only when absent.
  */
 
-export const MOCK_STORE_CURRENT_VERSION = 7;
+export const MOCK_STORE_CURRENT_VERSION = 8;
 export const ACCOUNT_MIGRATION_RECONCILIATION_NOTICE_ID =
   "mock-migration-v7-account-reconciliation";
 
@@ -61,6 +61,9 @@ const ALL_COLLECTIONS = [
   "accounts",
   "accountLedgerEntries",
   "accountTransfers",
+  "familyMembers",
+  "drawings",
+  "familySupportWrites",
 ] as const;
 
 function asArray(value: unknown): unknown[] {

@@ -18,6 +18,9 @@ export interface AccountMigrationNotice {
   title: string;
   message: string;
 }
+export type AccountingPosition = FinancialPositionResult & {
+  ownerWithdrawals: { drawingsKobo: bigint; legacyLoanKobo: bigint; unclassifiedKobo: bigint };
+};
 
 export type AccountRecordDto = AccountDto & { balanceKobo?: string; isHolding?: boolean };
 
@@ -99,7 +102,7 @@ export interface AccountingApi {
    * runs the pure `computeFinancialPosition` domain function. Amounts are
    * bigint kobo (never floats).
    */
-  position(options?: AccountingPositionOptionsDto): Promise<FinancialPositionResult>;
+  position(options?: AccountingPositionOptionsDto): Promise<AccountingPosition>;
 
   /** Account cash flow and sales cash-collection context for Lagos dates. */
   moneyFlow(

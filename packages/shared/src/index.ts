@@ -9,6 +9,7 @@ export * from "./domain/invariants.ts";
 export * from "./domain/operations.ts";
 export * from "./domain/accounting.ts";
 export * from "./domain/loans.ts";
+export * from "./domain/family-support.ts";
 export * from "./lagos-time.ts";
 export * from "./mock-store-migration.ts";
 export * from "./dtos.ts";

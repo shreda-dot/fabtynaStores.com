@@ -4,6 +4,15 @@ Briefing for a new AI session working on this repo with no other history.
 Everything below was reviewed against the repository on 2026-10-21. Docs only:
 this file does not change code, migrations or `.env`.
 
+> Family Support is implemented but has not been deployed to production.
+> Migration `20261109000000_family_support` has been applied to `fabtyna_test`
+> and `fabtyna_dev`; never edit it. On 2026-11-09, `pnpm verify` passed and both
+> databases passed `db:verify` and `db:audit`. Production deployment and expense
+> reclassification remain separate approval-gated steps. Never treat unlinked
+> `OWNER_DRAWING` entries as family drawings. The two entries identified by the
+> owner are displayed as legacy loan repayments only; this does not create or
+> reconcile a loan payment.
+
 Repository root: `c:\Users\Shreda\fabtyna-stores` (Windows, PowerShell).
 pnpm workspace (`pnpm-workspace.yaml`: `apps/*`, `packages/*`), `packageManager: pnpm@10.15.1`.
 
@@ -39,7 +48,7 @@ phone on slow networks, so the web app is mobile-first with a network status bar
   products, customers, suppliers, debtors/payables, stock, loans, transfers,
   adjustments, expense categories, expenses, accounts, and empties (see §6).
   - Schema: `apps/api/prisma/schema.prisma`; migrations:
-    `apps/api/prisma/migrations/` (**39** migrations in the current tree); generated client output:
+    `apps/api/prisma/migrations/` (**44** folders); generated client output:
     `apps/api/generated/prisma/` (git-ignored).
   - `src/db/`: `expected-schema.ts`, `verify.ts`, `audit.ts`.
   - `src/lib/`: `env.ts`, `prisma.ts` (`createPrismaClient`), `password.ts`
@@ -72,7 +81,7 @@ Root (`package.json`):
 
 API (`pnpm --filter @fabtyna/api …`):
 - `db:verify` → `tsx src/scripts/db-verify.ts`. Defaults to `DIRECT_URL`; accepts
-  `-- --url TEST_DIRECT_URL` (an env-var name, or a literal URL).
+  `--url TEST_DIRECT_URL` (an env-var name, or a literal URL).
 - `db:audit` → `tsx src/scripts/db-audit.ts` (same `--url` handling).
 - `db:whoami`, `db:migrate:deploy` (needs `--confirm-db <name>`).
 - `db:seed:admin` → `tsx src/scripts/seed-admin.ts`, needs `-- --confirm-db <name>`; flag `--additional`.
@@ -193,7 +202,7 @@ must print "-- This is an empty migration." and exit 0.
   Guinness Nigeria; deactivate, never delete) and typed by an `empties_type`
   (BOTTLE|CRATE, unique per owner+kind+label, optional display-only
   `unitValueKobo`). A **count is a plain integer**, not money. `empties_movements`
-  is immutable and append-only (OPENING / RECEIVED / RETURNED_TO_OWNER /
+  is immutable and append-only (OPENING / RECEIVED / RETURNED_TO_OWNER / ISSUED_TO_CUSTOMER /
   ADJUSTMENT; quantity signed and never zero; an ADJUSTMENT needs a note), and
   `empties_balances` is DERIVED — an AFTER INSERT trigger is its only writer and
   `trg_empties_balances_guard` rejects anything else. Corrections are reversal
@@ -202,10 +211,9 @@ must print "-- This is an empty migration." and exit 0.
   one OPENING per type **for the life of the type**: the original row is
   immutable, so reversing it never frees the slot — later corrections go through
   an ADJUSTMENT, exactly like `ux_account_ledger_opening_balance_active`.
-  Customer-owned empties are added separately by
-  `20261101000000_empties_customer_movements`; they do not change sales,
-  purchases, profit, cash, or financial-position code. Recording crates on
-  sale/purchase screens and deposits in cash reports remain out of scope.
+  Customer-owned empties were added by
+  `20261101000000_empties_customer_movements`. Purchases, profit, cash, and
+  financial-position reporting do not use the empties counts.
 
 Empties phase 2 adds `empties_product_owners`, a separate mutable mapping from
 product to brewery; every real assignment change is audit-logged. It does not
@@ -219,11 +227,32 @@ Counts stay integer-only, and empties display values remain outside money and
 financial reports. Migration `20261031000000_empties_product_owners` is applied
 to both dev and test.
 
+The sale-linked empties changes in migrations
+`20261105000000_empties_issue_movement_type` and
+`20261105000100_sale_empties_tracking`, plus the corrective trigger migration
+`20261106000000_fix_empties_inventory_link`, are applied to `fabtyna_test`
+and `fabtyna_dev`. Both databases passed schema verification and data audit.
+The eight sale-linked integration tests passed together; the named regression
+guards passed across runs and individual retries after intermittent database
+errors. A rollback-only test against a real pre-migration test row verified
+the database permits a legacy unlinked TAKE reversal without adding on-hand
+inventory; the legacy reversal API path was not independently exercised.
+Production still requires the coordinated rehearsal and rollout in DEPLOY.md.
+Product settings select a brewery's bottle and crate types and
+their conversion rates. Mapped sales record assumed returned containers without
+changing the Sales form; historical sales are not backfilled. For a 12-bottle
+pack, 0.5 and 0.25 packs count as 6 and 3 bottles respectively; only whole
+crates per product in the sale are counted. A sale void or amendment reverses
+its linked movements, subject to sufficient on-hand stock. A customer TAKE
+deducts on-hand empties and adds customer debt; a deposit remains a separate,
+optional action. Historical unlinked TAKE rows predate that deduction and must
+not be retroactively deducted or credited.
+
 ## 6. Current status (verified)
 
-- Migration folders: **39** (listed in `expected-schema.ts` →
-  `EXPECTED_MIGRATIONS`). The customer-owned empties migration is the newest
-  source migration; it must be applied and verified separately before rollout.
+- Migration folders: **43** (listed in `expected-schema.ts` →
+  `EXPECTED_MIGRATIONS`); the three sale-linked empties migrations are applied
+  to dev and test, and both databases passed verification and audit.
   The three `202610240...` migrations are empties tracking phase 1 (counts only):
   `20261024000000_empties` adds `empties_owners`, `empties_types`, the
   append-only `empties_movements`, the derived `empties_balances`, three couples

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import Link from "next/link";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Banknote, Plus, RefreshCw } from "lucide-react";
 import {
@@ -40,7 +41,7 @@ import { isMockApiMode } from "@/lib/api";
 
 type ManualType = Extract<
   AccountEntryType,
-  "OWNER_CAPITAL" | "OTHER_INCOME" | "OWNER_DRAWING" | "BANK_OR_POS_CHARGE"
+  "OWNER_CAPITAL" | "OTHER_INCOME" | "BANK_OR_POS_CHARGE"
 >;
 
 type AccountOperation =
@@ -89,7 +90,6 @@ const ENTRY_LABELS: Record<AccountEntryType, string> = {
 const MANUAL_TYPES: { value: ManualType; label: string }[] = [
   { value: "OWNER_CAPITAL", label: "Owner puts money in" },
   { value: "OTHER_INCOME", label: "Other income" },
-  { value: "OWNER_DRAWING", label: "Owner takes money out" },
   { value: "BANK_OR_POS_CHARGE", label: "Bank / POS charge" },
 ];
 
@@ -1122,8 +1122,12 @@ export default function AccountsPage() {
                   </Card>
 
                   <Card>
-                    <CardHeader title="Other money movement" description="Record owner capital, drawings, other income or bank/POS charges." />
+                    <CardHeader title="Other money movement" description="Record owner capital, other income or bank/POS charges." />
                     <CardBody>
+                      <p className="mb-4 text-sm">
+                        Owner taking money out?{" "}
+                        <Link className="underline" href="/family-support">Record it in Family Support</Link>.
+                      </p>
                       <form onSubmit={submitManual} className="space-y-3">
                         <FormField id="manual-type" label="Movement">
                           <Select

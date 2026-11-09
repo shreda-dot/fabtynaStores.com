@@ -71,7 +71,6 @@ afterAll(async () => {
 describe("account-ledger source-type trigger", () => {
   it.each([
     ["OWNER_CAPITAL", "100"],
-    ["OWNER_DRAWING", "-100"],
     ["OTHER_INCOME", "100"],
     ["BANK_OR_POS_CHARGE", "-100"],
   ])("%s accepts a source-less entry and rejects a stray source", async (type, amount) => {
@@ -85,6 +84,47 @@ describe("account-ledger source-type trigger", () => {
         code: "P0001",
       });
       await db.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+    });
+  });
+
+  it("requires a drawing document at commit while keeping the ledger entry source-less", async () => {
+    await inRollback(async (db) => {
+      const accountId = await insertAccount(db);
+      const entryId = nextId("drawing_entry");
+      await db.query(`SAVEPOINT missing_document`);
+      await db.query(
+        `INSERT INTO account_ledger_entries (id, "accountId", type, "amountKobo", note)
+         VALUES ($1, $2, 'OWNER_DRAWING', -100, 'Drawing test')`,
+        [entryId, accountId],
+      );
+      await expect(db.query(`SET CONSTRAINTS trg_account_drawing_requires_document IMMEDIATE`))
+        .rejects.toMatchObject({ code: "P0001" });
+      await db.query(`ROLLBACK TO SAVEPOINT missing_document`);
+
+      const actorId = nextId("drawing_actor");
+      const memberId = nextId("drawing_member");
+      await db.query(
+        `INSERT INTO admin_users (id, email, "passwordHash", "updatedAt")
+         VALUES ($1, $2, 'test-only', now())`,
+        [actorId, `${actorId}@example.test`],
+      );
+      await db.query(
+        `INSERT INTO family_members (id, name, "normalizedKey", relationship, "updatedAt")
+         VALUES ($1, $2, $3, 'Family', now())`,
+        [memberId, memberId, memberId.toLowerCase()],
+      );
+      await db.query(
+        `INSERT INTO account_ledger_entries (id, "accountId", type, "amountKobo", note)
+         VALUES ($1, $2, 'OWNER_DRAWING', -100, 'Drawing test')`,
+        [entryId, accountId],
+      );
+      await db.query(
+        `INSERT INTO drawings (id, "entryId", "beneficiaryId", purpose, "createdById")
+         VALUES ($1, $2, $3, 'OTHER', $4)`,
+        [nextId("drawing"), entryId, memberId, actorId],
+      );
+      await expect(db.query(`SET CONSTRAINTS trg_account_drawing_requires_document IMMEDIATE`))
+        .resolves.toBeDefined();
     });
   });
 

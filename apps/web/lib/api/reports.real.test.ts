@@ -175,6 +175,7 @@ describe("financial position mapping", () => {
   const fixture = {
     asOf: "now",
     selectedScenario: "EXPECTED",
+    ownerWithdrawals: { drawingsKobo: "1000", legacyLoanKobo: "2000", unclassifiedKobo: "3000" },
     selected: scenario("EXPECTED"),
     scenarios: {
       EXPECTED: scenario("EXPECTED"),

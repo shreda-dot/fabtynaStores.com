@@ -1,10 +1,9 @@
 import type {
   AccountingPositionOptionsDto,
-  FinancialPositionResult,
   FinancialPositionScenario,
   FinancialPositionScenarioResult,
 } from "@fabtyna/shared";
-import type { MoneyFlowReportDto } from "./accounting.api";
+import type { AccountingPosition, MoneyFlowReportDto } from "./accounting.api";
 import { requestJson } from "./client";
 import type {
   DashboardDto,
@@ -121,7 +120,7 @@ function toScenarioResult(
 /** Kobo strings become bigint only for display arithmetic; the server did the maths. */
 export function mapFinancialPosition(
   response: FinancialPositionResponse,
-): FinancialPositionResult {
+): AccountingPosition {
   return {
     scenarios: {
       EXPECTED: toScenarioResult(response.scenarios.EXPECTED),
@@ -140,6 +139,11 @@ export function mapFinancialPosition(
       ...obligation,
       balanceKobo: BigInt(obligation.balanceKobo),
     })),
+    ownerWithdrawals: {
+      drawingsKobo: BigInt(response.ownerWithdrawals.drawingsKobo),
+      legacyLoanKobo: BigInt(response.ownerWithdrawals.legacyLoanKobo),
+      unclassifiedKobo: BigInt(response.ownerWithdrawals.unclassifiedKobo),
+    },
   };
 }
 
@@ -159,7 +163,7 @@ export async function fetchMoneyFlow(
 export async function fetchFinancialPosition(
   options?: AccountingPositionOptionsDto,
   scenario?: FinancialPositionScenario,
-): Promise<FinancialPositionResult> {
+): Promise<AccountingPosition> {
   const data = await requestJson<unknown>(
     reportPaths.financialPosition(options, scenario),
   );

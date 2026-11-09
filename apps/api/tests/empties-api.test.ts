@@ -653,7 +653,7 @@ describe("empties brewery product ownership", () => {
       productId: product.id,
       ownerId: firstOwner.id,
     });
-    expect(h.txLog.at(-1)?.queries).toBe(9);
+    expect(h.txLog.at(-1)?.queries).toBe(10);
 
     const replay = await setProductOwner(product.id, firstOwner.id, key);
     expect(replay.statusCode, replay.body).toBe(200);

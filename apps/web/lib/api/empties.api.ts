@@ -4,7 +4,10 @@ export type EmptiesMovementType =
   | "OPENING"
   | "RECEIVED"
   | "RETURNED_TO_OWNER"
+  | "ISSUED_TO_CUSTOMER"
   | "ADJUSTMENT";
+
+export type CreateEmptiesMovementType = Exclude<EmptiesMovementType, "ISSUED_TO_CUSTOMER">;
 
 export type EmptiesCustomerMovementType =
   | "TAKEN"
@@ -42,6 +45,8 @@ export type EmptiesMovementDto = {
   note: string | null;
   occurredAt: string;
   createdById: string;
+  /** Sale whose containers were automatically recorded as returned. */
+  saleId: string | null;
   /** Set when this row reverses another movement; such rows cannot be reversed. */
   reversesEntryId: string | null;
   /** Set when this RECEIVED row is paired with a customer return; reverse from customer history. */
@@ -126,6 +131,22 @@ export type ProductOwnerDto = {
   ownerId: string | null;
   ownerName: string | null;
   ownerIsActive: boolean | null;
+  packaging: Array<{
+    typeId: string;
+    kind: EmptiesKind;
+    label: string;
+    retailQuantityPerUnit: number;
+    wholesaleQuantityPerPack: number;
+  }>;
+};
+
+export type EmptiesProductPackagingInput = {
+  mappings: Array<{
+    typeId: string;
+    kind: EmptiesKind;
+    retailQuantityPerUnit: number;
+    wholesaleQuantityPerPack: number;
+  }>;
 };
 
 export type ProductOwnerListOptions = {
@@ -336,7 +357,7 @@ export type PatchEmptiesTypeInput = {
 
 export type CreateEmptiesMovementInput = {
   typeId: string;
-  movementType: EmptiesMovementType;
+  movementType: CreateEmptiesMovementType;
   /**
    * A positive whole number for OPENING / RECEIVED / RETURNED_TO_OWNER (the
    * server applies the sign of a return). For ADJUSTMENT the value is signed
@@ -365,6 +386,11 @@ export interface EmptiesApi {
     ownerId: string | null,
     idempotencyKey?: string,
   ): Promise<ProductOwnerDto>;
+  assignProductPackaging(
+    productId: string,
+    input: EmptiesProductPackagingInput,
+    idempotencyKey?: string,
+  ): Promise<unknown>;
 
   listOwners(options?: EmptiesOwnerListOptions): Promise<EmptiesOwnerDto[]>;
   createOwner(input: CreateEmptiesOwnerInput, idempotencyKey?: string): Promise<EmptiesOwnerDto>;

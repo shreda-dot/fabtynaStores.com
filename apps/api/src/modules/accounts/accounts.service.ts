@@ -11,6 +11,7 @@ import {
   buildReconcileAdjustment,
   formatNaira,
   getLagosBusinessDate,
+  ownerWithdrawalCategory,
   type Account,
   type AccountEntryType,
   type AccountLedgerEntry,
@@ -342,6 +343,9 @@ export function createAccountsService(options: AccountsServiceOptions) {
     },
 
     async movement(accountId: string, body: MovementBody, actor: Actor, key: string | null) {
+      if (body.type === "OWNER_DRAWING") {
+        throw businessRuleError("Record owner drawings from Family Support with a beneficiary and purpose.");
+      }
       const route = `POST /accounts/${accountId}/movements`;
       return write(route, { accountId }, body, actor, key, 201, async (ctx) => {
         const account = await requireLockedAccount(ctx, accountId);
@@ -496,6 +500,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
         reversesEntryId: string | null;
         reversedByEntryId: string | null;
         sourceDescription: string | null;
+        drawingEntryId: string | null;
         runningBalanceKobo: string | null;
         openingBalanceKobo: string;
         closingBalanceKobo: string;
@@ -509,6 +514,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
           SELECT ale.id, ale.type::text AS type, ale."amountKobo"::text AS "amountKobo",
                  ale."occurredAt", ale.note, ale."reversesEntryId",
                  reversal.id AS "reversedByEntryId",
+                 drawing."entryId" AS "drawingEntryId",
                  CASE
                    WHEN ale."expenseId" IS NOT NULL THEN 'Expense: ' || e.description
                    WHEN ale."purchaseId" IS NOT NULL THEN 'Purchase: ' || COALESCE(p.reference, ale."purchaseId")
@@ -522,6 +528,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
                  SUM(ale."amountKobo") OVER (ORDER BY ale."occurredAt", ale.id)::text AS "rangeRunningKobo"
             FROM account_ledger_entries ale
             LEFT JOIN account_ledger_entries reversal ON reversal."reversesEntryId" = ale.id
+            LEFT JOIN drawings drawing ON drawing."entryId" = COALESCE(ale."reversesEntryId", ale.id)
             LEFT JOIN expenses e ON e.id = ale."expenseId"
             LEFT JOIN purchases p ON p.id = ale."purchaseId"
            WHERE ale."accountId" = ${accountId}
@@ -539,7 +546,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
           ORDER BY r."occurredAt", r.id
           LIMIT ${query.limit + 1}
         )
-        SELECT page.id, page.type, page."amountKobo", page."occurredAt", page.note,
+        SELECT page.id, page.type, page."amountKobo", page."occurredAt", page.note, page."drawingEntryId",
                page."reversesEntryId", page."reversedByEntryId", page."sourceDescription",
                (totals.opening::bigint + page."rangeRunningKobo"::bigint)::text AS "runningBalanceKobo",
                totals.opening AS "openingBalanceKobo", totals.closing AS "closingBalanceKobo"
@@ -566,7 +573,16 @@ export function createAccountsService(options: AccountsServiceOptions) {
           amountKobo: entry.amountKobo,
           occurredAt: entry.occurredAt?.toISOString() ?? null,
           note: entry.note,
-          sourceDescription: entry.sourceDescription,
+          sourceDescription: entry.type === "OWNER_DRAWING" && entry.id !== null
+            ? ({
+                OWNER_DRAWING: "Owner drawing",
+                LEGACY_LOAN_REPAYMENT: "Legacy loan repayment",
+                UNCLASSIFIED_WITHDRAWAL: "Unclassified legacy withdrawal",
+              })[ownerWithdrawalCategory(
+                { id: entry.id, reversesEntryId: entry.reversesEntryId },
+                new Set(entry.drawingEntryId === null ? [] : [entry.drawingEntryId]),
+              )]
+            : entry.sourceDescription,
           isReversal: entry.reversesEntryId !== null,
           reversesEntryId: entry.reversesEntryId,
           reversedByEntryId: entry.reversedByEntryId,

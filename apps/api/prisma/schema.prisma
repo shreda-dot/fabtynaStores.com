@@ -135,6 +135,17 @@ enum AccountType {
   POS
 }
 
+enum DrawingPurpose {
+  SCHOOL_FEES
+  SCHOOL_NEEDS
+  MEDICAL
+  TRANSPORT
+  FEEDING
+  HOUSEHOLD
+  PERSONAL
+  OTHER
+}
+
 /// Values mirror `packages/shared/src/domain/types.ts`. The four values added
 /// by migration `20261019…_account_entry_type_values` are appended at the end
 /// because Postgres `ALTER TYPE … ADD VALUE` can only append: declaring them
@@ -189,13 +200,14 @@ enum EmptiesKind {
 }
 
 /// `OPENING` is the starting count (at most one live per type);
-/// `RECEIVED` is empties coming back from a customer; `RETURNED_TO_OWNER` is
-/// empties going back to the brewery; `ADJUSTMENT` is the manual correction and
-/// is the only type that requires a note.
+/// `RECEIVED` records containers returned by a sale or customer; `ISSUED_TO_CUSTOMER`
+/// removes empties taken by a customer; `RETURNED_TO_OWNER` sends empties back
+/// to the brewery. `ADJUSTMENT` is the manual correction.
 enum EmptiesMovementType {
   OPENING
   RECEIVED
   RETURNED_TO_OWNER
+  ISSUED_TO_CUSTOMER
   ADJUSTMENT
 }
 
@@ -241,6 +253,7 @@ model AdminUser {
   emptiesMovements         EmptiesMovement[]
   emptiesCustomerMovements EmptiesCustomerMovement[]
   emptiesDepositMovements  EmptiesDepositMovement[]
+  drawings                 Drawing[]
 
   @@map("admin_users")
 }
@@ -685,6 +698,7 @@ model Sale {
   lines                 SaleLine[]
   payments              SalePayment[]
   customerLedgerEntries CustomerLedgerEntry[]
+  emptiesMovements      EmptiesMovement[]
 
   // Hand-written SQL, not Prisma constraints:
   //   * `channel <> 'BOTH'` and `paidKobo <= totalKobo` (migration
@@ -848,6 +862,7 @@ model AccountLedgerEntry {
   reversesEntry     AccountLedgerEntry?      @relation("AccountLedgerReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
   reversedBy        AccountLedgerEntry[]     @relation("AccountLedgerReversals")
   depositMovements  EmptiesDepositMovement[]
+  drawing           Drawing?
 
   @@index([accountId, occurredAt])
   @@index([salePaymentId])
@@ -947,12 +962,46 @@ model Expense {
   category        ExpenseCategory      @relation(fields: [categoryId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_expenses_category")
   ledgerEntries   AccountLedgerEntry[]
   loanRepayment   LoanRepayment?       @relation(fields: [loanRepaymentId], references: [id], onDelete: Restrict, map: "fk_expenses_loan_repayment")
+  drawing         Drawing?
 
   // `amountKobo > 0` is a hand-written CHECK constraint.
   @@index([expenseDate])
   @@index([channel, expenseDate])
   @@index([categoryId, expenseDate], map: "expenses_categoryId_expenseDate_idx")
   @@map("expenses")
+}
+
+/// Managed drawing beneficiaries; records are retained when deactivated.
+model FamilyMember {
+  id            String    @id @default(cuid())
+  name          String
+  normalizedKey String    @unique
+  relationship  String
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  drawings      Drawing[]
+
+  @@map("family_members")
+}
+
+/// Classification of one original OWNER_DRAWING entry. The ledger owns the
+/// amount, account, date and note; reversals continue to use the ledger.
+model Drawing {
+  id             String             @id @default(cuid())
+  entryId        String             @unique
+  beneficiaryId  String
+  purpose        DrawingPurpose
+  sourceExpenseId String?           @unique
+  createdById    String
+  createdAt      DateTime           @default(now())
+  entry          AccountLedgerEntry @relation(fields: [entryId], references: [id], onDelete: Restrict)
+  beneficiary    FamilyMember       @relation(fields: [beneficiaryId], references: [id], onDelete: Restrict)
+  sourceExpense  Expense?           @relation(fields: [sourceExpenseId], references: [id], onDelete: Restrict)
+  createdBy      AdminUser          @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([beneficiaryId, purpose])
+  @@map("drawings")
 }
 
 model ExpenseCategory {
@@ -1082,9 +1131,29 @@ model EmptiesProductOwner {
   updatedAt DateTime     @updatedAt
   product   Product      @relation(fields: [productId], references: [id], onDelete: Restrict, map: "fk_empties_product_owners_product")
   owner     EmptiesOwner @relation(fields: [ownerId], references: [id], onDelete: Restrict, map: "fk_empties_product_owners_owner")
+  packaging EmptiesProductPackaging[]
 
+  @@unique([productId, ownerId], map: "empties_product_owners_product_owner_key")
   @@index([ownerId], map: "empties_product_owners_ownerId_idx")
   @@map("empties_product_owners")
+}
+
+/// Product-specific container conversion for silent sale tracking.
+model EmptiesProductPackaging {
+  productId               String
+  ownerId                 String
+  typeId                  String
+  kind                    EmptiesKind
+  retailQuantityPerUnit   Int
+  wholesaleQuantityPerPack Int
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+  productOwner            EmptiesProductOwner @relation(fields: [productId, ownerId], references: [productId, ownerId], onDelete: Cascade, onUpdate: Cascade, map: "fk_empties_product_packaging_product_owner")
+  type                    EmptiesType    @relation(fields: [ownerId, typeId, kind], references: [ownerId, id, kind], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_product_packaging_type")
+
+  @@id([productId, kind], map: "empties_product_packaging_pkey")
+  @@index([typeId, productId], map: "empties_product_packaging_type_idx")
+  @@map("empties_product_packaging")
 }
 
 /// One kind of empties for an owner (a crate, a bottle size, ...).
@@ -1107,14 +1176,16 @@ model EmptiesType {
   balance           EmptiesBalance?
   customerMovements EmptiesCustomerMovement[]
   customerBalances  EmptiesCustomerBalance[]
+  productPackaging EmptiesProductPackaging[]
 
+  @@unique([ownerId, id, kind], map: "empties_types_owner_id_kind_key")
   // `char_length(btrim(label)) BETWEEN 1 AND 40` and
   // `"unitValueKobo" IS NULL OR "unitValueKobo" >= 0` are hand-written CHECKs.
   @@map("empties_types")
 }
 
 /// One immutable empties movement. `quantity` is signed (positive = empties
-/// held, negative = empties gone back to the owner) and is never zero; a
+/// held, negative = empties gone back to the owner or issued to a customer) and is never zero; a
 /// correction is a new row whose `reversesEntryId` points at the original and
 /// whose quantity is the exact negation (hand-written triggers
 /// `trg_empties_movement_immutable`, `trg_empties_movement_reversal_target`,
@@ -1129,9 +1200,11 @@ model EmptiesMovement {
   /// `occurredAt` in this schema.
   occurredAt      DateTime                  @default(now())
   createdById     String
+  saleId          String?
   reversesEntryId String?
   createdAt       DateTime                  @default(now())
   type            EmptiesType               @relation(fields: [typeId], references: [id], onDelete: Restrict, map: "fk_empties_movements_type")
+  sale            Sale?                     @relation(fields: [saleId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_movements_sale")
   createdBy       AdminUser                 @relation(fields: [createdById], references: [id], onDelete: Restrict, map: "fk_empties_movements_created_by")
   reversesEntry   EmptiesMovement?          @relation("EmptiesMovementReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
   reversedBy      EmptiesMovement[]         @relation("EmptiesMovementReversals")
@@ -1143,6 +1216,7 @@ model EmptiesMovement {
   @@index([typeId, occurredAt])
   @@index([occurredAt])
   @@index([reversesEntryId])
+  @@index([saleId, typeId], map: "empties_movements_sale_type_idx")
   @@map("empties_movements")
 }
 
@@ -1164,8 +1238,8 @@ model EmptiesBalance {
   @@map("empties_balances")
 }
 
-/// Customer-side crate ledger. A RETURNED row links to the matching
-/// `RECEIVED` row in `empties_movements`; both are inserted atomically.
+/// Customer-side crate ledger. A TAKEN or RETURNED row links to the matching
+/// inventory movement; both are inserted atomically.
 model EmptiesCustomerMovement {
   id                String                      @id(map: "empties_customer_movements_pkey") @default(cuid())
   customerId        String

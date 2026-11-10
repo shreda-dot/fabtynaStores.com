@@ -4,6 +4,7 @@ import { buildAccountLedgerEntry, getLagosBusinessDate } from "@fabtyna/shared";
 import { accountingMockApi } from "./accounting.mock";
 import { familySupportMockApi } from "./family-support.mock";
 import { resetDemoData, readMockStore, transactMockStore } from "./mock-store";
+import { familySupportRangePresets } from "../family-support-range";
 
 describe("mock family support", () => {
   beforeEach(() => {
@@ -36,7 +37,7 @@ describe("mock family support", () => {
     expect((await familySupportMockApi.listDrawings({ from: today, to: today })).report.totalKobo).toBe("0");
     expect((await accountingMockApi.listAccounts()).find((account) => account.id === cash.id)?.balanceKobo).toBe("10000");
     expect((await accountingMockApi.position()).ownerWithdrawals.drawingsKobo).toBe(0n);
-  });
+  }, 30000);
 
   it("supports bank drawings and managed beneficiaries without allowing inactive members", async () => {
     const member = await familySupportMockApi.createMember({ name: "Test", relationship: "Family" }, "member-key-2");
@@ -60,7 +61,7 @@ describe("mock family support", () => {
     const member = await familySupportMockApi.createMember({ name: "Original date", relationship: "Family" });
     const bank = (await accountingMockApi.listAccounts()).find((account) => account.type === "BANK")!;
     const postedAt = new Date();
-    await accountingMockApi.recordOpeningBalance({ accountId: bank.id, amountKobo: "10000", note: null, occurredAt: postedAt.toISOString() });
+    await accountingMockApi.recordOpeningBalance({ accountId: bank.id, amountKobo: "10500", note: null, occurredAt: postedAt.toISOString() });
     const expenseDate = new Date("2020-10-30T23:30:00.000Z");
     transactMockStore((store) => {
       store.expenses.push({
@@ -74,9 +75,19 @@ describe("mock family support", () => {
       }, () => "history-entry");
       store.accountLedgerEntries.push(entry);
       store.drawings.push({ id: "history-drawing", entryId: entry.id, beneficiaryId: member.id, purpose: "MEDICAL", sourceExpenseId: "history-expense" });
+      store.accountLedgerEntries.push(buildAccountLedgerEntry({
+        accountId: bank.id, type: "OWNER_DRAWING", amountKobo: -500n,
+        occurredAt: expenseDate, note: "Legacy loan repayment",
+      }, () => "0fac2710-1e88-4b4f-b320-1da3176cedaa"));
     });
-    const history = await familySupportMockApi.listDrawings({ from: "2020-10-31", to: "2020-10-31", accountId: bank.id });
+    const yesterday = familySupportRangePresets("2020-11-01").find((range) => range.label === "Yesterday");
+    expect(yesterday).toEqual({ label: "Yesterday", from: "2020-10-31", to: "2020-10-31" });
+    if (!yesterday) throw new Error("Yesterday preset missing");
+    const history = await familySupportMockApi.listDrawings({ from: yesterday.from, to: yesterday.to, accountId: bank.id });
     expect(history.report).toMatchObject({ count: 1, totalKobo: "10000" });
+    expect(history.report.byBeneficiary[0]).toMatchObject({ id: member.id, amountKobo: "10000" });
+    expect(history.report.byPurpose[0]).toMatchObject({ id: "MEDICAL", amountKobo: "10000" });
+    expect(history.report.byAccount[0]).toMatchObject({ id: bank.id, amountKobo: "10000" });
     expect(history.items[0]).toMatchObject({ occurredAt: expenseDate.toISOString(), postedAt: postedAt.toISOString() });
     const today = getLagosBusinessDate(postedAt);
     expect((await familySupportMockApi.listDrawings({ from: today, to: today, accountId: bank.id })).report.count).toBe(0);

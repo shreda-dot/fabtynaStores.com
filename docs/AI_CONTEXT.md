@@ -17,6 +17,12 @@ this file does not change code, migrations or `.env`.
 > For a drawing linked to an expense, Family Support history uses that
 > expense's immutable original date; account statements and money flow use the
 > account ledger's posting date. The move itself remains separately gated.
+> Family Support history offers Lagos-date presets (Today, Yesterday, last 14
+> or 30 inclusive days, and this month) plus a custom range. Editing either
+> date switches to Custom. The Accounting withdrawal card remains all-time.
+> Family Support history hides Reverse for source-linked drawings; this is a
+> UI-only safeguard, not an API or database restriction. Reversing one through
+> the existing API returns money but leaves the original expense voided.
 
 Repository root: `c:\Users\Shreda\fabtyna-stores` (Windows, PowerShell).
 pnpm workspace (`pnpm-workspace.yaml`: `apps/*`, `packages/*`), `packageManager: pnpm@10.15.1`.

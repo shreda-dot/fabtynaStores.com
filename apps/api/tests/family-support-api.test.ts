@@ -139,9 +139,12 @@ describe("Family Support", () => {
     expect(original.statusCode, original.body).toBe(200);
     const history = original.json<{
       items: Array<{ id: string; occurredAt: string; postedAt: string; sourceExpenseId: string }>;
-      report: { totalKobo: string; count: number };
+      report: { totalKobo: string; count: number; byBeneficiary: Array<{ id: string; amountKobo: string }>; byPurpose: Array<{ id: string; amountKobo: string }>; byAccount: Array<{ id: string; amountKobo: string }> };
     }>();
     expect(history.report).toMatchObject({ totalKobo: "10000", count: 1 });
+    expect(history.report.byBeneficiary[0]).toMatchObject({ id: member.id, amountKobo: "10000" });
+    expect(history.report.byPurpose[0]).toMatchObject({ id: "MEDICAL", amountKobo: "10000" });
+    expect(history.report.byAccount[0]).toMatchObject({ id: account.id, amountKobo: "10000" });
     expect(history.items).toHaveLength(1);
     expect(history.items[0]).toMatchObject({ id: drawingId, occurredAt: expenseDate, sourceExpenseId: expense.id });
     expect(getLagosBusinessDate(new Date(history.items[0].postedAt))).toBe(getLagosBusinessDate());
@@ -164,5 +167,12 @@ describe("Family Support", () => {
     const after = await h.app.inject({ method: "GET", url: `/drawings?from=${originalDay}&to=${originalDay}&accountId=${account.id}` });
     expect(after.statusCode, after.body).toBe(200);
     expect(after.json<{ report: { totalKobo: string; count: number } }>().report).toMatchObject({ totalKobo: "0", count: 0 });
+    expect(await accountBalanceOf(h.pg, account.id)).toBe(11000n);
+    const expenseAfter = await h.pg.query<{ voidedAt: Date | null; voidReason: string | null }>(
+      'SELECT "voidedAt", "voidReason" FROM expenses WHERE id = $1', [expense.id],
+    );
+    expect(expenseAfter.rows[0].voidedAt).not.toBeNull();
+    expect(expenseAfter.rows[0].voidReason).toBe("Test classification");
+    console.log("Reclassified reverse on TEST: account 1000 -> 11000 kobo; expense remains voided; drawings total 10000 -> 0 kobo.");
   }, 120_000);
 });

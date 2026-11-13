@@ -365,6 +365,40 @@ describe("read-only reports", () => {
     expect(await accountBalanceOf(h.pg, account.id)).toBe(7000n);
     expect(product.id).not.toBe("");
   });
+
+  it("preserves all-stock dashboard values and matches the undiscounted expected position", async () => {
+    const before = await call(h.app, "GET", "/reports/dashboard");
+    const beforePosition = await call(h.app, "GET", "/reports/financial-position?scenario=EXPECTED");
+    expect(before.status).toBe(200);
+    expect(beforePosition.status).toBe(200);
+    expect(before.body.stock.expectedWorthKobo).toBe(beforePosition.body.selected.stockValueKobo);
+
+    const product = await seedProduct(h.pg, { stock: 12, location: "WAREHOUSE", unitsPerPack: 12, averageCostKobo: 92333n });
+    await h.pg.query(
+      `UPDATE products SET "retailPriceKobo" = 130000, "wholesalePriceKobo" = 1280000 WHERE id = $1`,
+      [product.id],
+    );
+    for (const [location, units] of [["RETAIL_SHELF", 5], ["MARKET", 2]] as const) {
+      await h.pg.query(
+        `INSERT INTO stock_movements (id, "productId", location, type, "quantityUnits", "unitCostKobo", "returnLineId")
+         VALUES ($1, $2, $3::"StockLocation", 'PURCHASE', $4, 0, $5)`,
+        [newId("report-stock"), product.id, location, units, newId("report-source")],
+      );
+    }
+
+    const after = await call(h.app, "GET", "/reports/dashboard");
+    const position = await call(h.app, "GET", "/reports/financial-position?scenario=EXPECTED");
+    expect(after.status).toBe(200);
+    expect(position.status).toBe(200);
+    for (const [key, increment] of [
+      ["worthAtCostKobo", 1754327n], ["worthAtRetailKobo", 2470000n],
+      ["worthAtWholesaleKobo", 2026666n], ["expectedWorthKobo", 2190000n],
+    ] as const) {
+      expect(BigInt(after.body.stock[key]) - BigInt(before.body.stock[key])).toBe(increment);
+    }
+    expect(after.body.stock.expectedWorthKobo).toBe(position.body.selected.stockValueKobo);
+    expect(BigInt(position.body.selected.stockValueKobo) - BigInt(beforePosition.body.selected.stockValueKobo)).toBe(2190000n);
+  });
       it("does not add old-debt collections to today's profit", async () => {
     type SummaryBody = { days?: Array<Record<string, string>> };
     const range = `from=${yesterday}&to=${today}`;

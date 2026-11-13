@@ -6,6 +6,7 @@ import {
   stockWorthAtCost,
   stockWorthAtRetail,
   stockWorthAtWholesale,
+  stockValueKobo,
   type StockMovement,
 } from "@fabtyna/shared";
 import { decodeCursor, encodeCursor, likePattern } from "../../lib/list-helpers.js";
@@ -59,7 +60,7 @@ export async function listInventory(prisma: PrismaClient, query: InventoryQuery)
     ? Prisma.empty
     : (() => {
         const cursor = decodeCursor(query.cursor!);
-        return Prisma.sql`AND (p.name > ${cursor.at} OR (p.name = ${cursor.at} AND p.id > ${cursor.id}))`;
+        return Prisma.sql`AND (base.name > ${cursor.at} OR (base.name = ${cursor.at} AND base.id > ${cursor.id}))`;
       })();
   const rows = await prisma.$queryRaw<InventoryRow[]>`
     WITH selected_balances AS (
@@ -106,11 +107,12 @@ export async function listInventory(prisma: PrismaClient, query: InventoryQuery)
   const totalsWhere = totalsConditions.length
     ? Prisma.sql`WHERE ${Prisma.join(totalsConditions, " AND ")}`
     : Prisma.empty;
-  const totals = await prisma.$queryRaw<Array<{
-    units: string;
-    costKobo: string;
-    retailKobo: string;
-    wholesaleKobo: string;
+  const totalRows = await prisma.$queryRaw<Array<{
+    units: number;
+    unitsPerPack: number;
+    averageCostKobo: bigint;
+    retailPriceKobo: bigint;
+    wholesalePriceKobo: bigint;
   }>>`
     WITH selected_balances AS (
       SELECT "productId", location, "quantityUnits"
@@ -118,17 +120,22 @@ export async function listInventory(prisma: PrismaClient, query: InventoryQuery)
        ${query.location === undefined ? Prisma.empty : Prisma.sql`WHERE b.location = ${query.location}::"StockLocation"`}
     ),
     sums AS (
-      SELECT "productId", SUM("quantityUnits")::bigint AS units
+      SELECT "productId", SUM("quantityUnits")::int AS units
         FROM selected_balances GROUP BY "productId"
     )
-    SELECT COALESCE(SUM(COALESCE(s.units, 0)), 0)::text AS units,
-           COALESCE(SUM(COALESCE(s.units, 0) * p."averageCostKobo"), 0)::text AS "costKobo",
-           COALESCE(SUM(COALESCE(s.units, 0) * p."retailPriceKobo"), 0)::text AS "retailKobo",
-           COALESCE(SUM((COALESCE(s.units, 0) / p."unitsPerPack") * p."wholesalePriceKobo"
-             + ((COALESCE(s.units, 0) % p."unitsPerPack") * p."wholesalePriceKobo") / p."unitsPerPack"), 0)::text AS "wholesaleKobo"
+    SELECT COALESCE(s.units, 0)::int AS units, p."unitsPerPack", p."averageCostKobo",
+           p."retailPriceKobo", p."wholesalePriceKobo"
       FROM products p
       LEFT JOIN sums s ON s."productId" = p.id
      ${totalsWhere}`;
+  const totals = totalRows.reduce((result, row) => {
+    const quantities = { WAREHOUSE: row.units };
+    result.units += BigInt(row.units);
+    result.cost += stockValueKobo(quantities, row, "ALL", "COST");
+    result.retail += stockValueKobo(quantities, row, "ALL", "RETAIL");
+    result.wholesale += stockValueKobo(quantities, row, "ALL", "WHOLESALE");
+    return result;
+  }, { units: 0n, cost: 0n, retail: 0n, wholesale: 0n });
 
   const page = rows.slice(0, query.limit);
   const last = page.at(-1);
@@ -163,10 +170,10 @@ export async function listInventory(prisma: PrismaClient, query: InventoryQuery)
       ? encodeCursor({ at: last.name, id: last.id })
       : null,
     totals: {
-      units: totals[0]?.units ?? "0",
-      worthAtCostKobo: totals[0]?.costKobo ?? "0",
-      worthAtRetailKobo: totals[0]?.retailKobo ?? "0",
-      worthAtWholesaleKobo: totals[0]?.wholesaleKobo ?? "0",
+      units: totals.units.toString(),
+      worthAtCostKobo: totals.cost.toString(),
+      worthAtRetailKobo: totals.retail.toString(),
+      worthAtWholesaleKobo: totals.wholesale.toString(),
       includeInactiveProducts: true,
     },
   };

@@ -28,6 +28,8 @@ import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
 import { REPORT_STALE_MS } from "@/lib/report-range";
 import { ReportToolbar } from "@/components/reports/report-toolbar";
+import { listAllStock } from "@/lib/api/stock.api";
+import { allStockValues } from "@/lib/stock-valuation";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -53,8 +55,8 @@ export default function DashboardPage() {
   // Real mode shows only what GET /reports/dashboard returns; the demo store still computes locally.
   const mock = isMockApiMode;
   const stock = useQuery({
-    queryKey: queryKeys.stock.list,
-    queryFn: () => stockApi.list(),
+    queryKey: queryKeys.stock.allProducts,
+    queryFn: () => listAllStock(stockApi),
     enabled: mock,
   });
   const sales = useQuery({
@@ -108,19 +110,11 @@ export default function DashboardPage() {
     [report.data, yesterdayDate],
   );
 
-  const totalRetailWorth = dash
-    ? BigInt(dash.stock.worthAtRetailKobo)
-    : (stock.data?.reduce(
-        (sum, row) => sum + BigInt(row.retailWorthKobo),
-        0n,
-      ) ?? 0n);
-  const totalWholesaleWorth = dash
-    ? BigInt(dash.stock.worthAtWholesaleKobo)
-    : (stock.data?.reduce(
-        (sum, row) => sum + BigInt(row.wholesaleWorthKobo),
-        0n,
-      ) ?? 0n);
-  const stockCostWorth = dash ? BigInt(dash.stock.worthAtCostKobo) : null;
+  const mockStock = useMemo(() => allStockValues(stock.data ?? []), [stock.data]);
+  const totalRetailWorth = dash ? BigInt(dash.stock.worthAtRetailKobo) : mockStock.retail;
+  const totalWholesaleWorth = dash ? BigInt(dash.stock.worthAtWholesaleKobo) : mockStock.wholesale;
+  const stockCostWorth = dash ? BigInt(dash.stock.worthAtCostKobo) : mockStock.cost;
+  const expectedWorth = dash ? BigInt(dash.stock.expectedWorthKobo) : mockStock.expected;
 
   const outstandingDebt = useMemo(() => {
     let retail = 0n;
@@ -436,32 +430,30 @@ export default function DashboardPage() {
             </CardBody>
           </Card>
 
-          <Card className="w-full overflow-hidden">
+          <Card className="w-full">
             <CardHeader
               title="Stock on hand"
               action={
                 <InfoHint label="Explain stock worth">
-                  Current value of the stock on hand right now. It does not
-                  change with the date picker above.
+                  Values cover warehouse, fridge and market stock combined, as of
+                  now. They do not change with the date picker above.
                 </InfoHint>
               }
             />
             <CardBody>
               <p className="mb-3 text-xs text-muted-foreground">
-                As of now, not tied to the selected date.
+                Warehouse + fridge + market combined, as of now, not tied to the selected date.
               </p>
               <dl className="grid gap-3 text-sm sm:grid-cols-2">
-                {stockCostWorth !== null && (
-                  <div className="flex items-center justify-between gap-4">
-                    <dt className="text-muted-foreground">Worth at cost</dt>
-                    <dd className="font-medium">
-                      <Money kobo={stockCostWorth} tone="neutral" />
-                    </dd>
-                  </div>
-                )}
+                <div className="flex items-center justify-between gap-4">
+                  <dt className="text-muted-foreground">All stock at cost</dt>
+                  <dd className="font-medium">
+                    <Money kobo={stockCostWorth} tone="neutral" />
+                  </dd>
+                </div>
                 <div className="flex items-center justify-between gap-4">
                   <dt className="text-muted-foreground">
-                    Retail (fridge) worth
+                    All stock if sold at retail price
                   </dt>
                   <dd className="font-medium">
                     <Money kobo={totalRetailWorth} tone="neutral" />
@@ -469,11 +461,20 @@ export default function DashboardPage() {
                 </div>
                 <div className="flex items-center justify-between gap-4">
                   <dt className="text-muted-foreground">
-                    Wholesale (warehouse) worth
+                    All stock if sold at wholesale price
                   </dt>
                   <dd className="font-medium">
                     <Money kobo={totalWholesaleWorth} tone="neutral" />
                   </dd>
+                </div>
+                <div className="flex items-center justify-between gap-4 font-medium">
+                  <dt className="inline-flex items-center gap-1">
+                    Expected worth
+                    <InfoHint label="Explain expected worth" placement="top">
+                      Warehouse stock at wholesale price plus fridge and market stock at retail price.
+                    </InfoHint>
+                  </dt>
+                  <dd><Money kobo={expectedWorth} tone="neutral" /></dd>
                 </div>
               </dl>
             </CardBody>

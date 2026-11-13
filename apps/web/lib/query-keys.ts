@@ -79,6 +79,7 @@ export const queryKeys = {
   stock: {
     all: key("stock"),
     list: key("stock", "list"),
+    allProducts: key("stock", "all-products"),
     movements: (filter: {
       productId?: string;
       location?: string;

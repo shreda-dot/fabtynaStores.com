@@ -5,6 +5,7 @@ import type {
   Purchase,
   PurchasePaymentStatus,
 } from "./types.ts";
+import { expectedStockValueKobo, stockValueKobo } from "./stock.ts";
 
 /* ------------------------------------------------------------------ *
  * Rounding rule
@@ -230,19 +231,20 @@ function stockValueForScenario(
     if (packs === 0 && loose === 0 && fridge === 0) continue;
 
     const warehouseUnits = packs * product.packSizeUnits + loose;
+    const quantities = { WAREHOUSE: warehouseUnits, RETAIL_SHELF: fridge };
+    const prices = {
+      unitsPerPack: product.packSizeUnits,
+      retailPriceKobo: product.retailPriceKobo,
+      wholesalePriceKobo: product.wholesalePriceKobo,
+      averageCostKobo: product.averageCostKobo,
+    };
 
     if (scenario === "EXPECTED") {
-      // Whole warehouse packs fetch the wholesale (per-crate) price; shelf
-      // units fetch retail. Loose warehouse units are valued pro rata.
-      raw +=
-        BigInt(packs) * product.wholesalePriceKobo +
-        (BigInt(loose) * product.wholesalePriceKobo) / BigInt(product.packSizeUnits) +
-        BigInt(fridge) * product.retailPriceKobo;
+      raw += expectedStockValueKobo(quantities, prices);
     } else if (scenario === "BEST") {
-      raw += BigInt(warehouseUnits + fridge) * product.retailPriceKobo;
+      raw += stockValueKobo(quantities, prices, "ALL", "RETAIL");
     } else {
-      // FLOOR: every unit at cost. averageCostKobo is per unit.
-      raw += BigInt(warehouseUnits + fridge) * product.averageCostKobo;
+      raw += stockValueKobo(quantities, prices, "ALL", "COST");
     }
   }
   return scaleByBpsFloor(raw, 10000n - discountBps);

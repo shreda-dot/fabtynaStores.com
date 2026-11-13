@@ -15,6 +15,10 @@ type StockWireItem = {
   sku: string | null;
   packName: string;
   unitsPerPack: number;
+  active: boolean;
+  averageCostKobo: string;
+  retailPriceKobo: string;
+  wholesalePriceKobo: string;
   totalUnits: number;
   stock: Record<string, { units: number; packs: number; remainingUnits: number }>;
   worthAtCostKobo: string;
@@ -50,6 +54,10 @@ function mapStockItem(item: StockWireItem): StockViewDto {
     sku: item.sku,
     packName: item.packName,
     unitsPerPack: item.unitsPerPack,
+    active: item.active,
+    averageCostKobo: item.averageCostKobo,
+    retailPriceKobo: item.retailPriceKobo,
+    wholesalePriceKobo: item.wholesalePriceKobo,
     totalUnits: item.totalUnits,
     byLocation: Object.entries(item.stock).map(([location, amount]) => ({
       location,

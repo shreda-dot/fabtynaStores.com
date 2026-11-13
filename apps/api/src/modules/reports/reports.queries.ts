@@ -8,6 +8,7 @@ import {
   stockWorthAtCost,
   stockWorthAtRetail,
   stockWorthAtWholesale,
+  expectedStockValueKobo,
   type Account,
   type AccountLedgerEntry,
   type Expense,
@@ -247,6 +248,7 @@ export async function getDashboard(
       worthAtCostKobo: stock.cost.toString(),
       worthAtRetailKobo: stock.retail.toString(),
       worthAtWholesaleKobo: stock.wholesale.toString(),
+      expectedWorthKobo: stock.expected.toString(),
     },
   };
 }
@@ -269,6 +271,7 @@ async function currentStockWorth(prisma: PrismaClient) {
   let cost = 0n;
   let retail = 0n;
   let wholesale = 0n;
+  let expected = 0n;
   for (const row of rows) {
     const movements: StockMovement[] = Object.entries(row.locations ?? {}).map(([location, quantityUnits]) => ({
       id: `${row.id}:${location}`,
@@ -296,8 +299,9 @@ async function currentStockWorth(prisma: PrismaClient) {
     cost += stockWorthAtCost(movements, product);
     retail += stockWorthAtRetail(movements, product);
     wholesale += stockWorthAtWholesale(movements, product);
+    expected += expectedStockValueKobo(row.locations ?? {}, product);
   }
-  return { cost, retail, wholesale };
+  return { cost, retail, wholesale, expected };
 }
 
 export async function getProductSales(

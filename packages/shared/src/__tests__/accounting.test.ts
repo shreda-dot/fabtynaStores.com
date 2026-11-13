@@ -810,6 +810,21 @@ describe("computeFinancialPosition", () => {
     expect(result.scenarios.EXPECTED.stockValueKobo).toBe(166n);
   });
 
+  it("keeps the expected value equal to warehouse wholesale plus shelf and market retail", () => {
+    const result = computeFinancialPosition({
+      todayLagosDate: "2026-10-01",
+      products: [{
+        productId: "mixed-locations", warehousePacks: 1, warehouseLooseUnits: 2,
+        fridgeUnits: 7, packSizeUnits: 12, retailPriceKobo: 130000n,
+        wholesalePriceKobo: 1280000n, averageCostKobo: 92333n,
+      }],
+      receivablesKobo: 0n, cashKobo: 0n, supplierPayablesKobo: 0n, loansOutstandingKobo: 0n,
+    });
+    expect(result.scenarios.EXPECTED.stockValueKobo).toBe(2403333n);
+    expect(result.scenarios.BEST.stockValueKobo).toBe(2730000n);
+    expect(result.scenarios.FLOOR.stockValueKobo).toBe(1938993n);
+  });
+
   it("classifies obligation urgency", () => {
     const result = computeFinancialPosition({
       ...baseInput,

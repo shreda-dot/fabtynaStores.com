@@ -232,32 +232,68 @@ export function totalUnitsForProduct(
   return total;
 }
 
+export type StockValueScope = "ALL" | StockLocation;
+export type StockValuePrice = "COST" | "RETAIL" | "WHOLESALE";
+export type StockValueQuantities = Partial<Record<StockLocation, number>>;
+export type StockValuePrices = Pick<
+  Product,
+  "unitsPerPack" | "averageCostKobo" | "retailPriceKobo" | "wholesalePriceKobo"
+>;
+
+export function stockValueKobo(
+  quantities: StockValueQuantities,
+  prices: StockValuePrices,
+  scope: StockValueScope,
+  price: StockValuePrice,
+): bigint {
+  const units = BigInt(scope === "ALL"
+    ? (quantities.WAREHOUSE ?? 0) + (quantities.RETAIL_SHELF ?? 0) + (quantities.MARKET ?? 0)
+    : quantities[scope] ?? 0);
+  if (price === "COST") return units * prices.averageCostKobo;
+  if (price === "RETAIL") return units * prices.retailPriceKobo;
+  return (units * prices.wholesalePriceKobo) / BigInt(prices.unitsPerPack);
+}
+
+export function expectedStockValueKobo(
+  quantities: StockValueQuantities,
+  prices: StockValuePrices,
+): bigint {
+  return stockValueKobo(quantities, prices, "WAREHOUSE", "WHOLESALE") +
+    stockValueKobo(quantities, prices, "RETAIL_SHELF", "RETAIL") +
+    stockValueKobo(quantities, prices, "MARKET", "RETAIL");
+}
+
 export function stockWorthAtCost(
   movements: readonly StockMovement[],
   product: Pick<Product, "id" | "averageCostKobo">,
 ): bigint {
-  const units = BigInt(totalUnitsForProduct(movements, product.id));
-  return units * product.averageCostKobo;
+  return stockValueKobo(
+    { WAREHOUSE: totalUnitsForProduct(movements, product.id) },
+    { unitsPerPack: 1, averageCostKobo: product.averageCostKobo, retailPriceKobo: 0n, wholesalePriceKobo: 0n },
+    "ALL", "COST",
+  );
 }
 
 export function stockWorthAtRetail(
   movements: readonly StockMovement[],
   product: Pick<Product, "id" | "retailPriceKobo">,
 ): bigint {
-  const units = BigInt(totalUnitsForProduct(movements, product.id));
-  return units * product.retailPriceKobo;
+  return stockValueKobo(
+    { WAREHOUSE: totalUnitsForProduct(movements, product.id) },
+    { unitsPerPack: 1, averageCostKobo: 0n, retailPriceKobo: product.retailPriceKobo, wholesalePriceKobo: 0n },
+    "ALL", "RETAIL",
+  );
 }
 
 export function stockWorthAtWholesale(
   movements: readonly StockMovement[],
   product: Pick<Product, "id" | "unitsPerPack" | "wholesalePriceKobo">,
 ): bigint {
-  const units = BigInt(totalUnitsForProduct(movements, product.id));
-  const unitsPerPack = BigInt(product.unitsPerPack);
-  const fullPacks = units / unitsPerPack;
-  const looseUnits = units % unitsPerPack;
-  return fullPacks * product.wholesalePriceKobo +
-    (looseUnits * product.wholesalePriceKobo) / unitsPerPack;
+  return stockValueKobo(
+    { WAREHOUSE: totalUnitsForProduct(movements, product.id) },
+    { unitsPerPack: product.unitsPerPack, averageCostKobo: 0n, retailPriceKobo: 0n, wholesalePriceKobo: product.wholesalePriceKobo },
+    "ALL", "WHOLESALE",
+  );
 }
 
 export function stockWorthByChannel(

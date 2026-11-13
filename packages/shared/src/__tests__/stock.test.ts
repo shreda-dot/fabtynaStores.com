@@ -8,6 +8,8 @@ import {
   splitStockIntoPacks,
   stockWorthAtWholesale,
   stockWorthByChannel,
+  stockValueKobo,
+  expectedStockValueKobo,
   validateAdjustmentLine,
 } from "../domain/stock.ts";
 
@@ -84,6 +86,50 @@ describe("stock levels from movements", () => {
       wholesalePriceKobo: 100n,
       saleChannel: "BOTH",
     })).toEqual({ retailKobo: 0n, wholesaleKobo: 166n, totalKobo: 166n });
+  });
+});
+
+describe("scoped stock valuation", () => {
+  const prices = {
+    unitsPerPack: 12, averageCostKobo: 92333n,
+    wholesalePriceKobo: 1280000n, retailPriceKobo: 130000n,
+  };
+
+  it("values Budweiser by department and preserves all-stock dashboard values", () => {
+    const quantities = { WAREHOUSE: 12, RETAIL_SHELF: 5 };
+    expect(stockValueKobo(quantities, prices, "WAREHOUSE", "WHOLESALE")).toBe(1280000n);
+    expect(stockValueKobo(quantities, prices, "WAREHOUSE", "COST")).toBe(1107996n);
+    expect(stockValueKobo(quantities, prices, "WAREHOUSE", "WHOLESALE") -
+      stockValueKobo(quantities, prices, "WAREHOUSE", "COST")).toBe(172004n);
+    expect(stockValueKobo(quantities, prices, "RETAIL_SHELF", "RETAIL")).toBe(650000n);
+    expect(stockValueKobo(quantities, prices, "ALL", "COST")).toBe(1569661n);
+    expect(stockValueKobo(quantities, prices, "ALL", "RETAIL")).toBe(2210000n);
+    expect(stockValueKobo(quantities, prices, "ALL", "WHOLESALE")).toBe(1813333n);
+    expect(expectedStockValueKobo(quantities, prices)).toBe(1930000n);
+  });
+
+  it("includes market, loose units and empty departments with per-product floor rounding", () => {
+    const quantities = { WAREHOUSE: 5, RETAIL_SHELF: 0, MARKET: 2 };
+    const p = { unitsPerPack: 3, averageCostKobo: 50n, wholesalePriceKobo: 100n, retailPriceKobo: 150n };
+    expect(stockValueKobo(quantities, p, "WAREHOUSE", "WHOLESALE")).toBe(166n);
+    expect(stockValueKobo(quantities, p, "RETAIL_SHELF", "RETAIL")).toBe(0n);
+    expect(stockValueKobo(quantities, p, "ALL", "WHOLESALE")).toBe(233n);
+    expect(expectedStockValueKobo(quantities, p)).toBe(466n);
+  });
+
+  it("preserves the previous all-stock formula over pack and loose-unit boundaries", () => {
+    for (const unitsPerPack of [1, 3, 12, 24]) {
+      for (let units = 0; units < 80; units++) {
+        const p = { ...prices, unitsPerPack, wholesalePriceKobo: 101n };
+        const quantities = { WAREHOUSE: units, RETAIL_SHELF: 2, MARKET: 3 };
+        const total = BigInt(units + 5);
+        const oldWholesale = (total / BigInt(unitsPerPack)) * p.wholesalePriceKobo +
+          ((total % BigInt(unitsPerPack)) * p.wholesalePriceKobo) / BigInt(unitsPerPack);
+        expect(stockValueKobo(quantities, p, "ALL", "WHOLESALE")).toBe(oldWholesale);
+        expect(stockValueKobo(quantities, p, "ALL", "RETAIL")).toBe(total * p.retailPriceKobo);
+        expect(stockValueKobo(quantities, p, "ALL", "COST")).toBe(total * p.averageCostKobo);
+      }
+    }
   });
 });
 

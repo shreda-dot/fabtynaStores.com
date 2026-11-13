@@ -186,14 +186,12 @@ export default function StockPage() {
       render: (row) => <Money kobo={row.worthAtCostKobo} />,
     },
     {
-      header: isMockApiMode ? "Retail worth (fridge)" : "Worth at retail price",
+      header: "Worth at retail price",
       align: "right",
       render: (row) => (
         <Money
           kobo={
-            isMockApiMode
-              ? row.retailWorthKobo ?? "0"
-              : row.worthAtRetailKobo ?? row.retailWorthKobo ?? "0"
+            row.worthAtRetailKobo ?? row.retailWorthKobo ?? "0"
           }
         />
       ),
@@ -281,9 +279,7 @@ export default function StockPage() {
               Stock levels and value by location
               <InfoHint label="Explain current stock worth">
                 “Worth at cost” values every unit at the average purchase cost.
-                {isMockApiMode
-                  ? " “Retail worth (fridge)” values retail-shelf stock at retail price."
-                  : " “Worth at retail price” values on-hand units at the product's retail price."}
+                {" “Worth at retail price” values on-hand units at the product's retail price."}
                 {" “Wholesale worth” values stock at the wholesale pack price."}
               </InfoHint>
             </span>

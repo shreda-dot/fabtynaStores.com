@@ -92,6 +92,7 @@ export type DashboardDto = {
     worthAtCostKobo: string;
     worthAtRetailKobo: string;
     worthAtWholesaleKobo: string;
+    expectedWorthKobo: string;
   };
 };
 

@@ -63,6 +63,7 @@ export const dashboardResponseSchema = z.object({
     worthAtCostKobo: koboString,
     worthAtRetailKobo: koboString,
     worthAtWholesaleKobo: koboString,
+    expectedWorthKobo: koboString,
   }),
 });
 

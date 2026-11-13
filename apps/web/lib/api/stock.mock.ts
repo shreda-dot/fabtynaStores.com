@@ -2,7 +2,7 @@ import {
   stockByProductAndLocation,
   stockWorthAtCost,
   stockWorthAtRetail,
-  stockWorthByChannel,
+  stockWorthAtWholesale,
   isLowStock,
   toStockMovementDto,
 } from "@fabtyna/shared";
@@ -12,7 +12,7 @@ import type {
   StockListOptions,
   StockViewDto,
 } from "./stock.api";
-import { readMockStore } from "./mock-store";
+import { readMockStore, type MockStore } from "./mock-store";
 import { mockDelay } from "./mock-transport";
 
 function delay(): Promise<void> {
@@ -23,53 +23,71 @@ function jsonClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-export const stockMockApi: StockApi = {
-  async list(_options?: StockListOptions) {
-    await delay();
-    const store = readMockStore();
+function stockViews(store: MockStore, options: StockListOptions, includeInactive = false): StockViewDto[] {
     const byProductLocation = stockByProductAndLocation(store.stockMovements);
     const views: StockViewDto[] = store.products
-      .filter((p) => p.deletedAt === null)
+      .filter((p) => includeInactive || (p.deletedAt === null) === (options.active ?? true))
+      .filter((p) => !options.search?.trim() || `${p.name} ${p.sku ?? ""}`.toLowerCase().includes(options.search.trim().toLowerCase()))
       .map((product) => {
         const byLocation = byProductLocation.get(product.id) ?? new Map();
-        const totalUnits = Array.from(byLocation.values()).reduce(
-          (sum, units) => sum + units,
+        const selected = options.location
+          ? Array.from(byLocation.entries()).filter(([location]) => location === options.location)
+          : Array.from(byLocation.entries());
+        const movements = options.location
+          ? store.stockMovements.filter((movement) => movement.location === options.location)
+          : store.stockMovements;
+        const totalUnits = selected.reduce(
+          (sum, [, units]) => sum + units,
           0,
         );
-        const channelWorth = stockWorthByChannel(store.stockMovements, product);
         return {
           productId: product.id,
           productName: product.name,
           sku: product.sku,
           packName: product.packName,
           unitsPerPack: product.unitsPerPack,
+          active: product.deletedAt === null,
+          averageCostKobo: product.averageCostKobo.toString(),
+          retailPriceKobo: product.retailPriceKobo.toString(),
+          wholesalePriceKobo: product.wholesalePriceKobo.toString(),
           totalUnits,
-          byLocation: Array.from(byLocation.entries()).map(([location, quantityUnits]) => ({
+          byLocation: selected.map(([location, quantityUnits]) => ({
             location,
             quantityUnits,
           })),
-          worthAtCostKobo: stockWorthAtCost(store.stockMovements, product).toString(),
-          worthAtRetailKobo: stockWorthAtRetail(store.stockMovements, product).toString(),
-          retailWorthKobo: channelWorth.retailKobo.toString(),
-          wholesaleWorthKobo: channelWorth.wholesaleKobo.toString(),
+          worthAtCostKobo: stockWorthAtCost(movements, product).toString(),
+          worthAtRetailKobo: stockWorthAtRetail(movements, product).toString(),
+          retailWorthKobo: stockWorthAtRetail(movements, product).toString(),
+          wholesaleWorthKobo: stockWorthAtWholesale(movements, product).toString(),
           reorderLevelUnits: product.reorderLevelUnits,
-          lowStock: isLowStock(store.stockMovements, product),
+          lowStock: isLowStock(movements, product),
         };
       })
+      .filter((row) => options.nonZero !== true || row.totalUnits > 0)
       .sort((a, b) => a.productName.localeCompare(b.productName));
-    return jsonClone(views);
+    return views;
+}
+
+export const stockMockApi: StockApi = {
+  async list(options: StockListOptions = {}) {
+    await delay();
+    return jsonClone(stockViews(readMockStore(), options));
   },
-  async listPage(options?: StockListOptions) {
-    const items = await stockMockApi.list(options);
+  async listPage(options: StockListOptions = {}) {
+    await delay();
+    const store = readMockStore();
+    const filters = { ...options, nonZero: options.nonZero ?? true };
+    const items = stockViews(store, filters);
+    const totalRows = stockViews(store, filters, true);
     return jsonClone({
       items,
       nextCursor: null,
       totals: {
-        units: items.reduce((sum, row) => sum + row.totalUnits, 0).toString(),
-        worthAtCostKobo: items.reduce((sum, row) => sum + BigInt(row.worthAtCostKobo), 0n).toString(),
-        worthAtRetailKobo: items.reduce((sum, row) => sum + BigInt(row.worthAtRetailKobo ?? row.retailWorthKobo ?? "0"), 0n).toString(),
-        worthAtWholesaleKobo: items.reduce((sum, row) => sum + BigInt(row.wholesaleWorthKobo), 0n).toString(),
-        includeInactiveProducts: false,
+        units: totalRows.reduce((sum, row) => sum + row.totalUnits, 0).toString(),
+        worthAtCostKobo: totalRows.reduce((sum, row) => sum + BigInt(row.worthAtCostKobo), 0n).toString(),
+        worthAtRetailKobo: totalRows.reduce((sum, row) => sum + BigInt(row.worthAtRetailKobo ?? row.retailWorthKobo ?? "0"), 0n).toString(),
+        worthAtWholesaleKobo: totalRows.reduce((sum, row) => sum + BigInt(row.wholesaleWorthKobo), 0n).toString(),
+        includeInactiveProducts: true,
       },
     });
   },

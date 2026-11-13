@@ -333,7 +333,11 @@ not be retroactively deducted or credited.
   receivables/payables/loans plus current stock; cash snapshots are not read.
   MARKET stock is included with retail/shelf units, and loose warehouse units
   are valued pro rata. The dashboard compares today with yesterday and reports
-  stock worth as of now.
+  stock worth as of now: all locations at cost, retail and wholesale, plus
+  expected worth (warehouse wholesale + fridge and MARKET retail). Expected
+  worth matches Financial Position before any optional stock discount. The
+  department pages show only their own units and include inactive products
+  holding stock. Wholesale worth is floored per product before summing.
 - Report reads are covered by `apps/api/tests/reports.test.ts`. Measured
   statement counts with non-empty test data: sales summary **6**, dashboard
   **7**, product sales **1**, Money Flow **5** (or **6** when expense-category

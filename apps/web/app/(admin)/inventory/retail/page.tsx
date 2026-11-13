@@ -19,35 +19,26 @@ import { StatCard } from "@/components/ui/stat-card";
 import { stockApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { listAllStock } from "@/lib/api/stock.api";
+import { departmentStock } from "@/lib/stock-valuation";
 
 export default function RetailInventoryPage() {
   const stock = useQuery({
-    queryKey: queryKeys.stock.list,
-    queryFn: () => stockApi.list(),
+    queryKey: queryKeys.stock.allProducts,
+    queryFn: () => listAllStock(stockApi),
   });
 
-  const rows = useMemo(() => {
-    return (stock.data ?? [])
-      .map((row) => {
-        const breakdown = row.byLocation.find(
-          (b) => b.location === "RETAIL_SHELF",
-        );
-        const units = breakdown?.quantityUnits ?? 0;
-        const worth = BigInt(row.retailWorthKobo);
-        return { row, units, worth };
-      })
-      .filter((item) => item.units > 0);
-  }, [stock.data]);
-
-  const totalWorth = rows.reduce((sum, item) => sum + item.worth, 0n);
-  const totalUnits = rows.reduce((sum, item) => sum + item.units, 0);
+  const { items: rows, totals } = useMemo(
+    () => departmentStock(stock.data ?? [], "RETAIL_SHELF"),
+    [stock.data],
+  );
 
   const columns: ResponsiveTableColumn<(typeof rows)[number]>[] = [
     {
       header: "Product",
       render: (item) => (
         <div>
-          <p className="font-medium">{item.row.productName}</p>
+          <p className="font-medium">{item.row.productName}{!item.row.active && " (inactive)"}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {item.row.sku ?? "No SKU"}
           </p>
@@ -64,9 +55,19 @@ export default function RetailInventoryPage() {
       ),
     },
     {
-      header: "Retail worth",
+      header: "Fridge units at retail price",
       align: "right",
-      render: (item) => <Money kobo={item.worth} />,
+      render: (item) => <Money kobo={item.sell} />,
+    },
+    {
+      header: "Fridge units at average cost",
+      align: "right",
+      render: (item) => <Money kobo={item.cost} />,
+    },
+    {
+      header: "Fridge expected balance",
+      align: "right",
+      render: (item) => <Money kobo={item.balance} />,
     },
     {
       header: "Action",
@@ -99,16 +100,25 @@ export default function RetailInventoryPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      {stock.data && !stock.isError && <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          label="Retail stock worth"
-          value={<Money kobo={totalWorth} tone="neutral" />}
+          label="Fridge units at retail price"
+          value={<Money kobo={totals.sell} tone="neutral" />}
+        />
+        <StatCard
+          label="Fridge units at average cost"
+          value={<Money kobo={totals.cost} tone="neutral" />}
+        />
+        <StatCard
+          label="Fridge expected balance"
+          value={<Money kobo={totals.balance} />}
+          tone={totals.balance < 0n ? "danger" : "default"}
         />
         <StatCard
           label="Total units in fridge"
-          value={<span className="tabular">{totalUnits}</span>}
+          value={<span className="tabular">{totals.units}</span>}
         />
-      </div>
+      </div>}
 
       {stock.isPending ? (
         <Skeleton variant="row" count={6} />

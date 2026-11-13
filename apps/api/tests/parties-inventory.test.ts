@@ -130,6 +130,43 @@ describe("catalogue and inventory read APIs", () => {
       shortfallUnits: 6,
     }));
   });
+
+  it("paginates more than 50 products and retains inactive stock in totals", async () => {
+    const prefix = newId("inventory-pages");
+    await h.pg.query(
+      `INSERT INTO products
+       (id, name, category, "unitsPerPack", "saleChannel", "retailPriceKobo", "wholesalePriceKobo",
+        "averageCostKobo", "deletedAt", "updatedAt")
+       SELECT $1 || '-p-' || n, $1 || ' ' || lpad(n::text, 3, '0'), 'OTHER', 3, 'BOTH',
+              120, 100, 100, CASE WHEN n = 52 THEN now() ELSE NULL END, now()
+         FROM generate_series(1, 52) n`,
+      [prefix],
+    );
+    await h.pg.query(
+      `INSERT INTO stock_movements (id, "productId", location, type, "quantityUnits", "unitCostKobo", "returnLineId")
+       SELECT $1 || '-m-' || n, $1 || '-p-' || n, 'WAREHOUSE', 'PURCHASE', 1, 0, $1 || '-source-' || n
+         FROM generate_series(1, 52) n`,
+      [prefix],
+    );
+    const query = `q=${encodeURIComponent(prefix)}&limit=50`;
+    const first = await call(h.app, "GET", `/stock?${query}`);
+    expect(first.status).toBe(200);
+    expect(first.body.items).toHaveLength(50);
+    expect(first.body.nextCursor).toBeTruthy();
+    expect(first.body.totals).toMatchObject({
+      units: "52", worthAtCostKobo: "5200", worthAtRetailKobo: "6240",
+      worthAtWholesaleKobo: "1716", includeInactiveProducts: true,
+    });
+    const second = await call(h.app, "GET", `/stock?${query}&cursor=${encodeURIComponent(first.body.nextCursor)}`);
+    expect(second.status).toBe(200);
+    expect(second.body.items).toHaveLength(1);
+    expect(second.body.nextCursor).toBeNull();
+    const inactive = await call(h.app, "GET", `/stock?${query}&active=false`);
+    expect(inactive.status).toBe(200);
+    expect(inactive.body.items).toHaveLength(1);
+    expect(inactive.body.items[0].active).toBe(false);
+    expect(inactive.body.items[0].stock.WAREHOUSE.units).toBe(1);
+  }, 180_000);
 });
 
 describe("customer and supplier APIs", () => {

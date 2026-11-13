@@ -14,6 +14,10 @@ export type StockViewDto = {
   sku: string | null;
   packName: string;
   unitsPerPack: number;
+  active: boolean;
+  averageCostKobo: string;
+  retailPriceKobo: string;
+  wholesalePriceKobo: string;
   totalUnits: number;
   byLocation: StockLocationBreakdownDto[];
   worthAtCostKobo: string;
@@ -64,4 +68,20 @@ export interface StockApi {
   listPage(options?: StockListOptions): Promise<StockListPage>;
   lowStock(options?: StockListOptions): Promise<LowStockPage>;
   movements(filter?: StockMovementFilterDto): Promise<StockMovementDto[]>;
+}
+
+export async function listAllStock(api: StockApi): Promise<StockViewDto[]> {
+  const items: StockViewDto[] = [];
+  for (const active of [true, false]) {
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    do {
+      const page = await api.listPage({ active, nonZero: true, limit: 200, cursor });
+      items.push(...page.items);
+      cursor = page.nextCursor ?? undefined;
+      if (cursor && seen.has(cursor)) throw new Error("Stock pagination returned a repeated cursor.");
+      if (cursor) seen.add(cursor);
+    } while (cursor);
+  }
+  return items.sort((a, b) => a.productName.localeCompare(b.productName) || a.productId.localeCompare(b.productId));
 }

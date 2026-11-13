@@ -20,51 +20,26 @@ import { StatCard } from "@/components/ui/stat-card";
 import { stockApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
-
-function roundHalfUp(numerator: bigint, denominator: bigint): bigint {
-  if (denominator <= 0n) return 0n;
-  return (numerator + denominator / 2n) / denominator;
-}
+import { listAllStock } from "@/lib/api/stock.api";
+import { departmentStock } from "@/lib/stock-valuation";
 
 export default function WarehouseInventoryPage() {
   const stock = useQuery({
-    queryKey: queryKeys.stock.list,
-    queryFn: () => stockApi.list(),
+    queryKey: queryKeys.stock.allProducts,
+    queryFn: () => listAllStock(stockApi),
   });
 
-  const rows = useMemo(() => {
-    return (stock.data ?? [])
-      .map((row) => {
-        const breakdown = row.byLocation.find(
-          (b) => b.location === "WAREHOUSE",
-        );
-        const units = breakdown?.quantityUnits ?? 0;
-        const packs = units > 0 ? units / row.unitsPerPack : 0;
-        const sellWorth = BigInt(row.wholesaleWorthKobo);
-        const buyWorth =
-          row.totalUnits > 0
-            ? roundHalfUp(
-                BigInt(row.worthAtCostKobo) * BigInt(units),
-                BigInt(row.totalUnits),
-              )
-            : 0n;
-        const balance = sellWorth - buyWorth;
-        return { row, units, packs, sellWorth, buyWorth, balance };
-      })
-      .filter((item) => item.units > 0);
-  }, [stock.data]);
-
-  const totalSellWorth = rows.reduce((sum, item) => sum + item.sellWorth, 0n);
-  const totalBuyWorth = rows.reduce((sum, item) => sum + item.buyWorth, 0n);
-  const totalBalance = rows.reduce((sum, item) => sum + item.balance, 0n);
-  const totalUnits = rows.reduce((sum, item) => sum + item.units, 0);
+  const { items: rows, totals } = useMemo(
+    () => departmentStock(stock.data ?? [], "WAREHOUSE"),
+    [stock.data],
+  );
 
   const columns: ResponsiveTableColumn<(typeof rows)[number]>[] = [
     {
       header: "Product",
       render: (item) => (
         <div>
-          <p className="font-medium">{item.row.productName}</p>
+          <p className="font-medium">{item.row.productName}{!item.row.active && " (inactive)"}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {item.row.sku ?? "No SKU"}
           </p>
@@ -83,20 +58,20 @@ export default function WarehouseInventoryPage() {
     {
       header: "Packs",
       align: "right",
-      render: (item) => <span className="tabular">{item.packs.toFixed(1)}</span>,
+      render: (item) => <span className="tabular">{(item.units / item.row.unitsPerPack).toFixed(1)}</span>,
     },
     {
-      header: "Buy worth",
+      header: "Warehouse units at cost",
       align: "right",
-      render: (item) => <Money kobo={item.buyWorth} />,
+      render: (item) => <Money kobo={item.cost} />,
     },
     {
-      header: "Wholesale worth",
+      header: "Warehouse units at wholesale price",
       align: "right",
-      render: (item) => <Money kobo={item.sellWorth} />,
+      render: (item) => <Money kobo={item.sell} />,
     },
     {
-      header: "Balance",
+      header: "Warehouse expected balance",
       align: "right",
       render: (item) => <Money kobo={item.balance} />,
     },
@@ -118,10 +93,10 @@ export default function WarehouseInventoryPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {stock.data && !stock.isError && <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          label="Wholesale worth if sold"
-          value={<Money kobo={totalSellWorth} tone="neutral" />}
+          label="Warehouse units at wholesale price"
+          value={<Money kobo={totals.sell} tone="neutral" />}
           hint={
             <InfoHint label="Explain wholesale worth if sold">
               Your current wholesale selling price applied to the stock
@@ -130,32 +105,29 @@ export default function WarehouseInventoryPage() {
           }
         />
         <StatCard
-          label="Wholesale worth when bought"
-          value={<Money kobo={totalBuyWorth} tone="neutral" />}
+          label="Warehouse units at average cost"
+          value={<Money kobo={totals.cost} tone="neutral" />}
           hint={
             <InfoHint label="Explain wholesale worth when bought">
-              The cost value of the same warehouse stock — what it was bought
-              for.
+              Warehouse units valued at the product&apos;s average cost per unit.
             </InfoHint>
           }
         />
         <StatCard
-          label="Balance"
-          value={<Money kobo={totalBalance} />}
-          tone={totalBalance < 0n ? "danger" : "default"}
+          label="Warehouse expected balance"
+          value={<Money kobo={totals.balance} />}
+          tone={totals.balance < 0n ? "danger" : "default"}
           hint={
             <InfoHint label="Explain warehouse balance">
-              Balance is “wholesale worth if sold” minus “wholesale worth when
-              bought”. It shows how strong or tight your current selling margin
-              is.
+              Warehouse units at wholesale price minus the same units at average cost.
             </InfoHint>
           }
         />
         <StatCard
           label="Total units in warehouse"
-          value={<span className="tabular">{totalUnits}</span>}
+          value={<span className="tabular">{totals.units}</span>}
         />
-      </div>
+      </div>}
 
       {stock.isPending ? (
         <Skeleton variant="row" count={6} />

@@ -26,6 +26,8 @@ import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { stockApi, transfersApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
+import { listAllStock } from "@/lib/api/stock.api";
+import { allStockValues } from "@/lib/stock-valuation";
 import { validateReportRange } from "@/lib/report-range";
 
 const PAGE_SIZE = 50;
@@ -50,8 +52,8 @@ export default function TransfersPage() {
   });
 
   const stock = useQuery({
-    queryKey: queryKeys.stock.list,
-    queryFn: () => stockApi.list(),
+    queryKey: queryKeys.stock.allProducts,
+    queryFn: () => listAllStock(stockApi),
   });
 
   // Read before the render branches narrow `transfers`.
@@ -64,10 +66,7 @@ export default function TransfersPage() {
     [transfers.data],
   );
 
-  const totalWorth = (stock.data ?? []).reduce(
-    (sum, row) => sum + BigInt(row.worthAtCostKobo),
-    0n,
-  );
+  const totalWorth = allStockValues(stock.data ?? []).cost;
 
   const columns: ResponsiveTableColumn<StockTransferDto>[] = [
     {
@@ -125,7 +124,7 @@ export default function TransfersPage() {
               across locations. A transfer only changes where the stock sits,
               not the total stock value by itself.
             </InfoHint>
-            : <Money kobo={totalWorth} tone="neutral" />
+            : {stock.isPending ? "Loading..." : stock.isError ? "Unavailable" : <Money kobo={totalWorth} tone="neutral" />}
           </>
         }
         actions={
@@ -135,6 +134,14 @@ export default function TransfersPage() {
           </Link>
         }
       />
+
+      {stock.isError && (
+        <ErrorState
+          title="Stock value could not be loaded"
+          message={toUserMessage(stock.error)}
+          onRetry={() => void stock.refetch()}
+        />
+      )}
 
       <section className="space-y-4 rounded-md border border-border bg-card p-4 sm:p-5">
         <DateRangeFilter

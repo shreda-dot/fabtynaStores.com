@@ -835,7 +835,10 @@ migration or `expected-schema.ts` object:
   totals remain independent of the current search and cursor.
 - `/stock` and `/stock/low` read the trigger-maintained `stock_balances`
   cache. Valuation uses the shared stock-domain helpers, including pro-rata
-  loose-unit valuation at wholesale price.
+  loose-unit valuation at wholesale price, floored per product before summing.
+  `/stock` includes current prices and location quantities in its items;
+  its totals include inactive products, independent of the active item filter.
+  Warehouse, fridge and Transfers load all active and inactive stock pages.
 
 These reads use fixed statement counts rather than per-row queries: products
 list 1/detail 3, stock list 2/low-stock 1, customer/supplier list 1 each,
@@ -867,6 +870,10 @@ The reports slice adds no tables, columns, indexes, or migrations:
   liabilities, and `stock_balances` provides current inventory. It does not
   read `cash_snapshots`. MARKET stock is valued with retail/shelf units, and
   loose warehouse units are valued pro rata by the shared accounting domain.
+- Dashboard `stock.expectedWorthKobo` uses that same expected stock calculation
+  at zero discount; the existing cost, retail and wholesale figures each cover
+  all locations. An optional Financial Position stock discount can make its
+  displayed expected value lower than the Dashboard's undiscounted figure.
 
 Date-range endpoints default to the current Lagos business date and enforce the
 configured inclusive maximum (366 days by default). In a focused test-DB run,

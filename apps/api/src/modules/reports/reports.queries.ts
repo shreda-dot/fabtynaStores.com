@@ -9,6 +9,8 @@ import {
   stockWorthAtRetail,
   stockWorthAtWholesale,
   expectedStockValueKobo,
+  familySupportByPostingDate,
+  familySupportProfitSummary,
   type Account,
   type AccountLedgerEntry,
   type Expense,
@@ -164,11 +166,24 @@ export async function getSalesSummary(
   maxDays: number,
 ) {
   const range = summaryDateRange(query, now, maxDays);
-  const data = await loadSalesSummaryData(prisma, range.start, range.end);
+  const [data, drawingEntries] = await Promise.all([
+    loadSalesSummaryData(prisma, range.start, range.end),
+    prisma.$queryRaw<Array<Pick<AccountLedgerEntry, "id" | "type" | "amountKobo" | "occurredAt" | "reversesEntryId">>>`
+      SELECT ale.id, ale.type, ale."amountKobo", ale."occurredAt", ale."reversesEntryId"
+        FROM account_ledger_entries ale
+        JOIN accounts a ON a.id = ale."accountId" AND NOT a."isHolding"
+        JOIN drawings d ON d."entryId" = COALESCE(ale."reversesEntryId", ale.id)
+       WHERE ale.type = 'OWNER_DRAWING' AND ale."occurredAt" >= ${range.start}
+         AND ale."occurredAt" < ${range.end}`,
+  ]);
+  const allChannels = salesSummary(
+    range.start, range.end, data.sales, data.lines, data.products, data.expenses,
+    data.payments, data.reversedPaymentIds,
+  );
   const sales = query.channel
     ? data.sales.filter((sale) => sale.channel === query.channel)
     : data.sales;
-  const result = salesSummary(
+  const result = query.channel ? salesSummary(
     range.start,
     range.end,
     sales,
@@ -177,7 +192,7 @@ export async function getSalesSummary(
     data.expenses,
     data.payments,
     data.reversedPaymentIds,
-  );
+  ) : allChannels;
   const filtered = filterSummaryChannel(result.days, result.totals, query.channel);
   return {
     days: filtered.days.map(stringifyDay),
@@ -185,6 +200,11 @@ export async function getSalesSummary(
     from: range.from,
     to: range.to,
     channel: query.channel ?? null,
+    familySupport: familySupportProfitSummary(allChannels, familySupportByPostingDate(
+      drawingEntries,
+      new Set(drawingEntries.map((entry) => entry.reversesEntryId ?? entry.id)),
+      range.start, range.end,
+    )),
   };
 }
 
@@ -485,6 +505,9 @@ export async function getMoneyFlow(
       debtsFromRangeSalesKobo: report.salesDebtOutstandingKobo.toString(),
       debtsOwedNowKobo: (customerBalanceRows[0]?.debtsOwedNowKobo ?? 0n).toString(),
     },
+    familySupportTakenKobo: familySupportByPostingDate(
+      entries, new Set(drawingRows.map((row) => row.entryId)), range.start, range.end,
+    ).totalKobo.toString(),
   };
 }
 

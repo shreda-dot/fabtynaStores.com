@@ -261,6 +261,7 @@ export default function AccountsPage() {
           isReversal: entry.reversesEntryId !== null,
           reversesEntryId: entry.reversesEntryId,
           reversedByEntryId: null,
+          sourceExpenseVoided: false,
           runningBalanceKobo: balanceKobo.toString(),
         })),
         openingBalanceKobo: "0",
@@ -939,8 +940,15 @@ export default function AccountsPage() {
                                 <Money kobo={entry.runningBalanceKobo} />
                               </td>
                               <td className="py-2.5 text-right">
+                                {entry.sourceExpenseVoided && entry.reversesEntryId === null && (
+                                  <Link href="/family-support" className="text-sm text-primary underline">
+                                    Visit Family Support
+                                  </Link>
+                                )}
                                 {!isMockApiMode &&
                                   entry.reversesEntryId === null &&
+                                  entry.reversedByEntryId === null &&
+                                  !entry.sourceExpenseVoided &&
                                   ["OWNER_CAPITAL", "OWNER_DRAWING", "OTHER_INCOME", "BANK_OR_POS_CHARGE"].includes(entry.type) && (
                                     <Button
                                       size="sm"

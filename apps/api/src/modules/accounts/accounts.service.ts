@@ -434,6 +434,19 @@ export function createAccountsService(options: AccountsServiceOptions) {
         if (!["OWNER_CAPITAL", "OWNER_DRAWING", "OTHER_INCOME", "BANK_OR_POS_CHARGE"].includes(target.type)) {
           throw businessRuleError("Only manual money movements can be reversed here.", { entryId });
         }
+        if (target.type === "OWNER_DRAWING") {
+          counted(ctx);
+          const drawing = await ctx.tx.drawing.findUnique({
+            where: { entryId },
+            select: { sourceExpense: { select: { voidedAt: true } } },
+          });
+          if (drawing?.sourceExpense?.voidedAt) {
+            throw businessRuleError(
+              "This drawing is linked to a voided expense and cannot be reversed. Visit Family Support for help.",
+              { entryId },
+            );
+          }
+        }
         const entries = await reverseEntries(ctx, [target], reason);
         await createLedgerRows(ctx, entries);
         return {
@@ -501,6 +514,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
         reversedByEntryId: string | null;
         sourceDescription: string | null;
         drawingEntryId: string | null;
+        sourceExpenseVoided: boolean | null;
         runningBalanceKobo: string | null;
         openingBalanceKobo: string;
         closingBalanceKobo: string;
@@ -515,6 +529,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
                  ale."occurredAt", ale.note, ale."reversesEntryId",
                  reversal.id AS "reversedByEntryId",
                  drawing."entryId" AS "drawingEntryId",
+                 (source_expense."voidedAt" IS NOT NULL) AS "sourceExpenseVoided",
                  CASE
                    WHEN ale."expenseId" IS NOT NULL THEN 'Expense: ' || e.description
                    WHEN ale."purchaseId" IS NOT NULL THEN 'Purchase: ' || COALESCE(p.reference, ale."purchaseId")
@@ -529,6 +544,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
             FROM account_ledger_entries ale
             LEFT JOIN account_ledger_entries reversal ON reversal."reversesEntryId" = ale.id
             LEFT JOIN drawings drawing ON drawing."entryId" = COALESCE(ale."reversesEntryId", ale.id)
+            LEFT JOIN expenses source_expense ON source_expense.id = drawing."sourceExpenseId"
             LEFT JOIN expenses e ON e.id = ale."expenseId"
             LEFT JOIN purchases p ON p.id = ale."purchaseId"
            WHERE ale."accountId" = ${accountId}
@@ -546,7 +562,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
           ORDER BY r."occurredAt", r.id
           LIMIT ${query.limit + 1}
         )
-        SELECT page.id, page.type, page."amountKobo", page."occurredAt", page.note, page."drawingEntryId",
+        SELECT page.id, page.type, page."amountKobo", page."occurredAt", page.note, page."drawingEntryId", page."sourceExpenseVoided",
                page."reversesEntryId", page."reversedByEntryId", page."sourceDescription",
                (totals.opening::bigint + page."rangeRunningKobo"::bigint)::text AS "runningBalanceKobo",
                totals.opening AS "openingBalanceKobo", totals.closing AS "closingBalanceKobo"
@@ -586,6 +602,7 @@ export function createAccountsService(options: AccountsServiceOptions) {
           isReversal: entry.reversesEntryId !== null,
           reversesEntryId: entry.reversesEntryId,
           reversedByEntryId: entry.reversedByEntryId,
+          sourceExpenseVoided: entry.sourceExpenseVoided === true,
           runningBalanceKobo: entry.runningBalanceKobo,
         })),
         nextCursor,

@@ -98,6 +98,7 @@ describe("money flow mapping", () => {
   const fixture = {
     from: "2026-01-01",
     to: "2026-01-31",
+    familySupportTakenKobo: "0",
     rows: [
       {
         accountId: "bank",
@@ -261,6 +262,7 @@ describe("runtime response validation", () => {
         from: "2026-01-01",
         to: "2026-01-01",
         channel: null,
+        familySupport: { netProfitKobo: "0", familySupportTakenKobo: "0", netProfitLessFamilySupportKobo: "0", days: [] },
         extra: true,
       },
       "sales-summary",

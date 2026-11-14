@@ -4,7 +4,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { computeFinancialPosition, formatNaira } from "@fabtyna/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { accountingApi } from "@/lib/api";
-import type { AccountingPosition } from "@/lib/api/accounting.api";
+import type { AccountingPosition, MoneyFlowReportDto } from "@/lib/api/accounting.api";
 import AccountingOverviewPage from "./page";
 
 vi.mock("@/lib/api", () => ({
@@ -17,7 +17,7 @@ vi.mock("@/lib/api", () => ({
 
 afterEach(cleanup);
 
-async function showPage(ownerWithdrawals: AccountingPosition["ownerWithdrawals"]) {
+async function showPage(ownerWithdrawals: AccountingPosition["ownerWithdrawals"], flow?: MoneyFlowReportDto) {
   vi.mocked(accountingApi.position).mockResolvedValue({
     ...computeFinancialPosition({
       todayLagosDate: "2026-11-09",
@@ -30,7 +30,9 @@ async function showPage(ownerWithdrawals: AccountingPosition["ownerWithdrawals"]
     ownerWithdrawals,
   });
   vi.mocked(accountingApi.listAccounts).mockResolvedValue([]);
-  vi.mocked(accountingApi.moneyFlow).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(accountingApi.moneyFlow).mockImplementation(
+    flow ? async () => flow : () => new Promise(() => {}),
+  );
 
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -41,6 +43,20 @@ async function showPage(ownerWithdrawals: AccountingPosition["ownerWithdrawals"]
 }
 
 describe("Accounting overview owner withdrawals", () => {
+  it("shows the Family Support figure for the selected Money Flow period", async () => {
+    await showPage(
+      { drawingsKobo: 1000n, legacyLoanKobo: 0n, unclassifiedKobo: 0n },
+      {
+        familySupportTakenKobo: "2500", totalsExcludeTransfers: true, rows: [],
+        totals: { openingBalanceKobo: "0", moneyInKobo: "0", moneyOutKobo: "0", netKobo: "0", closingBalanceKobo: "0" },
+        sales: { billedKobo: "0", customerMoneyReceivedKobo: "0", debtOutstandingKobo: "0" },
+      },
+    );
+    const flow = screen.getByRole("heading", { name: "Money flow" }).closest("section");
+    within(flow!).getByText("Family Support taken for this period");
+    expect(within(flow!).getByText(formatNaira(2500n))).toBeTruthy();
+  });
+
   it("shows all nonzero amounts in summary rows immediately after account balances", async () => {
     await showPage({ drawingsKobo: 1000n, legacyLoanKobo: 2000n, unclassifiedKobo: 3000n });
 

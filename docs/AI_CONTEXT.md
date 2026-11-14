@@ -20,9 +20,17 @@ this file does not change code, migrations or `.env`.
 > Family Support history offers Lagos-date presets (Today, Yesterday, last 14
 > or 30 inclusive days, and this month) plus a custom range. Editing either
 > date switches to Custom. The Accounting withdrawal card remains all-time.
-> Family Support history hides Reverse for source-linked drawings; this is a
-> UI-only safeguard, not an API or database restriction. Reversing one through
-> the existing API returns money but leaves the original expense voided.
+> Family Support history hides Reverse for source-linked drawings. The account
+> statement and API also refuse to reverse a drawing whose source expense is
+> voided; the API directs the user to Family Support. Ordinary drawings remain
+> reversible. This is an application rule, not a database trigger.
+> Sales summary displays all-channel net profit, Family Support taken and net
+> profit less Family Support in a separate block. The last two CSV columns use
+> all channels even when the original sales columns are channel-filtered.
+> Family Support is net of ledger reversals by posting date; this does not
+> alter net profit, COGS or expenses. Overview shows the same calculation for
+> the Money Flow date range and selected account; Financial Position itself has
+> no date range and retains its all-time owner drawings.
 
 Repository root: `c:\Users\Shreda\fabtyna-stores` (Windows, PowerShell).
 pnpm workspace (`pnpm-workspace.yaml`: `apps/*`, `packages/*`), `packageManager: pnpm@10.15.1`.

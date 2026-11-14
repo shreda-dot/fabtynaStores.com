@@ -7,7 +7,7 @@ import type {
     Sale,
 } from "./types.ts";
 import { formatNaira } from "../money.ts";
-import type { IdGenerator } from "./operations.ts";
+import type { IdGenerator, SalesSummaryResult } from "./operations.ts";
 import { validateAccountLedgerAmount } from "./ledger.ts";
 import { getLagosBusinessDate } from "../lagos-time.ts";
 
@@ -584,6 +584,46 @@ export function ownerWithdrawalTotals(
         totals[key] -= entry.amountKobo;
     }
     return totals;
+}
+
+export function familySupportByPostingDate(
+    entries: readonly Pick<AccountLedgerEntry, "id" | "type" | "amountKobo" | "reversesEntryId" | "occurredAt">[],
+    drawingEntryIds: ReadonlySet<string>,
+    from: Date,
+    to: Date,
+): { totalKobo: bigint; days: Map<string, bigint> } {
+    const days = new Map<string, bigint>();
+    let totalKobo = 0n;
+    for (const entry of entries) {
+        if (entry.type !== "OWNER_DRAWING" || entry.occurredAt < from || entry.occurredAt >= to ||
+            !drawingEntryIds.has(entry.reversesEntryId ?? entry.id)) continue;
+        const amount = -entry.amountKobo;
+        const date = getLagosBusinessDate(entry.occurredAt);
+        days.set(date, (days.get(date) ?? 0n) + amount);
+        totalKobo += amount;
+    }
+    return { totalKobo, days };
+}
+
+export function familySupportProfitSummary(
+    sales: SalesSummaryResult,
+    drawings: ReturnType<typeof familySupportByPostingDate>,
+) {
+    const profits = new Map(sales.days.map((day) => [day.date, day.totalNetProfitKobo]));
+    const dates = new Set([...profits.keys(), ...drawings.days.keys()]);
+    return {
+        netProfitKobo: sales.totals.totalNetProfitKobo.toString(),
+        familySupportTakenKobo: drawings.totalKobo.toString(),
+        netProfitLessFamilySupportKobo: (sales.totals.totalNetProfitKobo - drawings.totalKobo).toString(),
+        days: [...dates].sort().map((date) => {
+            const amount = drawings.days.get(date) ?? 0n;
+            return {
+                date,
+                familySupportTakenKobo: amount.toString(),
+                netProfitLessFamilySupportKobo: ((profits.get(date) ?? 0n) - amount).toString(),
+            };
+        }),
+    };
 }
 
 export interface AccountMoneyFlowCategory {

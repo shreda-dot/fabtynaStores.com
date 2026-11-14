@@ -34,6 +34,7 @@ export type AccountStatementEntryDto = {
   isReversal: boolean;
   reversesEntryId: string | null;
   reversedByEntryId: string | null;
+  sourceExpenseVoided: boolean;
   runningBalanceKobo: string;
 };
 
@@ -66,6 +67,7 @@ export interface MoneyFlowAccountDto {
 }
 
 export interface MoneyFlowReportDto {
+  familySupportTakenKobo: string;
   /** Effective Lagos range; real mode only. */
   from?: string;
   to?: string;

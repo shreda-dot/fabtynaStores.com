@@ -62,6 +62,12 @@ export type SalesSummaryDto = {
   from: string;
   to: string;
   channel: ReportChannel | null;
+  familySupport: {
+    netProfitKobo: string;
+    familySupportTakenKobo: string;
+    netProfitLessFamilySupportKobo: string;
+    days: Array<{ date: string; familySupportTakenKobo: string; netProfitLessFamilySupportKobo: string }>;
+  };
 };
 
 export type SalesSummaryQuery = {

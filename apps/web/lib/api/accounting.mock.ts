@@ -12,6 +12,7 @@ import {
   buildOpeningBalanceEntry,
   buildReconcileAdjustment,
   computeFinancialPosition,
+  familySupportByPostingDate,
   createAccountDtoSchema,
   createAccountTransferDtoSchema,
   createOpeningBalanceDtoSchema,
@@ -219,6 +220,10 @@ export const accountingMockApi: AccountingApi = {
     );
     return {
       totalsExcludeTransfers: false,
+      familySupportTakenKobo: familySupportByPostingDate(
+        store.accountLedgerEntries.filter((entry) => !accountId || entry.accountId === accountId),
+        new Set(store.drawings.map((drawing) => drawing.entryId)), start, end,
+      ).totalKobo.toString(),
       rows: report.rows.map((row) => ({
         accountId: row.accountId,
         accountName: row.accountName,
@@ -483,10 +488,14 @@ export const accountingMockApi: AccountingApi = {
       const label = withdrawal === "OWNER_DRAWING" ? "Owner drawing"
         : withdrawal === "LEGACY_LOAN_REPAYMENT" ? "Legacy loan repayment"
           : withdrawal === "UNCLASSIFIED_WITHDRAWAL" ? "Unclassified legacy withdrawal" : entry.note ?? entry.type.replaceAll("_", " ");
+      const drawing = store.drawings.find((item) => item.entryId === (entry.reversesEntryId ?? entry.id));
+      const sourceExpense = drawing?.sourceExpenseId == null ? null : store.expenses.find((item) => item.id === drawing.sourceExpenseId);
+      if (drawing?.sourceExpenseId != null && !sourceExpense) throw new Error("Drawing source expense is missing.");
       return [{
         id: entry.id, type: entry.type, amountKobo: entry.amountKobo.toString(), occurredAt: entry.occurredAt.toISOString(),
         note: entry.note, sourceDescription: label, isReversal: entry.reversesEntryId !== null,
         reversesEntryId: entry.reversesEntryId, reversedByEntryId: reversedIds.get(entry.id) ?? null,
+        sourceExpenseVoided: sourceExpense?.voidedAt != null,
         runningBalanceKobo: running.toString(),
       }];
     });

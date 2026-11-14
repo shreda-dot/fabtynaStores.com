@@ -29,11 +29,13 @@ describe("mock family support", () => {
     expect(readMockStore().expenses).toHaveLength(beforeExpenses);
     expect((await accountingMockApi.position()).ownerWithdrawals.drawingsKobo).toBe(6000n);
     const flow = await accountingMockApi.moneyFlow(today, today, cash.id);
+    expect(flow.familySupportTakenKobo).toBe("6000");
     expect(flow.rows[0].categories).toContainEqual({ key: "OWNER_DRAWING", moneyInKobo: "0", moneyOutKobo: "6000" });
     const statement = await accountingMockApi.statementPage!(cash.id);
     expect(statement.entries.find((row) => row.type === "OWNER_DRAWING")?.sourceDescription).toBe("Owner drawing");
     const item = report.items[0];
     await familySupportMockApi.reverseDrawing(item.id, "Correction", "reverse-key-1");
+    expect((await accountingMockApi.moneyFlow(today, today, cash.id)).familySupportTakenKobo).toBe("0");
     expect((await familySupportMockApi.listDrawings({ from: today, to: today })).report.totalKobo).toBe("0");
     expect((await accountingMockApi.listAccounts()).find((account) => account.id === cash.id)?.balanceKobo).toBe("10000");
     expect((await accountingMockApi.position()).ownerWithdrawals.drawingsKobo).toBe(0n);
@@ -93,5 +95,7 @@ describe("mock family support", () => {
     expect((await familySupportMockApi.listDrawings({ from: today, to: today, accountId: bank.id })).report.count).toBe(0);
     const flow = await accountingMockApi.moneyFlow(today, today, bank.id);
     expect(flow.rows[0].categories).toContainEqual({ key: "OWNER_DRAWING", moneyInKobo: "0", moneyOutKobo: "10000" });
+    expect((await accountingMockApi.statementPage!(bank.id)).entries.find((entry) => entry.id === "history-entry")?.sourceExpenseVoided).toBe(true);
+    await expect(familySupportMockApi.reverseDrawing("history-drawing", "Correction")).rejects.toThrow(/Family Support/);
   });
 });

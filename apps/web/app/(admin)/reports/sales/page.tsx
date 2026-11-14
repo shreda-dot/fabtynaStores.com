@@ -33,25 +33,11 @@ import type {
   SalesSummaryTotalsDto,
 } from "@/lib/api/reports.api";
 import { queryKeys } from "@/lib/query-keys";
+import { salesReportCsv } from "@/lib/sales-report-csv";
 import {
   REPORT_STALE_MS,
   validateReportRange,
 } from "@/lib/report-range";
-
-/** Formats a kobo integer string as a plain decimal string for CSV export. */
-function koboToDecimal(kobo: string): string {
-  const value = BigInt(kobo || "0");
-  const negative = value < 0n;
-  const absolute = negative ? -value : value;
-  const whole = absolute / 100n;
-  const fraction = (absolute % 100n).toString().padStart(2, "0");
-  return `${negative ? "-" : ""}${whole.toString()}.${fraction}`;
-}
-
-function csvCell(value: string): string {
-  if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
-}
 
 type ChannelTotalsRow = {
   label: string;
@@ -206,27 +192,8 @@ export default function SalesReportPage() {
   const totals = report.data?.totals;
 
   function exportCsv() {
-    const header = [
-      "Date",
-      "Supposed revenue",
-      "Gotten revenue",
-      "COGS",
-      "Gross profit",
-      "Expenses",
-      "Net profit",
-    ];
-    const rows = days.map((day) => [
-      day.date,
-      koboToDecimal(day.totalSupposedRevenueKobo),
-      koboToDecimal(day.totalRevenueGottenKobo),
-      koboToDecimal(day.totalCogsKobo),
-      koboToDecimal(day.totalGrossProfitKobo),
-      koboToDecimal(day.totalExpensesKobo),
-      koboToDecimal(day.totalNetProfitKobo),
-    ]);
-    const csv = [header, ...rows]
-      .map((row) => row.map((cell) => csvCell(cell)).join(","))
-      .join("\n");
+    if (!report.data) return;
+    const csv = salesReportCsv(report.data);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -345,14 +312,33 @@ export default function SalesReportPage() {
 
           <Card>
             <CardHeader
+              title="Profit after Family Support"
+              description="All channels, for the selected period, even when a channel filter is selected."
+              action={
+                <InfoHint label="About Family Support">
+                  Money taken out for family. It does not reduce business profit; this line only shows what is left after it.
+                </InfoHint>
+              }
+            />
+            <CardBody>
+              <dl className="space-y-2 text-sm">
+                <div className="flex justify-between gap-4"><dt>Net profit (all channels)</dt><dd><Money kobo={report.data.familySupport.netProfitKobo} /></dd></div>
+                <div className="flex justify-between gap-4"><dt>Family Support taken</dt><dd><Money kobo={report.data.familySupport.familySupportTakenKobo} /></dd></div>
+                <div className="flex justify-between gap-4 font-semibold"><dt>Net profit less Family Support</dt><dd><Money kobo={report.data.familySupport.netProfitLessFamilySupportKobo} /></dd></div>
+              </dl>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader
               title="Daily breakdown"
-              description="Newest first. Totals across the selected channel."
+              description="Newest first. Totals across the selected channel. The last two CSV columns always use all channels."
               action={
                 <Button
                   variant="secondary"
                   size="sm"
                   onClick={exportCsv}
-                  disabled={days.length === 0}
+                  disabled={days.length === 0 && report.data.familySupport.days.length === 0}
                 >
                   <Download aria-hidden="true" className="h-4 w-4" />
                   Export CSV

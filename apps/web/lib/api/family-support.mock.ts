@@ -130,6 +130,11 @@ const implementation: FamilySupportApi = {
       const drawing = store.drawings.find((item) => item.id === id);
       const entry = store.accountLedgerEntries.find((item) => item.id === drawing?.entryId);
       if (!entry) throw new MockFamilyError("Drawing not found.");
+      const sourceExpense = drawing?.sourceExpenseId == null ? null : store.expenses.find((item) => item.id === drawing.sourceExpenseId);
+      if (drawing?.sourceExpenseId != null && !sourceExpense) throw new Error("Drawing source expense is missing.");
+      if (sourceExpense?.voidedAt != null) {
+        throw new MockFamilyError("This drawing is linked to a voided expense and cannot be reversed. Visit Family Support for help.");
+      }
       if (store.accountLedgerEntries.some((item) => item.reversesEntryId === entry.id)) throw new MockFamilyError("Drawing is already reversed.");
       const reversal = { ...entry, id: newId(), amountKobo: -entry.amountKobo, reversesEntryId: entry.id, note: reason.trim(), occurredAt: new Date() };
       store.accountLedgerEntries.push(reversal);

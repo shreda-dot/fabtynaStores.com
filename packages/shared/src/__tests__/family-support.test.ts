@@ -5,6 +5,9 @@ import {
   familyMemberInputSchema,
   ownerWithdrawalCategory,
   ownerWithdrawalTotals,
+  familySupportByPostingDate,
+  familySupportProfitSummary,
+  salesSummary,
   buildAccountLedgerEntry,
   validateAccountLedgerEntry,
   validateAccountLedgerReversals,
@@ -96,6 +99,34 @@ describe("family support contracts", () => {
     expect(ownerWithdrawalTotals(entries, documented)).toEqual({
       drawingsKobo: 0n, legacyLoanKobo: 27100000n, unclassifiedKobo: 20n,
     });
+  });
+
+  it("uses posting dates and nets reversals without changing business profit", () => {
+    const from = new Date("2026-10-28T23:00:00Z");
+    const to = new Date("2026-10-30T23:00:00Z");
+    const entries = [
+      { id: "in", type: "OWNER_DRAWING" as const, amountKobo: -500n, reversesEntryId: null, occurredAt: from },
+      { id: "undo", type: "OWNER_DRAWING" as const, amountKobo: 500n, reversesEntryId: "in", occurredAt: new Date("2026-10-29T23:30:00Z") },
+      { id: "out", type: "OWNER_DRAWING" as const, amountKobo: -300n, reversesEntryId: null, occurredAt: to },
+      { id: "legacy", type: "OWNER_DRAWING" as const, amountKobo: -900n, reversesEntryId: null, occurredAt: from },
+    ];
+    const drawings = familySupportByPostingDate(entries, new Set(["in", "out"]), from, to);
+    expect(drawings.totalKobo).toBe(0n);
+    expect([...drawings.days]).toEqual([["2026-10-29", 500n], ["2026-10-30", -500n]]);
+    const expense = {
+      id: "expense", channel: "RETAIL" as const, category: "OTHER" as const, description: "Expense",
+      amountKobo: 1000n, expenseDate: from, loanRepaymentId: null, voidedAt: null, voidReason: null,
+      createdAt: from, updatedAt: from,
+    };
+    const sales = salesSummary(from, to, [], [], [], [expense], [], new Set());
+    const result = familySupportProfitSummary(sales, drawings);
+    expect(sales.totals.totalNetProfitKobo).toBe(-1000n);
+    expect(result).toMatchObject({ netProfitKobo: "-1000", familySupportTakenKobo: "0", netProfitLessFamilySupportKobo: "-1000" });
+    expect(result.days).toEqual([
+      { date: "2026-10-29", familySupportTakenKobo: "500", netProfitLessFamilySupportKobo: "-1500" },
+      { date: "2026-10-30", familySupportTakenKobo: "-500", netProfitLessFamilySupportKobo: "500" },
+    ]);
+    expect(familySupportByPostingDate([], new Set(), from, to).totalKobo).toBe(0n);
   });
 
   it("accepts an exact drawing reversal but still rejects a wrong-signed original", () => {

@@ -1,6 +1,8 @@
 import {
   getLagosBusinessDate,
   getLagosBusinessDayRange,
+  familySupportByPostingDate,
+  familySupportProfitSummary,
   salesSummary,
   type SalesSummaryResult,
 } from "@fabtyna/shared";
@@ -16,11 +18,13 @@ function delay(): Promise<void> {
 function toDto(
   result: SalesSummaryResult,
   range: { from: string; to: string },
+  familySupport: SalesSummaryDto["familySupport"],
 ): SalesSummaryDto {
   return {
     from: range.from,
     to: range.to,
     channel: null,
+    familySupport,
     days: result.days.map((day) => ({
       date: day.date,
       retailSupposedRevenueKobo: day.retailSupposedRevenueKobo.toString(),
@@ -101,7 +105,11 @@ export const reportsMockApi: ReportsApi = {
           .filter((paymentId): paymentId is string => paymentId !== null && paymentId !== undefined),
       ),
     );
-    return toDto(result, { from, to });
+    const drawings = familySupportByPostingDate(
+      store.accountLedgerEntries, new Set(store.drawings.map((drawing) => drawing.entryId)),
+      getLagosBusinessDayRange(from).start, getLagosBusinessDayRange(to).end,
+    );
+    return toDto(result, { from, to }, familySupportProfitSummary(result, drawings));
   },
 
   // Demo data has no dashboard or product-sales endpoint; pages hide these in mock mode.

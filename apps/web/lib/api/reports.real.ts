@@ -86,6 +86,7 @@ export function mapMoneyFlow(response: MoneyFlowResponse): MoneyFlowReportDto {
     from: response.from,
     to: response.to,
     totalsExcludeTransfers: true,
+    familySupportTakenKobo: response.familySupportTakenKobo,
     // The API key is an entry type or "EXPENSE:<code>"; flowCategoryLabel handles both.
     rows: response.rows as MoneyFlowReportDto["rows"],
     totals: response.totals,

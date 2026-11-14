@@ -763,7 +763,18 @@ export default function AccountingOverviewPage() {
               onRetry={() => void moneyFlowQuery.refetch()}
             />
           ) : (
-            <MoneyFlowView data={moneyFlowQuery.data} />
+            <>
+              <div className="rounded-md border border-border p-4">
+                <h3 className="font-semibold">Family Support taken for this period</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Net of reversals by posting date, using the dates and account selected above.
+                </p>
+                <p className="mt-2 font-semibold">
+                  <Money kobo={moneyFlowQuery.data.familySupportTakenKobo} />
+                </p>
+              </div>
+              <MoneyFlowView data={moneyFlowQuery.data} />
+            </>
           )}
         </CardBody>
       </Card>

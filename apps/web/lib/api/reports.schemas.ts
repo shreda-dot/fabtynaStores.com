@@ -37,6 +37,16 @@ export const salesSummaryResponseSchema = z.object({
   from: lagosDate,
   to: lagosDate,
   channel: channelSchema.nullable(),
+  familySupport: z.object({
+    netProfitKobo: koboString,
+    familySupportTakenKobo: koboString,
+    netProfitLessFamilySupportKobo: koboString,
+    days: z.array(z.object({
+      date: lagosDate,
+      familySupportTakenKobo: koboString,
+      netProfitLessFamilySupportKobo: koboString,
+    })),
+  }),
 });
 
 const metricSchema = z.object({ value: koboString, yesterday: koboString });
@@ -105,6 +115,7 @@ const moneyFlowRowSchema = z.object({
 export const moneyFlowResponseSchema = z.object({
   from: lagosDate,
   to: lagosDate,
+  familySupportTakenKobo: koboString,
   rows: z.array(moneyFlowRowSchema),
   totals: z.object({
     openingBalanceKobo: koboString,

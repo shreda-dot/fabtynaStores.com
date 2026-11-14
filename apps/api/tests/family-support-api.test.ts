@@ -27,6 +27,14 @@ describe("Family Support", () => {
     const positionBefore = await h.app.inject({ method: "GET", url: "/reports/financial-position" });
     expect(positionBefore.statusCode, positionBefore.body).toBe(200);
     const beforeDrawings = BigInt(positionBefore.json<{ ownerWithdrawals: { drawingsKobo: string } }>().ownerWithdrawals.drawingsKobo);
+    const today = getLagosBusinessDate(new Date());
+    const salesUrl = `/reports/sales-summary?from=${today}&to=${today}`;
+    const beforeSales = await h.app.inject({ method: "GET", url: salesUrl });
+    expect(beforeSales.statusCode, beforeSales.body).toBe(200);
+    const salesBefore = beforeSales.json<{
+      totals: Record<string, string>;
+      familySupport: { netProfitKobo: string; familySupportTakenKobo: string; netProfitLessFamilySupportKobo: string };
+    }>();
     const payload = {
       beneficiaryId: member.id, purpose: "MEDICAL", accountId: account.id,
       amountKobo: "6000", occurredAt: new Date().toISOString(), note: null,
@@ -41,7 +49,6 @@ describe("Family Support", () => {
     const insufficient = await h.app.inject({ method: "POST", url: "/drawings", payload: { ...payload, amountKobo: "5000" } });
     expect(insufficient.statusCode).toBeGreaterThanOrEqual(400);
     expect(await accountBalanceOf(h.pg, account.id)).toBe(4000n);
-    const today = getLagosBusinessDate(new Date());
     const query = `/drawings?from=${today}&to=${today}&accountId=${account.id}`;
     const listed = await h.app.inject({ method: "GET", url: query });
     expect(listed.statusCode, listed.body).toBe(200);
@@ -50,6 +57,17 @@ describe("Family Support", () => {
     expect(flow.statusCode, flow.body).toBe(200);
     expect(flow.json<{ rows: Array<{ categories: Array<{ key: string; moneyOutKobo: string }> }> }>().rows[0].categories)
       .toContainEqual({ key: "OWNER_DRAWING", moneyInKobo: "0", moneyOutKobo: "6000" });
+    expect(flow.json<{ familySupportTakenKobo: string }>().familySupportTakenKobo).toBe("6000");
+    const salesAfterResponse = await h.app.inject({ method: "GET", url: salesUrl });
+    expect(salesAfterResponse.statusCode, salesAfterResponse.body).toBe(200);
+    const salesAfter = salesAfterResponse.json<typeof salesBefore>();
+    expect(salesAfter.totals).toEqual(salesBefore.totals);
+    expect(salesAfter.familySupport.netProfitKobo).toBe(salesBefore.familySupport.netProfitKobo);
+    expect(BigInt(salesAfter.familySupport.familySupportTakenKobo) - BigInt(salesBefore.familySupport.familySupportTakenKobo)).toBe(6000n);
+    expect(BigInt(salesBefore.familySupport.netProfitLessFamilySupportKobo) - BigInt(salesAfter.familySupport.netProfitLessFamilySupportKobo)).toBe(6000n);
+    const filteredSales = await h.app.inject({ method: "GET", url: `${salesUrl}&channel=RETAIL` });
+    expect(filteredSales.statusCode, filteredSales.body).toBe(200);
+    expect(filteredSales.json<typeof salesAfter>().familySupport).toEqual(salesAfter.familySupport);
     const statement = await h.app.inject({ method: "GET", url: `/accounts/${account.id}/statement?from=${today}&to=${today}` });
     expect(statement.statusCode, statement.body).toBe(200);
     expect(statement.json<{ entries: Array<{ type: string; sourceDescription: string }> }>().entries)
@@ -60,6 +78,15 @@ describe("Family Support", () => {
     const id = created.json<{ id: string }>().id;
     const reversed = await h.app.inject({ method: "POST", url: `/drawings/${id}/reverse`, payload: { reason: "Correction" } });
     expect(reversed.statusCode, reversed.body).toBe(201);
+    const salesReversed = await h.app.inject({ method: "GET", url: salesUrl });
+    expect(salesReversed.statusCode, salesReversed.body).toBe(200);
+    expect(salesReversed.json<typeof salesBefore>().familySupport.familySupportTakenKobo).toBe(salesBefore.familySupport.familySupportTakenKobo);
+    expect(salesReversed.json<typeof salesBefore>().totals).toEqual(salesBefore.totals);
+    const ordinary = await h.app.inject({ method: "POST", url: "/drawings", payload: { ...payload, amountKobo: "1000" } });
+    expect(ordinary.statusCode, ordinary.body).toBe(201);
+    const entryId = ordinary.json<{ entryId: string }>().entryId;
+    const ordinaryReversed = await h.app.inject({ method: "POST", url: `/account-entries/${entryId}/reverse`, payload: { reason: "Correction" } });
+    expect(ordinaryReversed.statusCode, ordinaryReversed.body).toBe(201);
     expect(await accountBalanceOf(h.pg, account.id)).toBe(10000n);
     const after = await h.app.inject({ method: "GET", url: query });
     expect(after.json<{ report: { totalKobo: string; count: number } }>().report).toMatchObject({ totalKobo: "0", count: 0 });
@@ -160,19 +187,21 @@ describe("Family Support", () => {
       .toContainEqual({ key: "OWNER_DRAWING", moneyInKobo: "0", moneyOutKobo: "10000" });
     const statement = await h.app.inject({ method: "GET", url: `/accounts/${account.id}/statement?from=${today}&to=${today}` });
     expect(statement.statusCode, statement.body).toBe(200);
-    expect(statement.json<{ entries: Array<{ id: string }> }>().entries)
-      .toEqual(expect.arrayContaining([expect.objectContaining({ id: entryId })]));
-    const reversed = await h.app.inject({ method: "POST", url: `/drawings/${drawingId}/reverse`, payload: { reason: "Test reversal" } });
-    expect(reversed.statusCode, reversed.body).toBe(201);
+    expect(statement.json<{ entries: Array<{ id: string; sourceExpenseVoided: boolean }> }>().entries)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ id: entryId, sourceExpenseVoided: true })]));
+    for (const url of [`/drawings/${drawingId}/reverse`, `/account-entries/${entryId}/reverse`]) {
+      const reversed = await h.app.inject({ method: "POST", url, payload: { reason: "Test reversal" } });
+      expect(reversed.statusCode, reversed.body).toBe(409);
+      expect(reversed.body).toContain("Family Support");
+    }
     const after = await h.app.inject({ method: "GET", url: `/drawings?from=${originalDay}&to=${originalDay}&accountId=${account.id}` });
     expect(after.statusCode, after.body).toBe(200);
-    expect(after.json<{ report: { totalKobo: string; count: number } }>().report).toMatchObject({ totalKobo: "0", count: 0 });
-    expect(await accountBalanceOf(h.pg, account.id)).toBe(11000n);
+    expect(after.json<{ report: { totalKobo: string; count: number } }>().report).toMatchObject({ totalKobo: "10000", count: 1 });
+    expect(await accountBalanceOf(h.pg, account.id)).toBe(1000n);
     const expenseAfter = await h.pg.query<{ voidedAt: Date | null; voidReason: string | null }>(
       'SELECT "voidedAt", "voidReason" FROM expenses WHERE id = $1', [expense.id],
     );
     expect(expenseAfter.rows[0].voidedAt).not.toBeNull();
     expect(expenseAfter.rows[0].voidReason).toBe("Test classification");
-    console.log("Reclassified reverse on TEST: account 1000 -> 11000 kobo; expense remains voided; drawings total 10000 -> 0 kobo.");
   }, 120_000);
 });

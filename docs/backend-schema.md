@@ -24,6 +24,13 @@ the financial-position withdrawal lines are lifetime net movements already
 included in account balances, not additional deductions. The two specifically
 identified Blue Money entries are labelled as legacy loan repayments; other
 unlinked withdrawals remain unclassified. Neither label changes a ledger or loan.
+Sales summary and Money Flow calculate Family Support from documented drawing
+ledger movements, net of reversals on their posting dates. Sales summary's
+separate profit-after-support block and the last two CSV columns use all
+channels even if the original sales columns are channel-filtered. The API
+refuses reversal when a drawing's linked source expense is voided; account
+statements point to Family Support instead. No database trigger enforces this
+application-level rule, and ordinary drawing reversals remain available.
 
 > **The Prisma migration history is the single source of truth for the database.**
 > There is no `prisma/sql-drafts/` folder any more. Every `CHECK`, partial unique

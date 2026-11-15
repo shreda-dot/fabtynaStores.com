@@ -259,7 +259,12 @@ inventory; the legacy reversal API path was not independently exercised.
 Production still requires the coordinated rehearsal and rollout in DEPLOY.md.
 Product settings select a brewery's bottle and crate types and
 their conversion rates. Mapped sales record assumed returned containers without
-changing the Sales form; historical sales are not backfilled. For a 12-bottle
+changing the Sales form; historical sales are not backfilled. To track retail
+single bottles, add or reactivate a bottle type for the product's assigned
+brewery in Empties types, select it in Product empties settings, set bottles per
+retail unit above zero (normally one), and save container tracking. A missing
+mapping or a zero retail conversion does not record bottles for single-unit sales.
+For a 12-bottle
 pack, 0.5 and 0.25 packs count as 6 and 3 bottles respectively; only whole
 crates per product in the sale are counted. A sale void or amendment reverses
 its linked movements, subject to sufficient on-hand stock. A customer TAKE

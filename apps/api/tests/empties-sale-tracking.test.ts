@@ -20,14 +20,14 @@ afterAll(async () => {
   await h.close();
 });
 
-async function setup(unitsPerPack = 12) {
+async function setup(unitsPerPack = 12, retail = false) {
   const product = await seedProduct(h.pg, {
     stock: 20 * unitsPerPack,
     unitsPerPack,
-    location: "WAREHOUSE",
-    saleChannel: "WHOLESALE",
+    location: retail ? "RETAIL_SHELF" : "WAREHOUSE",
+    saleChannel: retail ? "RETAIL" : "WHOLESALE",
   });
-  const customer = await seedCustomer(h.pg, { type: "WHOLESALE" });
+  const customer = await seedCustomer(h.pg, { type: retail ? "RETAIL" : "WHOLESALE" });
   const ownerResponse = await h.app.inject({
     method: "POST",
     url: "/empties/owners",
@@ -89,6 +89,25 @@ async function owed(customerId: string, typeId: string): Promise<number> {
 }
 
 describe("silent sale-linked empties", () => {
+  it("tracks single retail bottles and reverses the exact bottle movement when the sale is voided", async () => {
+    const { product, customer, crate, bottle } = await setup(12, true);
+    const sale = await postSale(h.app, saleBody({
+      productId: product.id,
+      customerId: customer.id,
+      channel: "RETAIL",
+      location: "RETAIL_SHELF",
+      unit: "UNIT",
+      quantity: 3,
+    }));
+    expect(sale.status, JSON.stringify(sale.body)).toBe(201);
+    expect(await onHand(bottle.id)).toBe(3);
+    expect(await onHand(crate.id)).toBe(20);
+    const voided = await h.app.inject({ method: "POST", url: `/sales/${sale.body.id}/void` });
+    expect(voided.statusCode, voided.body).toBe(200);
+    expect(await onHand(bottle.id)).toBe(0);
+    expect(await onHand(crate.id)).toBe(20);
+  });
+
   describe("20 full and 20 empty crates", () => {
     let fixture: Awaited<ReturnType<typeof setup>>;
 

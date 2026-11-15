@@ -224,6 +224,26 @@ function ProductOwnerRow({
                     This type is inactive. Choose an active type or clear it before saving.
                   </p>
                 )}
+                {kind === "BOTTLE" && product.ownerId !== null &&
+                  !ownerTypes.some((type) => type.kind === "BOTTLE" && type.isActive) && (
+                    <p className="text-xs text-warning sm:col-span-3">
+                      No active bottle type is available for {product.ownerName ?? "this brewery"}.
+                      {" "}<Link href="/empties/types" className="text-primary underline">Add or reactivate a bottle type</Link>
+                      {" "}for this brewery, then return here, select it and save container tracking.
+                    </p>
+                  )}
+                {kind === "BOTTLE" && product.ownerId !== null && draft.typeId === "" &&
+                  ownerTypes.some((type) => type.kind === "BOTTLE" && type.isActive) && (
+                    <p className="text-xs text-warning sm:col-span-3">
+                      Single-unit sales are not tracked while Bottle type is Not tracked.
+                      Select a bottle type and save container tracking to enable it.
+                    </p>
+                  )}
+                {kind === "BOTTLE" && draft.typeId !== "" && draft.retail === "0" && (
+                  <p className="text-xs text-warning sm:col-span-3">
+                    Single-unit sales will not record empty bottles while bottles per retail unit is 0.
+                  </p>
+                )}
               </div>
             );
           })}

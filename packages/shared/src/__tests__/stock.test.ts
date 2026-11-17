@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertStockWillRemainNonnegative,
   calculateStockUnits,
+  calculateSizeClassTotals,
   calculateWeightedAverageCostKobo,
   createTransferLegPair,
   formatStockUnits,
@@ -86,6 +87,70 @@ describe("stock levels from movements", () => {
       wholesalePriceKobo: 100n,
       saleChannel: "BOTH",
     })).toEqual({ retailKobo: 0n, wholesaleKobo: 166n, totalKobo: 166n });
+  });
+});
+
+describe("size-class bottle totals", () => {
+  it("counts all full bottles and empties together without counting shells", () => {
+    expect(calculateSizeClassTotals(12, [12, 0, 0], 60)).toEqual({
+      stockBottles: 12,
+      emptyCrates: 5,
+      looseEmptyBottles: 0,
+      totalBottles: 72,
+      totalCrates: 6,
+      looseTotalBottles: 0,
+    });
+    expect(calculateSizeClassTotals(24, [15, 5, 0], 39)).toMatchObject({
+      emptyCrates: 1,
+      looseEmptyBottles: 15,
+      totalCrates: 2,
+      looseTotalBottles: 11,
+    });
+  });
+
+  it("rolls a sale of twelve bottles into one empty crate", () => {
+    const before = calculateSizeClassTotals(12, [12, 0, 0], 60);
+    const after = calculateSizeClassTotals(12, [0, 0, 0], 72);
+    expect([before.emptyCrates, after.emptyCrates]).toEqual([5, 6]);
+    expect([after.totalCrates, after.looseTotalBottles]).toEqual([
+      before.totalCrates,
+      before.looseTotalBottles,
+    ]);
+  });
+
+  it("conserves the total through transfers, partial sales and voids", () => {
+    for (const capacity of [12, 20, 24]) {
+      for (let sold = 0; sold <= capacity; sold++) {
+        const opening = calculateSizeClassTotals(capacity, [capacity, 0, 0], 5 * capacity + 3);
+        const transferred = calculateSizeClassTotals(capacity, [0, capacity, 0], 5 * capacity + 3);
+        const sale = calculateSizeClassTotals(capacity, [0, capacity - sold, 0], 5 * capacity + 3 + sold);
+        const voided = calculateSizeClassTotals(capacity, [0, capacity, 0], 5 * capacity + 3);
+        for (const state of [transferred, sale, voided]) {
+          expect([state.totalCrates, state.looseTotalBottles]).toEqual([
+            opening.totalCrates,
+            opening.looseTotalBottles,
+          ]);
+        }
+      }
+    }
+  });
+
+  it("conserves the total when a crate is broken into loose bottles", () => {
+    for (const capacity of [12, 20, 24]) {
+      const before = calculateSizeClassTotals(capacity, [capacity, 0, 0], capacity * 4);
+      const after = calculateSizeClassTotals(capacity, [capacity, 0, 0], capacity * 4);
+      expect([after.totalCrates, after.looseTotalBottles]).toEqual([
+        before.totalCrates,
+        before.looseTotalBottles,
+      ]);
+    }
+  });
+
+  it("rejects negative, fractional or unsafe counts and capacities", () => {
+    expect(() => calculateSizeClassTotals(1, [], 0)).toThrow(RangeError);
+    expect(() => calculateSizeClassTotals(12, [1.5], 0)).toThrow(RangeError);
+    expect(() => calculateSizeClassTotals(12, [1], -1)).toThrow(RangeError);
+    expect(() => calculateSizeClassTotals(12, [Number.MAX_SAFE_INTEGER], 1)).toThrow(RangeError);
   });
 });
 

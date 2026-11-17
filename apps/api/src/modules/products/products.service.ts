@@ -82,6 +82,7 @@ export function createProductsService(options: ProductsServiceOptions) {
               retailPriceKobo: BigInt(input.retailPriceKobo),
               wholesalePriceKobo: BigInt(input.wholesalePriceKobo),
               reorderLevelUnits: input.reorderLevelUnits,
+              purchaseEmpties: { create: { classification: input.emptiesClassification } },
             },
           });
           const after = dto(product);
@@ -89,7 +90,7 @@ export function createProductsService(options: ProductsServiceOptions) {
             actorId: actor.id,
             action: "PRODUCT_CREATED",
             entityId: product.id,
-            afterData: after as Prisma.InputJsonValue,
+            afterData: { ...after, emptiesClassification: input.emptiesClassification } as Prisma.InputJsonValue,
             metadata: {},
           });
           return { status: 201, body: after };

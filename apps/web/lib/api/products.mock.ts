@@ -9,6 +9,7 @@ import {
   type Product,
   type ProductDto,
 } from "@fabtyna/shared";
+import { z } from "zod";
 import type {
   ProductDetailDto,
   ProductsApi,
@@ -129,7 +130,9 @@ export const productsMockApi: ProductsApi = {
 
   async create(input) {
     await delay();
-    const data = validated(input);
+    const { emptiesClassification, ...productInput } = input;
+    const classification = z.enum(["RETURNABLE", "NON_RETURNABLE"]).parse(emptiesClassification);
+    const data = validated(productInput);
     const result = transactMockStore((draft) => {
       assertUniqueSku(draft.products, data.sku);
       const createdAt = new Date();
@@ -145,7 +148,8 @@ export const productsMockApi: ProductsApi = {
         updatedAt: createdAt,
       };
       draft.products.push(product);
-      audit(draft, "PRODUCT_CREATED", product.id, null, toProductDto(product));
+      draft.purchaseEmptiesClassifications.push({ productId: product.id, classification });
+      audit(draft, "PRODUCT_CREATED", product.id, null, { ...toProductDto(product), emptiesClassification: classification });
       return product;
     });
     return response(result);

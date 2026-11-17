@@ -63,9 +63,13 @@ async function seedSupplier(c: Client): Promise<string> {
 async function seedProduct(c: Client): Promise<string> {
     const id = nextId("vd_product");
     await c.query(
-        `INSERT INTO products
-       (id, name, category, "unitsPerPack", "retailPriceKobo", "wholesalePriceKobo", "updatedAt")
-     VALUES ($1, $2, 'BEER', 24, 150000::bigint, 140000::bigint, now())`,
+        `WITH product AS (
+       INSERT INTO products
+         (id, name, category, "unitsPerPack", "retailPriceKobo", "wholesalePriceKobo", "updatedAt")
+       VALUES ($1, $2, 'BEER', 24, 150000::bigint, 140000::bigint, now()) RETURNING id
+     )
+     INSERT INTO purchase_empties_products ("productId", classification)
+     SELECT id, 'NON_RETURNABLE' FROM product`,
         [id, "Void Test Beer"],
     );
     return id;

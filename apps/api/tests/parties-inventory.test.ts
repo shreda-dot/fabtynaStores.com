@@ -22,6 +22,65 @@ afterAll(async () => {
 });
 
 describe("catalogue and inventory read APIs", () => {
+  it("creates a classified product without an SKU and can clear an existing SKU", async () => {
+    const body = {
+      name: `Optional SKU ${newId("product")}`,
+      sku: null,
+      category: "OTHER",
+      packName: "case",
+      unitsPerPack: 12,
+      saleChannel: "BOTH",
+      emptiesClassification: "NON_RETURNABLE",
+      retailPriceKobo: "12000",
+      wholesalePriceKobo: "9000",
+      reorderLevelUnits: 0,
+    };
+    const created = await call(h.app, "POST", "/products", body);
+    expect(created.status).toBe(201);
+    expect(created.body.sku).toBeNull();
+
+    const productId = created.body.id as string;
+    const sku = newId("sku");
+    const withSku = await call(h.app, "PATCH", `/products/${productId}`, { sku: ` ${sku} ` });
+    expect(withSku.status).toBe(200);
+    expect(withSku.body.sku).toBe(sku.toUpperCase());
+    const cleared = await call(h.app, "PATCH", `/products/${productId}`, { sku: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.sku).toBeNull();
+    const renamed = await call(h.app, "PATCH", `/products/${productId}`, { name: `${body.name} renamed` });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.sku).toBeNull();
+  });
+
+  it("requires an explicit purchase empties classification for new products", async () => {
+    const body = {
+      name: `Classification ${newId("product")}`,
+      category: "OTHER",
+      packName: "case",
+      unitsPerPack: 12,
+      saleChannel: "BOTH",
+      retailPriceKobo: "12000",
+      wholesalePriceKobo: "9000",
+      reorderLevelUnits: 0,
+    };
+    const missing = await call(h.app, "POST", "/products", body);
+    expect(missing.status).toBe(400);
+
+    for (const emptiesClassification of ["RETURNABLE", "NON_RETURNABLE"]) {
+      const created = await call(h.app, "POST", "/products", {
+        ...body,
+        name: `${body.name} ${emptiesClassification}`,
+        emptiesClassification,
+      });
+      expect(created.status).toBe(201);
+      const result = await h.pg.query<{ classification: string }>(
+        `SELECT classification FROM purchase_empties_products WHERE "productId" = $1`,
+        [created.body.id],
+      );
+      expect(result.rows[0]?.classification).toBe(emptiesClassification);
+    }
+  });
+
   it("enforces active SKU uniqueness, supports reactivation rules, and protects used pack sizes", async () => {
     const sku = newId("sku").toUpperCase();
     const body = (name: string) => ({
@@ -31,6 +90,7 @@ describe("catalogue and inventory read APIs", () => {
       packName: "case",
       unitsPerPack: 3,
       saleChannel: "BOTH",
+      emptiesClassification: "NON_RETURNABLE",
       retailPriceKobo: "12000",
       wholesalePriceKobo: "9000",
       reorderLevelUnits: 0,
@@ -62,6 +122,7 @@ describe("catalogue and inventory read APIs", () => {
       packName: "case",
       unitsPerPack: 3,
       saleChannel: "BOTH",
+      emptiesClassification: "NON_RETURNABLE",
       retailPriceKobo: "12000",
       wholesalePriceKobo: "9000",
       reorderLevelUnits: 6,
@@ -134,12 +195,17 @@ describe("catalogue and inventory read APIs", () => {
   it("paginates more than 50 products and retains inactive stock in totals", async () => {
     const prefix = newId("inventory-pages");
     await h.pg.query(
-      `INSERT INTO products
-       (id, name, category, "unitsPerPack", "saleChannel", "retailPriceKobo", "wholesalePriceKobo",
-        "averageCostKobo", "deletedAt", "updatedAt")
-       SELECT $1 || '-p-' || n, $1 || ' ' || lpad(n::text, 3, '0'), 'OTHER', 3, 'BOTH',
-              120, 100, 100, CASE WHEN n = 52 THEN now() ELSE NULL END, now()
-         FROM generate_series(1, 52) n`,
+      `WITH products AS (
+         INSERT INTO products
+         (id, name, category, "unitsPerPack", "saleChannel", "retailPriceKobo", "wholesalePriceKobo",
+          "averageCostKobo", "deletedAt", "updatedAt")
+         SELECT $1 || '-p-' || n, $1 || ' ' || lpad(n::text, 3, '0'), 'OTHER', 3, 'BOTH',
+                120, 100, 100, CASE WHEN n = 52 THEN now() ELSE NULL END, now()
+           FROM generate_series(1, 52) n
+         RETURNING id
+       )
+       INSERT INTO purchase_empties_products ("productId", classification)
+       SELECT id, 'NON_RETURNABLE' FROM products`,
       [prefix],
     );
     await h.pg.query(

@@ -30,6 +30,7 @@ const product: ProductOwnerDto = {
 function bottle(id: string, ownerId = "brewery", isActive = true): EmptiesTypeDto {
   return {
     id, ownerId, ownerName: "Brewery", kind: "BOTTLE", label: id,
+    capacity: 12,
     isActive, unitValueKobo: null, createdAt: "2026-01-01T00:00:00Z",
   };
 }

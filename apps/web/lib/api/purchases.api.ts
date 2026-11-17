@@ -6,6 +6,7 @@ import type {
   SupplierDto,
   SupplierPaymentDto,
 } from "@fabtyna/shared";
+import type { PurchaseEmptiesPreviewDto, PurchaseEmptiesPreviewInput } from "./empties.api";
 
 export type PurchaseListItemDto = PurchaseDto & {
   supplierName: string | null;
@@ -43,6 +44,41 @@ export type PurchaseMoneyEntriesDto = {
   }>;
 };
 
+export type PurchaseEmptiesDetailDto = {
+  tracked: boolean;
+  requirements: Array<{
+    purchaseLineId: string;
+    typeId: string;
+    kind: "CRATE" | "BOTTLE";
+    quantity: number;
+    manualCrateCount: boolean;
+    countPerUnitSnapshot: number | null;
+    countPerPackSnapshot: number | null;
+    label: string;
+  }>;
+  events: Array<{
+    id: string;
+    eventType: string;
+    typeId: string;
+    kind: "CRATE" | "BOTTLE";
+    label: string;
+    obligationId: string | null;
+    quantity: number;
+    note: string | null;
+    reversesEntryId: string | null;
+    reversed: boolean;
+    occurredAt: string;
+  }>;
+  debts: Array<{
+    id: string;
+    supplierId: string;
+    typeId: string;
+    kind: "CRATE" | "BOTTLE";
+    label: string;
+    quantity: number;
+  }>;
+};
+
 export type PurchaseSupplierSummaryDto = Pick<SupplierDto, "id" | "name" | "phone"> & {
   isActive?: boolean;
 };
@@ -55,6 +91,7 @@ export type PurchaseDetailDto = PurchaseDto & {
   balanceDueKobo?: string;
   livePaymentsKobo?: string;
   moneyEntries?: PurchaseMoneyEntriesDto;
+  empties?: PurchaseEmptiesDetailDto;
 };
 
 export type PurchaseAmendResultDto = PurchaseDetailDto & {
@@ -84,6 +121,7 @@ export interface PurchasesApi {
   list(): Promise<PurchaseListItemDto[]>;
   listPage(options: PurchaseListOptions): Promise<PurchaseListPage>;
   getById(id: string): Promise<PurchaseDetailDto>;
+  previewEmpties(input: PurchaseEmptiesPreviewInput): Promise<PurchaseEmptiesPreviewDto>;
   create(input: CreatePurchaseDto, idempotencyKey?: string): Promise<PurchaseDetailDto>;
   update(
     id: string,

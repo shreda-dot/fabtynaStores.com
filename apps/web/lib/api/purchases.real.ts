@@ -1,5 +1,6 @@
 import type { CreatePurchaseDto } from "@fabtyna/shared";
 import { requestJson } from "./client";
+import type { PurchaseEmptiesPreviewDto } from "./empties.api";
 import type {
   PurchaseAmendResultDto,
   PurchaseDetailDto,
@@ -39,6 +40,12 @@ export const purchasesRealApi: PurchasesApi = {
     return requestJson<PurchaseListPage>(`/purchases${listQuery(options)}`);
   },
   getById: fetchDetail,
+  async previewEmpties(input) {
+    return requestJson<PurchaseEmptiesPreviewDto>("/purchases/empties-preview", {
+      method: "POST",
+      body: input,
+    });
+  },
   async create(input: CreatePurchaseDto, idempotencyKey) {
     const created = await requestJson<{ id: string }>("/purchases", {
       method: "POST",

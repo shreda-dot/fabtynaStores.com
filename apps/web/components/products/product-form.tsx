@@ -7,7 +7,7 @@ import {
   createProductDtoSchema,
   type CreateProductDto,
 } from "@fabtyna/shared";
-import type { ProductFormDto } from "@/lib/api/products.api";
+import type { ProductFormDto, PurchaseEmptiesClassification } from "@/lib/api/products.api";
 import { MoneyInput } from "@/components/money-input";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
@@ -56,11 +56,14 @@ export function ProductForm({
   pending: boolean;
   onCancel: () => void;
   onEdit?: () => void;
-  onSubmit: (value: CreateProductDto) => Promise<void>;
+  onSubmit: (value: CreateProductDto, classification?: PurchaseEmptiesClassification) => Promise<void>;
 }) {
   const network = useNetworkStatus();
   const submitting = useRef(false);
   const [summary, setSummary] = useState<string[]>([]);
+  const [classification, setClassification] = useState<PurchaseEmptiesClassification | "">("");
+  const [classificationError, setClassificationError] = useState("");
+  const classificationRef = useRef<HTMLSelectElement>(null);
 
   const form = useForm<CreateProductDto>({
     resolver: zodResolver(createProductDtoSchema),
@@ -83,10 +86,17 @@ export function ProductForm({
   }, [fieldErrors, form]);
 
   async function handleValid(input: CreateProductDto) {
+    if (!product && classification === "") {
+      const message = "Choose whether this product uses returnable containers.";
+      setClassificationError(message);
+      setSummary([message]);
+      classificationRef.current?.focus();
+      return;
+    }
     if (submitting.current) return;
     submitting.current = true;
     try {
-      await onSubmit(input);
+      await onSubmit(input, classification || undefined);
     } finally {
       submitting.current = false;
     }
@@ -161,6 +171,35 @@ export function ProductForm({
             <option value="OTHER">Other</option>
           </Select>
         </FormField>
+
+        {!product && (
+          <FormField
+            id="product-empties-classification"
+            label="Purchase containers"
+            error={classificationError || undefined}
+          >
+            <Select
+              id="product-empties-classification"
+              ref={classificationRef}
+              value={classification}
+              aria-invalid={classificationError !== ""}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value === "RETURNABLE" || value === "NON_RETURNABLE" || value === "") {
+                  setClassification(value);
+                  setClassificationError("");
+                  setSummary((messages) =>
+                    messages.filter((message) => message !== "Choose whether this product uses returnable containers."),
+                  );
+                }
+              }}
+            >
+              <option value="">Choose one</option>
+              <option value="RETURNABLE">Returnable crates or bottles</option>
+              <option value="NON_RETURNABLE">Non-returnable containers</option>
+            </Select>
+          </FormField>
+        )}
 
         <FormField
           id="product-channel"

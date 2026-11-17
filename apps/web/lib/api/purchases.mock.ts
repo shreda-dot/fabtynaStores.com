@@ -90,6 +90,9 @@ function buildPurchaseDetail(
 }
 
 export const purchasesMockApi: PurchasesApi = {
+  async previewEmpties() {
+    return { lines: [], totals: [] };
+  },
   async list() {
     await delay();
     const store = readMockStore();

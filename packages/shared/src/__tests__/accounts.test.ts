@@ -1229,7 +1229,7 @@ describe("migrateMockStoreData (v6 -> v7 accounts backfill)", () => {
             ],
         })!;
 
-        expect(result.version).toBe(8);
+        expect(result.version).toBe(9);
         expect(result.data.accountLedgerEntries).toEqual([]);
         expect(result.data.accounts).toEqual([]);
         expect(result.data.familyMembers).toEqual([]);

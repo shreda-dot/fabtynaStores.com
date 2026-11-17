@@ -9,11 +9,12 @@ export const productIdParamsSchema = z.object({ id: idSchema }).strict();
 export const createProductSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
-    sku: z.string().trim().max(80).optional().transform((value) => value?.toUpperCase() || null),
+    sku: z.string().trim().max(80).nullish().transform((value) => value?.toUpperCase() || null),
     category: z.enum(["BEER", "SOFT_DRINK", "OTHER"]),
     packName: z.string().trim().min(1).max(40),
     unitsPerPack: z.number().int().positive(),
     saleChannel: z.enum(["RETAIL", "WHOLESALE", "BOTH"]),
+    emptiesClassification: z.enum(["RETURNABLE", "NON_RETURNABLE"]),
     retailPriceKobo: nonnegativeKoboStringSchema,
     wholesalePriceKobo: nonnegativeKoboStringSchema,
     reorderLevelUnits: z.number().int().nonnegative(),
@@ -21,7 +22,7 @@ export const createProductSchema = z
   .strict();
 
 export const patchProductSchema = createProductSchema
-  .omit({ unitsPerPack: true })
+  .omit({ unitsPerPack: true, emptiesClassification: true })
   .partial()
   .extend({ unitsPerPack: z.number().int().positive().optional() })
   .strict()

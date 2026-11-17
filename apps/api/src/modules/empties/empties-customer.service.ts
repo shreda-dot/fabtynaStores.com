@@ -272,10 +272,11 @@ export function createEmptiesCustomerService(options: EmptiesCustomerServiceOpti
       const totals = await prisma.$queryRaw<Array<{
         ownerId: string;
         ownerName: string;
+        kind: "BOTTLE" | "CRATE";
         quantity: bigint;
         valueKobo: string | null;
       }>>`
-        SELECT t."ownerId", o.name AS "ownerName",
+        SELECT t."ownerId", o.name AS "ownerName", t.kind::text AS kind,
                SUM(cb.quantity)::bigint AS quantity,
                CASE WHEN BOOL_OR(t."unitValueKobo" IS NULL) THEN NULL
                     ELSE SUM(cb.quantity::numeric * t."unitValueKobo"::numeric)::text
@@ -285,8 +286,8 @@ export function createEmptiesCustomerService(options: EmptiesCustomerServiceOpti
           JOIN empties_types t ON t.id = cb."typeId"
           JOIN empties_owners o ON o.id = t."ownerId"
           ${baseWhere}
-         GROUP BY t."ownerId", o.name
-         ORDER BY o.name ASC, t."ownerId" ASC`;
+         GROUP BY t."ownerId", o.name, t.kind
+         ORDER BY o.name ASC, t."ownerId" ASC, t.kind ASC`;
 
       const page = rows.slice(0, query.limit);
       const last = page.at(-1);
@@ -309,6 +310,7 @@ export function createEmptiesCustomerService(options: EmptiesCustomerServiceOpti
         totalsByOwner: totals.map((row) => ({
           ownerId: row.ownerId,
           ownerName: row.ownerName,
+          kind: row.kind,
           quantity: safeQuantity(row.quantity, "customer empties owner total"),
           valueKobo: row.valueKobo,
         })),

@@ -169,6 +169,14 @@ export default function SupplierDetailPage() {
         </CardBody>
       </Card>
       <Card>
+        <CardHeader title="Supplier empties" description="Empties owed are separate from money owed." />
+        <CardBody>
+          <Link href={`/suppliers/${s.id}/empties`} className={buttonClasses({ variant: "secondary" })}>
+            View empties balance and history
+          </Link>
+        </CardBody>
+      </Card>
+      <Card>
         <CardHeader title="Recent purchases" description="The API profile includes the 10 most recent purchases." />
         <CardBody>
           {recentPurchases.length === 0 ? (

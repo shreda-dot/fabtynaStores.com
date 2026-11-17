@@ -1,5 +1,11 @@
 # Fabtyna Stores — Full System Plan
 
+> **Historical snapshot:** this plan describes the repository as reviewed on
+> 2026-10-17 and contains superseded implementation and deployment details.
+> For current context, database behavior and rollout guidance, read
+> [AI_CONTEXT.md](./AI_CONTEXT.md), [backend-schema.md](./backend-schema.md)
+> and [DEPLOY.md](./DEPLOY.md), respectively.
+
 > Beer retail + wholesale stock, sales, debtors, expenses and a lightweight accounting layer.
 > Two sales channels backed by three stock locations.
 

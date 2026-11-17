@@ -1,4 +1,3 @@
-import type { CreateProductDto } from "@fabtyna/shared";
 import { requestJson } from "./client";
 import type {
   CursorPage,
@@ -6,6 +5,7 @@ import type {
   ProductListOptions,
   ProductRecordDto,
   ProductsApi,
+  CreateClassifiedProductDto,
 } from "./products.api";
 
 type ProductWire = Omit<ProductRecordDto, "deletedAt"> & {
@@ -43,7 +43,7 @@ export const productsRealApi: ProductsApi = {
       hasStockMovement: detail.movements.length > 0,
     };
   },
-  async create(input: CreateProductDto, idempotencyKey) {
+  async create(input: CreateClassifiedProductDto, idempotencyKey) {
     return mapProduct(await requestJson<ProductWire>("/products", {
       method: "POST",
       body: input,

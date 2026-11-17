@@ -29,6 +29,7 @@ export const queryKeys = {
     list: key("purchases", "list"),
     page: (filters: unknown) => key("purchases", "page", filters),
     detail: (id: string) => key("purchases", "detail", id),
+    emptiesPreview: (input: string) => key("purchases", "empties-preview", input),
   },
   sales: {
     all: key("sales"),
@@ -134,6 +135,10 @@ export const queryKeys = {
   empties: {
     all: key("empties"),
     overview: key("empties", "overview"),
+    sizeClassRecount: key("empties", "size-class-recount"),
+    purchaseSetup: (cursor?: string | null) => key("empties", "purchase-setup", cursor ?? ""),
+    supplierDebts: (filters: unknown) => key("empties", "supplier-debts", filters),
+    supplierSettlements: (filters: unknown) => key("empties", "supplier-settlements", filters),
     // Active-only and all-rows are different arrays; keep separate caches.
     owners: (includeInactive: boolean) =>
       key("empties", "owners", includeInactive ? "all" : "active"),

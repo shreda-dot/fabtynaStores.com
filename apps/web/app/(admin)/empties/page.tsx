@@ -46,6 +46,7 @@ import { parseEmptiesQuantityText } from "@/lib/empties-quantity";
 import { queryKeys } from "@/lib/query-keys";
 import { validateReportRange } from "@/lib/report-range";
 import { toast } from "@/stores/toast-store";
+import { SupplierEmpties } from "@/components/empties/supplier-empties";
 
 const PAGE_SIZE = 50;
 
@@ -160,6 +161,14 @@ function RecordMovementPanel({
       />
       <CardBody className="space-y-3">
         <form className="space-y-3" onSubmit={submit}>
+          {movementType === "RETURNED_TO_OWNER" && (
+            <p className="text-sm text-muted-foreground">
+              This manual return does not reduce supplier empties debt. If you owe a supplier,
+              <Link href="/empties#supplier-empties" className="ml-1 font-medium text-primary underline">
+                record the return through supplier empties settlement instead
+              </Link>.
+            </p>
+          )}
           <FormField
             id="empties-movement-quantity"
             label={isAdjustment ? "Adjustment (use a minus sign to reduce)" : "Quantity"}
@@ -348,6 +357,12 @@ export default function EmptiesPage() {
     enabled: !isMockApiMode,
   });
 
+  const recount = useQuery({
+    queryKey: queryKeys.empties.sizeClassRecount,
+    queryFn: () => emptiesApi.getSizeClassRecount(),
+    enabled: !isMockApiMode,
+  });
+
   const balances = useQuery({
     queryKey: queryKeys.empties.balances(false),
     queryFn: () => emptiesApi.listBalances(),
@@ -489,6 +504,12 @@ export default function EmptiesPage() {
     <Link href="/empties/products" className={buttonClasses({ variant: "secondary" })}>
       Assign products
     </Link>
+    <Link href="/empties/purchase-setup" className={buttonClasses({ variant: "secondary" })}>
+      Purchase empties setup
+    </Link>
+    <Link href="/empties/recount" className={buttonClasses({ variant: "secondary" })}>
+      Count empty bottles
+    </Link>
     <Link href="/empties/customers" className={buttonClasses({ variant: "secondary" })}>
       Crates customers owe
     </Link>
@@ -504,6 +525,21 @@ export default function EmptiesPage() {
         />
       ) : (
         <>
+          {recount.data?.phase === "RECOUNT_PENDING" && (
+            <Card className="border-warning">
+              <CardBody className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-medium">Empties recount pending</p>
+                  <p className="text-sm text-muted-foreground">
+                    Sales and returnable purchases are paused until all size-class counts are confirmed.
+                  </p>
+                </div>
+                <Link href="/empties/recount" className={buttonClasses({ variant: "secondary" })}>
+                  Continue recount
+                </Link>
+              </CardBody>
+            </Card>
+          )}
           {overview.isPending ? (
             <Skeleton variant="stat" count={4} />
           ) : overview.isError ? (
@@ -797,6 +833,7 @@ export default function EmptiesPage() {
           </section>
         </>
       )}
+      <SupplierEmpties />
     </div>
   );
 }

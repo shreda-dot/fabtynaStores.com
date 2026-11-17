@@ -7,6 +7,7 @@ import {
   listPurchasesQuerySchema,
   paymentReversalParamsSchema,
   purchaseIdParamsSchema,
+  purchaseEmptiesPreviewSchema,
   recordPurchasePaymentBodySchema,
   reversePaymentBodySchema,
   zodIssues,
@@ -46,6 +47,13 @@ export function registerPurchasesRoutes(
   app: FastifyInstance,
   deps: { service: PurchasesService },
 ): void {
+  app.post("/purchases/empties-preview", async (request, reply) => {
+    const actor = requireActor(request);
+    const parsed = purchaseEmptiesPreviewSchema.safeParse(request.body);
+    if (!parsed.success) throw validationError("The purchase container check is not valid.", zodIssues(parsed.error));
+    return reply.status(200).send(await deps.service.previewPurchaseEmpties(parsed.data, actor));
+  });
+
   app.post("/purchases", async (request, reply) => {
     const actor = requireActor(request);
     const idempotencyKey = readIdempotencyKey(request);

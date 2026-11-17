@@ -34,6 +34,43 @@ export function splitStockIntoPacks(
   };
 }
 
+export function calculateSizeClassTotals(
+  capacity: number,
+  stockUnits: readonly number[],
+  emptyBottles: number,
+): {
+  stockBottles: number;
+  emptyCrates: number;
+  looseEmptyBottles: number;
+  totalBottles: number;
+  totalCrates: number;
+  looseTotalBottles: number;
+} {
+  if (!Number.isSafeInteger(capacity) || capacity <= 1) {
+    throw new RangeError("Crate capacity must be a safe integer greater than one.");
+  }
+  if (!Number.isSafeInteger(emptyBottles) || emptyBottles < 0 ||
+      stockUnits.some((units) => !Number.isSafeInteger(units) || units < 0)) {
+    throw new RangeError("Bottle counts must be nonnegative safe integers.");
+  }
+
+  const stock = stockUnits.reduce((total, units) => total + BigInt(units), 0n);
+  const total = stock + BigInt(emptyBottles);
+  if (total > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError("The size-class bottle total exceeds the safe integer range.");
+  }
+  const empty = splitStockIntoPacks(emptyBottles, capacity);
+  const combined = splitStockIntoPacks(Number(total), capacity);
+  return {
+    stockBottles: Number(stock),
+    emptyCrates: empty.packs,
+    looseEmptyBottles: empty.remainingUnits,
+    totalBottles: Number(total),
+    totalCrates: combined.packs,
+    looseTotalBottles: combined.remainingUnits,
+  };
+}
+
 export function formatStockUnits(
   stockUnits: number,
   unitsPerPack: number,

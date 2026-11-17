@@ -51,6 +51,253 @@ export interface AuditResult {
 const MAX_ROWS = 25;
 
 export const AUDIT_CHECKS: readonly AuditCheck[] = [
+  {
+    name: "empties size-class mode exists",
+    description: "The size-class mode must contain exactly its singleton state row.",
+    severity: "fatal",
+    sql: `
+      SELECT 'missing size-class mode' AS problem
+       WHERE NOT EXISTS (SELECT 1 FROM empties_size_class_mode WHERE id = 1)`,
+  },
+  {
+    name: "empties size classes have approved bottle capacities",
+    description: "Every sized empties type must be a bottle type with an approved capacity.",
+    severity: "fatal",
+    sql: `
+      SELECT t.id AS "typeId", t.kind, t.capacity
+        FROM empties_types t
+        LEFT JOIN empties_approved_capacities c ON c.capacity = t.capacity
+       WHERE t.capacity IS NOT NULL
+         AND (t.kind <> 'BOTTLE' OR c.capacity IS NULL OR c.capacity <= 1)
+       ORDER BY t.id`,
+  },
+  {
+    name: "empties size classes are unique per brewery",
+    description: "A brewery cannot have more than one type for the same kind and capacity.",
+    severity: "fatal",
+    sql: `
+      SELECT "ownerId", kind, capacity, COUNT(*)::text AS count
+        FROM empties_types
+       WHERE capacity IS NOT NULL
+       GROUP BY "ownerId", kind, capacity
+      HAVING COUNT(*) > 1
+       ORDER BY "ownerId", kind, capacity`,
+  },
+  {
+    name: "voided purchases have no live supplier empties events",
+    description: "Purchase-linked returns, debt, gifts and settlements must be corrected before a void.",
+    severity: "fatal",
+    sql: `
+      SELECT e.id AS "eventId", e."purchaseId"
+        FROM supplier_empties_events e
+        JOIN purchases p ON p.id = e."purchaseId"
+       WHERE p."emptiesTrackingVersion" = 1 AND p.status = 'VOIDED'
+         AND e."reversesEntryId" IS NULL
+         AND NOT EXISTS (SELECT 1 FROM supplier_empties_events r WHERE r."reversesEntryId" = e.id)
+       ORDER BY e.id`,
+  },
+  {
+    name: "supplier on-hand movement sources are valid",
+    description: "Each linked on-hand movement references an original matching return or settlement event.",
+    severity: "fatal",
+    sql: `
+      SELECT m.id AS "movementId", m."supplierEmptiesEventId"
+        FROM empties_movements m
+        LEFT JOIN supplier_empties_events e ON e.id = m."supplierEmptiesEventId"
+        LEFT JOIN empties_movements original ON original.id = m."reversesEntryId"
+       WHERE m."supplierEmptiesEventId" IS NOT NULL AND (
+         e.id IS NULL OR e."reversesEntryId" IS NOT NULL
+         OR e."eventType" NOT IN ('RETURNED_FOR_PURCHASE', 'DEBT_SETTLEMENT')
+         OR m."typeId" IS DISTINCT FROM e."typeId"
+         OR m."movementType" <> 'RETURNED_TO_OWNER' OR m."saleId" IS NOT NULL
+         OR (m."reversesEntryId" IS NULL AND m.quantity <> e.quantity)
+         OR (m."reversesEntryId" IS NOT NULL AND (
+           original.id IS NULL OR original."supplierEmptiesEventId" IS DISTINCT FROM e.id
+           OR m.quantity::bigint <> -original.quantity::bigint
+         ))
+       )
+       ORDER BY m.id`,
+  },
+  {
+    name: "tracked purchase stock movements match their lines and status",
+    description: "Received lines have their matching stock movement; voided movements are reversed.",
+    severity: "fatal",
+    sql: `
+      SELECT l.id AS "purchaseLineId", p.status
+        FROM purchase_lines l
+        JOIN purchases p ON p.id = l."purchaseId"
+        LEFT JOIN stock_movements sm ON sm."purchaseLineId" = l.id AND sm."reversesEntryId" IS NULL
+       WHERE p."emptiesTrackingVersion" = 1 AND p.status IN ('RECEIVED', 'VOIDED')
+         AND (sm.id IS NULL OR sm.type <> 'PURCHASE' OR sm."productId" <> l."productId"
+           OR sm."quantityUnits" <> l."quantityUnits" OR sm."unitCostKobo" <> l."unitCostKobo"
+           OR (EXISTS (SELECT 1 FROM stock_movements rev WHERE rev."reversesEntryId" = sm.id))
+              IS DISTINCT FROM (p.status = 'VOIDED'))
+       ORDER BY l.id`,
+  },
+  {
+    name: "tracked purchase line snapshots are complete",
+    description: "Every tracked received line has a classification and valid frozen container conversions.",
+    severity: "fatal",
+    sql: `
+      SELECT l.id AS "purchaseLineId"
+        FROM purchase_lines l
+        JOIN purchases p ON p.id = l."purchaseId"
+        LEFT JOIN purchase_empties_line_snapshots s ON s."purchaseLineId" = l.id
+       WHERE p."emptiesTrackingVersion" = 1 AND p.status IN ('RECEIVED', 'VOIDED')
+         AND (
+           s."purchaseLineId" IS NULL
+           OR (s.classification = 'RETURNABLE' AND NOT EXISTS (
+             SELECT 1 FROM purchase_empties_requirements r WHERE r."purchaseLineId" = l.id
+           ))
+           OR (s.classification = 'NON_RETURNABLE' AND EXISTS (
+             SELECT 1 FROM purchase_empties_requirements r WHERE r."purchaseLineId" = l.id
+           ))
+           OR EXISTS (
+             SELECT 1 FROM purchase_empties_requirements r
+              JOIN empties_types t ON t.id = r."typeId"
+             WHERE r."purchaseLineId" = l.id AND (
+               r.kind <> t.kind
+               OR (r.kind = 'BOTTLE' AND r.quantity::bigint <>
+                 l."quantityUnits"::bigint * r."countPerUnitSnapshot")
+               OR (r.kind = 'CRATE' AND (
+                 r."manualCrateCount" IS DISTINCT FROM
+                   (l.unit = 'UNIT' OR l.quantity <> trunc(l.quantity))
+                 OR (NOT r."manualCrateCount"
+                   AND r.quantity::numeric <> l.quantity * r."countPerPackSnapshot")
+               ))
+             )
+           )
+         )
+       ORDER BY l.id`,
+  },
+  {
+    name: "supplier empties obligation balance matches events",
+    description: "Every supplier empties obligation balance must equal its signed event total.",
+    severity: "fatal",
+    sql: `
+      SELECT o.id AS "obligationId", b.quantity AS "balance",
+             COALESCE(SUM(e.quantity), 0)::text AS "eventQuantity"
+        FROM supplier_empties_obligations o
+        LEFT JOIN supplier_empties_obligation_balances b ON b."obligationId" = o.id
+        LEFT JOIN supplier_empties_events e ON e."obligationId" = o.id
+       GROUP BY o.id, b.quantity
+      HAVING b.quantity IS NULL OR b.quantity::bigint <> COALESCE(SUM(e.quantity), 0)
+       ORDER BY o.id`,
+  },
+  {
+    name: "supplier empties obligation sources match",
+    description: "Each obligation has one debt origin and all events preserve its purchase and type.",
+    severity: "fatal",
+    sql: `
+      SELECT o.id AS "obligationId"
+        FROM supplier_empties_obligations o
+        LEFT JOIN purchases p ON p.id = o."purchaseId"
+       WHERE (o."purchaseId" IS NOT NULL AND p."supplierId" IS DISTINCT FROM o."supplierId")
+          OR (SELECT COUNT(*) FROM supplier_empties_events e
+               WHERE e."obligationId" = o.id AND e."reversesEntryId" IS NULL
+                 AND e."eventType" IN ('OPENING_DEBT', 'PURCHASE_DEBT')) <> 1
+          OR EXISTS (
+               SELECT 1 FROM supplier_empties_events e WHERE e."obligationId" = o.id
+                 AND (e."typeId" IS DISTINCT FROM o."typeId"
+                   OR e."purchaseId" IS DISTINCT FROM o."purchaseId"
+                   OR (e."eventType" = 'OPENING_DEBT' AND o."purchaseId" IS NOT NULL)
+                   OR (e."eventType" = 'PURCHASE_DEBT' AND o."purchaseId" IS NULL))
+             )
+       ORDER BY o.id`,
+  },
+  {
+    name: "supplier empties reversals match originals",
+    description: "Each reversal negates its original quantity and preserves its sources and type.",
+    severity: "fatal",
+    sql: `
+      SELECT r.id AS "reversalId", r."reversesEntryId"
+        FROM supplier_empties_events r
+        LEFT JOIN supplier_empties_events o ON o.id = r."reversesEntryId"
+       WHERE r."reversesEntryId" IS NOT NULL AND (
+         o.id IS NULL OR o."reversesEntryId" IS NOT NULL
+         OR r.quantity::bigint <> -o.quantity::bigint
+         OR r."eventType" IS DISTINCT FROM o."eventType"
+         OR r."typeId" IS DISTINCT FROM o."typeId"
+         OR r."purchaseId" IS DISTINCT FROM o."purchaseId"
+         OR r."obligationId" IS DISTINCT FROM o."obligationId"
+       )
+       ORDER BY r.id`,
+  },
+  {
+    name: "supplier empties on-hand pairs match",
+    description: "Purchase returns and debt settlements have matching on-hand movements and reversals.",
+    severity: "fatal",
+    sql: `
+      SELECT e.id AS "eventId"
+        FROM supplier_empties_events e
+        LEFT JOIN empties_movements m
+          ON m."supplierEmptiesEventId" = e.id AND m."reversesEntryId" IS NULL
+       WHERE e."reversesEntryId" IS NULL AND (
+         (e."eventType" IN ('RETURNED_FOR_PURCHASE', 'DEBT_SETTLEMENT') AND (
+           m.id IS NULL OR m."typeId" IS DISTINCT FROM e."typeId"
+           OR m."movementType" <> 'RETURNED_TO_OWNER' OR m.quantity <> e.quantity
+           OR EXISTS (SELECT 1 FROM supplier_empties_events er WHERE er."reversesEntryId" = e.id)
+              IS DISTINCT FROM EXISTS (SELECT 1 FROM empties_movements mr WHERE mr."reversesEntryId" = m.id)
+         ))
+         OR (e."eventType" NOT IN ('RETURNED_FOR_PURCHASE', 'DEBT_SETTLEMENT') AND m.id IS NOT NULL)
+       )
+       ORDER BY e.id`,
+  },
+  {
+    name: "tracked purchase empties allocation matches requirements",
+    description: "Tracked purchases return available stock and resolve the exact remaining shortage.",
+    severity: "fatal",
+    sql: `
+      WITH required AS (
+        SELECT l."purchaseId", r."typeId", SUM(r.quantity)::bigint AS quantity
+          FROM purchase_empties_requirements r
+          JOIN purchase_lines l ON l.id = r."purchaseLineId"
+         GROUP BY l."purchaseId", r."typeId" HAVING SUM(r.quantity) > 0
+      ), events AS (
+        SELECT e."purchaseId", e."typeId",
+               COALESCE(SUM(-e.quantity::bigint) FILTER (WHERE e."eventType" = 'RETURNED_FOR_PURCHASE'), 0)::bigint AS returned,
+               COALESCE(SUM(e.quantity) FILTER (WHERE e."eventType" = 'SUPPLIED_FREE'), 0)::bigint AS gifted,
+               COALESCE(SUM(e.quantity) FILTER (WHERE e."eventType" = 'PURCHASE_DEBT'), 0)::bigint AS owed
+          FROM supplier_empties_events e
+         WHERE e."reversesEntryId" IS NULL
+           AND e."eventType" IN ('RETURNED_FOR_PURCHASE', 'SUPPLIED_FREE', 'PURCHASE_DEBT')
+         GROUP BY e."purchaseId", e."typeId"
+      ), keys AS (
+        SELECT "purchaseId", "typeId" FROM required
+        UNION SELECT "purchaseId", "typeId" FROM purchase_empties_checks
+        UNION SELECT "purchaseId", "typeId" FROM events
+      )
+      SELECT k."purchaseId", k."typeId"
+        FROM keys k
+        JOIN purchases p ON p.id = k."purchaseId" AND p."emptiesTrackingVersion" = 1
+        LEFT JOIN empties_types t ON t.id = k."typeId"
+        LEFT JOIN required r ON r."purchaseId" = k."purchaseId" AND r."typeId" = k."typeId"
+        LEFT JOIN purchase_empties_checks c ON c."purchaseId" = k."purchaseId" AND c."typeId" = k."typeId"
+        LEFT JOIN events e ON e."purchaseId" = k."purchaseId" AND e."typeId" = k."typeId"
+       WHERE t.id IS NULL OR r."typeId" IS NULL OR c."typeId" IS NULL
+          OR COALESCE(e.returned, 0) <> CASE
+               WHEN t.capacity IS NULL THEN LEAST(r.quantity, c."availableQuantity"::bigint)
+               ELSE FLOOR(
+                 LEAST(r.quantity, c."availableQuantity"::bigint)::numeric / t.capacity
+               )::bigint * t.capacity::bigint
+             END
+          OR COALESCE(e.gifted, 0) + COALESCE(e.owed, 0) <> r.quantity - CASE
+               WHEN t.capacity IS NULL THEN LEAST(r.quantity, c."availableQuantity"::bigint)
+               ELSE FLOOR(
+                 LEAST(r.quantity, c."availableQuantity"::bigint)::numeric / t.capacity
+               )::bigint * t.capacity::bigint
+             END
+          OR EXISTS (
+            SELECT 1 FROM supplier_empties_events original
+             WHERE original."purchaseId" = k."purchaseId" AND original."typeId" = k."typeId"
+               AND original."eventType" IN ('RETURNED_FOR_PURCHASE', 'SUPPLIED_FREE', 'PURCHASE_DEBT')
+               AND original."reversesEntryId" IS NULL
+               AND (EXISTS (SELECT 1 FROM supplier_empties_events reversal
+                              WHERE reversal."reversesEntryId" = original.id))
+                   IS DISTINCT FROM (p.status = 'VOIDED')
+          )
+       ORDER BY 1, 2`,
+  },
   // --- 1. BALANCES ---
   {
     name: "account_balances.balanceKobo = Σ account_ledger_entries.amountKobo",

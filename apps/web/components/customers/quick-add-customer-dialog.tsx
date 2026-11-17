@@ -40,11 +40,14 @@ export function QuickAddCustomerDialog({
       onCreated(customer);
       onClose();
     },
-    onError: (err) => toast.error(toUserMessage(err)),
   });
 
   async function save(input: CreateCustomerDto) {
-    await createMutation.mutateAsync(input);
+    try {
+      await createMutation.mutateAsync(input);
+    } catch (error) {
+      toast.error(toUserMessage(error));
+    }
   }
 
   return (

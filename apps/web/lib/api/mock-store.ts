@@ -116,6 +116,7 @@ import {
 
 export type MockStore = {
   products: Product[];
+  purchaseEmptiesClassifications: Array<{ productId: string; classification: "RETURNABLE" | "NON_RETURNABLE" }>;
   suppliers: Supplier[];
   customers: Customer[];
   purchases: Purchase[];
@@ -148,6 +149,7 @@ export type MockStore = {
 
 type PersistedMockStore = {
   products: ProductDto[];
+  purchaseEmptiesClassifications: MockStore["purchaseEmptiesClassifications"];
   suppliers: SupplierDto[];
   customers: CustomerDto[];
   purchases: PurchaseDto[];
@@ -395,12 +397,14 @@ function seedDemoData(): MockStore {
     familyMembers: [],
     drawings: [],
     familySupportWrites: [],
+    purchaseEmptiesClassifications: [],
   };
 }
 
 function encodeStore(store: MockStore): PersistedMockStore {
   return {
     products: store.products.map(toProductDto),
+    purchaseEmptiesClassifications: store.purchaseEmptiesClassifications,
     suppliers: store.suppliers.map(toSupplierDto),
     customers: store.customers.map(toCustomerDto),
     purchases: store.purchases.map(toPurchaseDto),
@@ -456,6 +460,7 @@ function decodeStore(value: unknown): MockStore {
   const saved = {} as PersistedMockStore;
   const keys = [
     "products",
+    "purchaseEmptiesClassifications",
     "suppliers",
     "customers",
     "purchases",
@@ -495,6 +500,7 @@ function decodeStore(value: unknown): MockStore {
 
   return {
     products: saved.products.map(fromProductDto),
+    purchaseEmptiesClassifications: saved.purchaseEmptiesClassifications,
     suppliers: saved.suppliers.map(fromSupplierDto),
     customers: saved.customers.map(fromCustomerDto),
     purchases: saved.purchases.map(fromPurchaseDto),

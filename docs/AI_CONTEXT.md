@@ -4,6 +4,34 @@ Briefing for a new AI session working on this repo with no other history.
 Everything below was reviewed against the repository on 2026-10-21. Docs only:
 this file does not change code, migrations or `.env`.
 
+> **Size-class deployment status:** `20261116010000_empties_size_classes` is a
+> forward-only schema migration. Legacy types retain NULL capacity; sized
+> BOTTLE types have an immutable approved capacity and are unique by brewery
+> and size, including inactive types. The initial approved sizes are 12, 20
+> and 24. A database configuration insert can approve another integer greater
+> than one; no application screen or API for doing so exists yet. This
+> migration and `20261117000000_size_class_mode` and
+> `20261117000100_size_class_purchase_rules` were applied to `fabtyna_dev` and
+> `fabtyna_test` using `prisma migrate deploy`. Both audits passed; both
+> verifiers found all expected objects but failed on 24 existing checksums,
+> each matching the CRLF version of its file. The three newly applied
+> migrations matched exactly. No reset was run on dev or test. Production was
+> not accessed; the owner-run rollout remains gated by [DEPLOY.md](./DEPLOY.md).
+
+> **Purchase-linked empties status:** purchase work is included in the
+> approved size-class redesign. Production rollout requires the coordinated
+> setup, reset and count in [DEPLOY.md](./DEPLOY.md). Migration
+> `20261113000000_purchase_empties` is applied to `fabtyna_test` and
+> `fabtyna_dev`; never edit it. At the time of the earlier purchase work, both
+> databases passed `db:verify` and, after testing, `db:audit` with zero rows.
+> One full `pnpm verify` passed before the
+> later optional-SKU product fix: 262 shared, 351 API, 216 web tests and the
+> web build, in about 74 minutes. Lint reported two existing warnings.
+> These historical results do not verify this integration. This does not establish
+> a production deployment or a fresh production-copy migration rehearsal; see
+> [DEPLOY.md](./DEPLOY.md) before release. Earlier dated verification notes
+> below are historical, not the latest result.
+
 > The owner reported that the initial Family Support feature was deployed to
 > production. A subsequent source-expense date-reporting change is local and
 > requires separate deployment and verification before any expense move.
@@ -34,6 +62,15 @@ this file does not change code, migrations or `.env`.
 
 Repository root: `c:\Users\Shreda\fabtyna-stores` (Windows, PowerShell).
 pnpm workspace (`pnpm-workspace.yaml`: `apps/*`, `packages/*`), `packageManager: pnpm@10.15.1`.
+
+Product creation accepts an optional SKU as either `null` or an omitted value;
+product edits can clear it with `null`. Product save failures remain in the
+form and are also reported by a toast, rather than escaping as an unhandled
+promise.
+
+The dev/test migration history has 24 known CRLF/LF checksum discrepancies,
+including the purchase migration. This branch has not carried the separate
+local verifier exception; `db:verify` currently fails on those discrepancies.
 
 ## 1. What the project is
 
@@ -67,7 +104,7 @@ phone on slow networks, so the web app is mobile-first with a network status bar
   products, customers, suppliers, debtors/payables, stock, loans, transfers,
   adjustments, expense categories, expenses, accounts, and empties (see §6).
   - Schema: `apps/api/prisma/schema.prisma`; migrations:
-    `apps/api/prisma/migrations/` (**44** folders); generated client output:
+    `apps/api/prisma/migrations/` (**46** folders); generated client output:
     `apps/api/generated/prisma/` (git-ignored).
   - `src/db/`: `expected-schema.ts`, `verify.ts`, `audit.ts`.
   - `src/lib/`: `env.ts`, `prisma.ts` (`createPrismaClient`), `password.ts`
@@ -956,11 +993,11 @@ run `pnpm --filter @fabtyna/api db:audit` on dev: expect zero rows.
   (API) consistently; `WEB_ORIGIN` and `NEXT_PUBLIC_API_BASE_URL` must use the
   same host name as the browser address or cookies and CORS fail.
 
-### Empties (real mode only)
+### Empties and purchase-linked supplier debt
 
 - Nav entry "Empties" → `/empties`; owner/type management at `/empties/types`.
-- `/empties` (mobile first): one `StatCard` per owner plus one per kind
-  ("X on hand"), a "Balances by type" table with the count and the optional
+- `/empties` (mobile first): brewery crate totals and product breakdown,
+  a "Balances by type" table with counts and optional
   display value from `unitValueKobo`, four write buttons per row
   (Opening count, Received from customers, Returned to brewery, Adjustment),
   a "Reverse" action on each history row, and a history list with the shared
@@ -991,7 +1028,43 @@ run `pnpm --filter @fabtyna/api db:audit` on dev: expect zero rows.
   do not use or replace the shared `fn_check_reversal_integrity` or phase-1
   empties balance functions.
 - Mock mode (`isMockApiMode`) renders "Not available with demo data" instead of
-  the panels.
+  the ledger panels. Demo product creation still requires an explicit purchase
+  classification, but demo purchases do not enforce or record purchase
+  empties; the purchase form shows a notice.
+- `/empties/purchase-setup` lists products and their classification. The owner
+  confirms `RETURNABLE` or `NON_RETURNABLE` and, for returnable products,
+  configures the brewery's exact crate and/or bottle types. Sale-packaging
+  suggestions are prefilled but not saved until confirmed. Existing products
+  are not classified automatically; new product creation requires an explicit
+  choice. An unclassified or incompletely configured returnable product cannot
+  be purchased until setup is completed.
+- Purchase create/edit checks aggregate requirements by exact empties type,
+  keeping crates and bottles separate. Only shortages show a warning and two
+  fields: free supply and supplier debt; their whole-number amounts must add
+  up to the exact shortage. A cleared field means zero. Free supply can be
+  recorded without a supplier; debt requires one. The server locks and
+  rechecks balances at commit, regardless of the live preview.
+- For a partial pack with configured crates, the actual whole-crate count is
+  entered, with a rounded-up suggestion; on a single-unit line it is optional
+  and defaults to zero. Full-pack counts are automatic. Bottle counts are
+  calculated separately in whole units.
+- Purchase detail displays container requirements, supplier events and
+  outstanding empties debt. Each supplier detail page links to
+  `/suppliers/[id]/empties`, which provides that supplier's debt history,
+  opening-debt entry and partial returns. The same actions remain available
+  from `/empties`. Opening debt requires a reason and is never inferred from
+  old purchases. The API can allocate a return to selected obligations; the UI
+  uses the default: opening debts first, then oldest purchases.
+- A manual "Returned to brewery" only reduces on-hand empties and does not
+  settle supplier debt. Use supplier settlement instead. Correct live linked
+  settlements before voiding or amending a purchase. Supplier empties counts
+  are separate from money owed, payables, profit and financial position.
+- **Known pagination limitation:** the web groups only the debt pages loaded
+  so far when displaying supplier/type owed totals and limiting settlement
+  quantities. It may show no outstanding debt or understate the amount until
+  more pages are loaded; use "Load more debts" to include additional pages.
+  The server checks the complete current debt and on-hand balance when
+  settling.
 - Query keys live under `queryKeys.empties` (`lib/query-keys.ts`):
   `owners(includeInactive)`, `types(includeInactive, ownerId)`,
   `balances(includeInactive)`, `movements(filters)` (plain `useQuery`) and

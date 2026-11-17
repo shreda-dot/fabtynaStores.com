@@ -176,9 +176,15 @@ export function fromStockMovementDto(dto: StockMovementDto): StockMovement {
 
 export function toPurchaseDto(purchase: Purchase): PurchaseDto {
   return purchaseDtoSchema.parse({
-    ...purchase,
+    id: purchase.id,
+    supplierId: purchase.supplierId,
+    createdById: purchase.createdById,
+    status: purchase.status,
+    reference: purchase.reference,
+    notes: purchase.notes,
     totalKobo: purchase.totalKobo.toString(),
     paidKobo: purchase.paidKobo.toString(),
+    dueDate: purchase.dueDate,
     purchasedAt: dateToIso(purchase.purchasedAt),
     receivedAt: purchase.receivedAt === null ? null : dateToIso(purchase.receivedAt),
     createdAt: dateToIso(purchase.createdAt),

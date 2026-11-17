@@ -40,9 +40,13 @@ async function inRollback(body: (c: Client) => Promise<void>): Promise<void> {
 async function seedProduct(c: Client): Promise<string> {
     const id = nextId("sb_product");
     await c.query(
-        `INSERT INTO products
-       (id, name, category, "unitsPerPack", "retailPriceKobo", "wholesalePriceKobo", "updatedAt")
-     VALUES ($1, $2, 'BEER', 24, 150000::bigint, 140000::bigint, now())`,
+        `WITH product AS (
+       INSERT INTO products
+         (id, name, category, "unitsPerPack", "retailPriceKobo", "wholesalePriceKobo", "updatedAt")
+       VALUES ($1, $2, 'BEER', 24, 150000::bigint, 140000::bigint, now()) RETURNING id
+     )
+     INSERT INTO purchase_empties_products ("productId", classification)
+     SELECT id, 'NON_RETURNABLE' FROM product`,
         [id, "Stock Balance Test Beer"],
     );
     return id;
@@ -268,10 +272,14 @@ describe("concurrent movements cannot oversell (committed)", () => {
 
     beforeAll(async () => {
         await client.query(
-            `INSERT INTO products
+            `WITH product AS (
+       INSERT INTO products
          (id, name, category, "unitsPerPack", "retailPriceKobo", "wholesalePriceKobo", "updatedAt")
        VALUES ($1, 'Stock Balance Probe', 'BEER', 24, 0::bigint, 0::bigint, now())
-       ON CONFLICT (id) DO NOTHING`,
+       ON CONFLICT (id) DO NOTHING RETURNING id
+     )
+     INSERT INTO purchase_empties_products ("productId", classification)
+     SELECT id, 'NON_RETURNABLE' FROM product`,
             [PROBE_PRODUCT_ID],
         );
     });

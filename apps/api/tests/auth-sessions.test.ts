@@ -165,18 +165,26 @@ describe("server-side admin sessions", () => {
   it("rejects idle-expired and absolute-expired sessions", async () => {
     const idleCookie = await login();
     const idleToken = idleCookie.slice(idleCookie.indexOf("=") + 1);
-    await h.pg.query(
-      `UPDATE admin_sessions SET "lastSeenAt" = $2 WHERE "tokenHash" = $1`,
-      [hashSessionToken(idleToken), new Date(Date.now() - 13 * 60 * 60 * 1000)],
+    const idleUpdate = await h.pg.query(
+      `UPDATE admin_sessions SET "lastSeenAt" = now() - interval '13 hours' WHERE "tokenHash" = $1`,
+      [hashSessionToken(idleToken)],
     );
+    expect(idleUpdate.rowCount).toBe(1);
     expect((await request("GET", "/auth/me", { cookie: idleCookie })).statusCode).toBe(401);
 
     const absoluteCookie = await login();
     const absoluteToken = absoluteCookie.slice(absoluteCookie.indexOf("=") + 1);
-    await h.pg.query(
-      `UPDATE admin_sessions SET "expiresAt" = $2 WHERE "tokenHash" = $1`,
-      [hashSessionToken(absoluteToken), new Date(Date.now() - 1000)],
+    const updated = await h.pg.query<{ expiresAt: Date }>(
+      `UPDATE admin_sessions SET "expiresAt" = now() - interval '1 minute' WHERE "tokenHash" = $1 RETURNING "expiresAt"`,
+      [hashSessionToken(absoluteToken)],
     );
+    expect(updated.rowCount).toBe(1);
+    expect(updated.rows[0]!.expiresAt.getTime()).toBeLessThan(Date.now());
+    const stored = await h.prisma.adminSession.findUnique({
+      where: { tokenHash: hashSessionToken(absoluteToken) },
+      select: { expiresAt: true },
+    });
+    expect(stored?.expiresAt.getTime()).toBeLessThan(Date.now());
     expect((await request("GET", "/auth/me", { cookie: absoluteCookie })).statusCode).toBe(401);
   });
 

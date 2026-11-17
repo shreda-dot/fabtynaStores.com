@@ -70,9 +70,14 @@ export const createTypeSchema = z
     ownerId: idSchema,
     kind: emptiesKindSchema,
     label: typeLabelSchema,
+    capacity: z.union([z.literal(12), z.literal(20), z.literal(24)]).nullable().optional(),
     unitValueKobo: unitValueKoboSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((body) => body.capacity == null || body.kind === "BOTTLE", {
+    message: "Only bottle types can have a crate capacity.",
+    path: ["capacity"],
+  });
 export type CreateTypeBody = z.infer<typeof createTypeSchema>;
 
 export const patchTypeSchema = z
@@ -125,6 +130,86 @@ export const assignProductPackagingSchema = z
   );
 export type AssignProductPackagingBody = z.infer<typeof assignProductPackagingSchema>;
 
+const purchasePackagingRowSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("CRATE"),
+    typeId: idSchema,
+    countPerPack: z.number().int().safe().min(1).max(2_147_483_647),
+  }).strict(),
+  z.object({
+    kind: z.literal("BOTTLE"),
+    typeId: idSchema,
+    countPerUnit: z.number().int().safe().min(1).max(2_147_483_647),
+    cratesPerPack: z.number().int().safe().min(1).max(2_147_483_647).nullable().optional(),
+  }).strict(),
+]);
+
+export const purchaseEmptiesSetupSchema = z.object({
+  classification: z.enum(["RETURNABLE", "NON_RETURNABLE"]),
+  mappings: z.array(purchasePackagingRowSchema).max(2),
+}).strict()
+  .refine((body) => new Set(body.mappings.map((row) => row.kind)).size === body.mappings.length, {
+    message: "Choose at most one type of each container kind.",
+    path: ["mappings"],
+  })
+  .refine((body) => body.classification === "RETURNABLE" || body.mappings.length === 0, {
+    message: "Non-returnable products cannot have returnable container types.",
+    path: ["mappings"],
+  });
+export type PurchaseEmptiesSetupBody = z.infer<typeof purchaseEmptiesSetupSchema>;
+
+export const purchaseEmptiesSetupListSchema = z.object({
+  cursor: idSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+}).strict();
+export type PurchaseEmptiesSetupListQuery = z.infer<typeof purchaseEmptiesSetupListSchema>;
+
+export const openingSupplierEmptiesDebtSchema = z.object({
+  supplierId: idSchema,
+  typeId: idSchema,
+  quantity: z.number().int().safe().min(1).max(2_147_483_647),
+  note: z.string().trim().min(1).max(500),
+}).strict();
+export type OpeningSupplierEmptiesDebtBody = z.infer<typeof openingSupplierEmptiesDebtSchema>;
+
+export const supplierEmptiesDebtListSchema = z.object({
+  supplierId: idSchema.optional(),
+  typeId: idSchema.optional(),
+  includeSettled: includeInactiveSchema,
+  cursor: idSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+}).strict();
+export type SupplierEmptiesDebtListQuery = z.infer<typeof supplierEmptiesDebtListSchema>;
+
+export const supplierEmptiesSettlementListSchema = z.object({
+  supplierId: idSchema.optional(),
+  typeId: idSchema.optional(),
+  obligationId: idSchema.optional(),
+  cursor: idSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+}).strict();
+export type SupplierEmptiesSettlementListQuery = z.infer<typeof supplierEmptiesSettlementListSchema>;
+
+export const settleSupplierEmptiesDebtSchema = z.object({
+  supplierId: idSchema,
+  typeId: idSchema,
+  quantity: z.number().int().safe().min(1).max(2_147_483_647),
+  allocations: z.array(z.object({
+    obligationId: idSchema,
+    quantity: z.number().int().safe().min(1).max(2_147_483_647),
+  }).strict()).min(1).max(200).optional(),
+  note: z.string().trim().min(1).max(500).optional(),
+}).strict()
+  .refine((body) => body.allocations === undefined
+    || new Set(body.allocations.map((item) => item.obligationId)).size === body.allocations.length, {
+    message: "Each debt can only be selected once.", path: ["allocations"],
+  })
+  .refine((body) => body.allocations === undefined
+    || body.allocations.reduce((sum, item) => sum + item.quantity, 0) === body.quantity, {
+    message: "Allocated amounts must add up to the return quantity.", path: ["allocations"],
+  });
+export type SettleSupplierEmptiesDebtBody = z.infer<typeof settleSupplierEmptiesDebtSchema>;
+
 // ---------- movements ----------
 const movementQuantitySchema = z
   .number()
@@ -157,6 +242,19 @@ export const createMovementSchema = z
     { message: "A reason is required when adjusting the count.", path: ["note"] },
   );
 export type CreateMovementBody = z.infer<typeof createMovementSchema>;
+
+export const sizeClassRecountSchema = z.object({
+  counts: z.array(z.object({
+    typeId: idSchema,
+    emptyCrates: z.number().int().safe().min(0).max(2_147_483_647),
+    looseBottles: z.number().int().safe().min(0).max(2_147_483_647),
+  }).strict()).min(1).max(500)
+    .refine((rows) => new Set(rows.map((row) => row.typeId)).size === rows.length, {
+      message: "Each size class can only be counted once.",
+    }),
+  reason: z.string().trim().min(1).max(500),
+}).strict();
+export type SizeClassRecountBody = z.infer<typeof sizeClassRecountSchema>;
 
 export const reverseMovementSchema = z
   .object({ reason: z.string().trim().min(1).max(500) })

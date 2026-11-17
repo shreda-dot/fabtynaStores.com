@@ -13,6 +13,7 @@ describe("empties overview display mapping", () => {
       bottlesOnShelfAndMarket: 35,
       totalCrates: 14,
       emptyValueKobo: "50000",
+      sizeClasses: [],
       products: [],
     });
 

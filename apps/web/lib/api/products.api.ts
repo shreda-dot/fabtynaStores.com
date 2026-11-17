@@ -1,5 +1,10 @@
 import type { CreateProductDto } from "@fabtyna/shared";
 
+export type PurchaseEmptiesClassification = "RETURNABLE" | "NON_RETURNABLE";
+export type CreateClassifiedProductDto = CreateProductDto & {
+  emptiesClassification: PurchaseEmptiesClassification;
+};
+
 export type ProductListOptions = {
   search?: string;
   includeDeleted?: boolean;
@@ -51,7 +56,7 @@ export interface ProductsApi {
   list(options?: ProductListOptions): Promise<ProductRecordDto[]>;
   listPage(options?: ProductListOptions): Promise<CursorPage<ProductRecordDto>>;
   getById(id: string): Promise<ProductDetailDto>;
-  create(input: CreateProductDto, idempotencyKey?: string): Promise<ProductRecordDto>;
+  create(input: CreateClassifiedProductDto, idempotencyKey?: string): Promise<ProductRecordDto>;
   update(id: string, input: CreateProductDto, idempotencyKey?: string): Promise<ProductRecordDto>;
   softDelete(id: string, idempotencyKey?: string): Promise<ProductRecordDto>;
   restore(id: string, idempotencyKey?: string): Promise<ProductRecordDto>;

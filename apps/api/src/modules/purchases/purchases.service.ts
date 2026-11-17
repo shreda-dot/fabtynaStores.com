@@ -47,9 +47,16 @@ import type {
   CreatePurchaseDto,
   ListPurchasesQuery,
   RecordPurchasePaymentBody,
+  PurchaseEmptiesPreviewBody,
   ReversePaymentBody,
 } from "./purchases.schemas.js";
 import { assertPurchaseWithinBounds } from "./purchases.validation.js";
+import { previewPurchaseEmpties, recordPurchaseEmpties, reversePurchaseEmpties } from "./purchase-empties.js";
+import {
+  assertPurchaseVoidAvailable,
+  assertPurchasesAvailable,
+  lockSizeClassPhase,
+} from "../empties/size-class-mode.js";
 
 export const CREATE_PURCHASE_ROUTE = "POST /purchases";
 /** The purchase id is part of the idempotency route key, so one key can never cross purchases. */
@@ -80,6 +87,7 @@ const STOCK_LOCATIONS: readonly StockLocation[] = ["WAREHOUSE", "RETAIL_SHELF", 
  *      on hand at EVERY location, so all three locations are locked.
  *   4. account_balances, sorted by accountId (read together with accounts)
  *   5. supplier rows, FOR SHARE
+ *   6. empties types, sorted by id, then their derived balances
  *
  * Two purchases of one product serialize through step 2, so averageCostKobo
  * is never computed from stale stock.
@@ -152,6 +160,7 @@ function syntheticMovements(locked: Locked): StockMovement[] {
         occurredAt: new Date(0),
         createdAt: new Date(0),
       });
+
     }
   }
   return movements;
@@ -322,6 +331,8 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
       actorId: actor.id,
     });
 
+    await recordPurchaseEmpties(ctx, dto, result.purchaseLines, actor);
+
     await insertPurchaseAudit(ctx, {
       actorId: actor.id,
       action: "purchase.create",
@@ -393,6 +404,7 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
       ledgers: PurchaseLedgers;
       locked: Locked;
       voidedAt: Date;
+      actor: Actor;
     },
   ) {
     const { purchase, parts, ledgers, locked, voidedAt } = input;
@@ -458,6 +470,7 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
       domainAccounts,
     );
 
+    await reversePurchaseEmpties(ctx, purchase.id, input.actor);
     const stored = await insertPurchaseVoid(ctx, { purchaseId: purchase.id, ...reversal });
     return { stored, reversal };
   }
@@ -533,7 +546,9 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
 
     return runWrite(CREATE_PURCHASE_ROUTE, { lines: dto.lines.length }, (ctx) =>
       withIdempotency(ctx, { actorId: actor.id, route: CREATE_PURCHASE_ROUTE, key: idempotencyKey, requestHash }, async () => {
+        const phase = await lockSizeClassPhase(ctx);
         const locked = await acquireLocks(ctx, receivePlan(dto));
+        await assertPurchasesAvailable(ctx, phase, dto.lines.map((line) => line.productId));
         const stored = await recordNewPurchase(ctx, {
           dto,
           actor,
@@ -719,13 +734,14 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
     const route = purchaseVoidRoute(purchaseId);
     return runWrite(route, {}, (ctx) =>
       withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody({}) }, async () => {
+        assertPurchaseVoidAvailable(await lockSizeClassPhase(ctx));
         const purchase = await lockPurchase(ctx, purchaseId);
         if (purchase === null) {
           throw notFound(purchaseId);
         }
         const { parts, ledgers } = await loadVoidable(ctx, purchase);
         const locked = await acquireLocks(ctx, voidPlan(purchase, parts, ledgers));
-        const { stored, reversal } = await executeVoid(ctx, { purchase, parts, ledgers, locked, voidedAt: now() });
+        const { stored, reversal } = await executeVoid(ctx, { purchase, parts, ledgers, locked, voidedAt: now(), actor });
 
         const audit = voidAuditData(purchase, reversal);
         await insertPurchaseAudit(ctx, {
@@ -756,14 +772,17 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
 
     return runWrite(route, { lines: dto.lines.length }, (ctx) =>
       withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+        const phase = await lockSizeClassPhase(ctx);
+        assertPurchaseVoidAvailable(phase);
         const purchase = await lockPurchase(ctx, purchaseId);
         if (purchase === null) {
           throw notFound(purchaseId);
         }
         const { parts, ledgers } = await loadVoidable(ctx, purchase);
         const locked = await acquireLocks(ctx, mergePlans(voidPlan(purchase, parts, ledgers), receivePlan(dto)));
+        await assertPurchasesAvailable(ctx, phase, dto.lines.map((line) => line.productId));
 
-        const { reversal } = await executeVoid(ctx, { purchase, parts, ledgers, locked, voidedAt: now() });
+        const { reversal } = await executeVoid(ctx, { purchase, parts, ledgers, locked, voidedAt: now(), actor });
         const stored = await recordNewPurchase(ctx, {
           dto,
           actor,
@@ -793,6 +812,8 @@ export function createPurchasesService(options: PurchasesServiceOptions) {
 
   return {
     createPurchase,
+    previewPurchaseEmpties: (input: PurchaseEmptiesPreviewBody, actor: Actor) =>
+      previewPurchaseEmpties(prisma, input, actor, options.txTimeouts),
     recordPayment,
     reversePayment,
     voidPurchase: voidExistingPurchase,

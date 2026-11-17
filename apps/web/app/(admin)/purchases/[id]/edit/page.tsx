@@ -33,9 +33,10 @@ import { WriteFlowStatus } from "@/components/write-flow-status";
 import { useWriteFlow } from "@/hooks/use-write-flow";
 import { useFormDraft } from "@/hooks/use-form-draft";
 import { DraftBanner } from "@/components/draft-banner";
+import { PurchaseEmptiesCheck, parseEmptiesShortageResolution, type EmptiesShortageResolution } from "@/components/purchases/purchase-empties-check";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { accountingApi, productsApi, purchasesApi, suppliersApi } from "@/lib/api";
+import { accountingApi, isMockApiMode, productsApi, purchasesApi, suppliersApi } from "@/lib/api";
 import type { PurchaseDetailDto } from "@/lib/api/purchases.api";
 import { ApiError, toUserMessage } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query-keys";
@@ -48,6 +49,7 @@ type PurchaseLineDraft = {
   unit: Unit;
   quantity: string;
   pricePerUnitKobo: string;
+  emptiesCrateCount?: string;
 };
 
 const LOCATIONS: StockLocation[] = ["WAREHOUSE", "RETAIL_SHELF", "MARKET"];
@@ -164,7 +166,7 @@ export default function EditPurchasePage() {
     );
   }
 
-  if (purchase.data.payments.length > 0) {
+  if (purchase.data.payments.some((payment) => !payment.reversed)) {
     return (
       <div className="mx-auto max-w-5xl">
         <EmptyState
@@ -214,6 +216,12 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
           unit: line.unit,
           quantity: String(line.quantity),
           pricePerUnitKobo: pricePerUnitKoboOf(line),
+          emptiesCrateCount: (() => {
+            const requirement = purchase.empties?.requirements.find(
+              (entry) => entry.purchaseLineId === line.id && entry.kind === "CRATE" && entry.manualCrateCount,
+            );
+            return requirement === undefined ? undefined : String(requirement.quantity);
+          })(),
         }))
       : [
           {
@@ -226,6 +234,9 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
         ],
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [emptiesResolutions, setEmptiesResolutions] = useState<Record<string, EmptiesShortageResolution>>({});
+  const [emptiesSubmitError, setEmptiesSubmitError] = useState("");
+  const [checkingEmpties, setCheckingEmpties] = useState(false);
   // The replacement keeps the original's paid state so the supplier ledger is
   // unchanged by the amendment. A purchase with payments never reaches here.
   const [amountPaidNow, setAmountPaidNow] = useState<string>(purchase.paidKobo);
@@ -234,6 +245,7 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
   const [dueDate, setDueDate] = useState<string>(purchase.dueDate ?? "");
 
   const lineSeq = useRef(1);
+  const crateCountDefaults = useRef<Record<string, string>>({});
   const submitting = useRef(false);
   const flow = useWriteFlow();
   const retrySubmit = useRef<(() => Promise<void>) | null>(null);
@@ -306,6 +318,7 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
     accountId,
     dueDate,
     lines,
+    emptiesResolutions,
   ]);
   const { edit: renewKey } = flow;
   useEffect(() => {
@@ -328,6 +341,7 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       paymentMethod,
       accountId,
       dueDate,
+      emptiesResolutions,
     },
     onRestore: (saved) => {
       setSupplierId(saved.supplierId);
@@ -345,6 +359,7 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       setPaymentMethod(saved.paymentMethod);
       setAccountId(saved.accountId);
       setDueDate(saved.dueDate);
+      setEmptiesResolutions(saved.emptiesResolutions ?? {});
     },
   });
 
@@ -367,14 +382,24 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
     void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.empties.all });
     draft.clear();
     router.push(`/purchases/${updated.id}?replaced=${purchase.id}`);
   }
 
   function updateLine(id: string, patch: Partial<PurchaseLineDraft>) {
+    setEmptiesSubmitError("");
+    if ("productId" in patch || "unit" in patch) delete crateCountDefaults.current[id];
     setLines((prev) =>
-      prev.map((line) => (line.id === id ? { ...line, ...patch } : line)),
+      prev.map((line) => (line.id === id
+        ? { ...line, ...patch, ...("productId" in patch || "unit" in patch ? { emptiesCrateCount: undefined } : {}) }
+        : line)),
     );
+  }
+
+  function changeCrateCount(lineId: string, value: string, isSuggestion: boolean) {
+    crateCountDefaults.current[lineId] = value;
+    if (!isSuggestion) updateLine(lineId, { emptiesCrateCount: value });
   }
 
   function newLineId(): string {
@@ -537,6 +562,10 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
           return parsed.jsonNumber;
         })(),
         lineTotalKobo: lineTotalKobo(line).toString(),
+        ...((line.emptiesCrateCount ?? crateCountDefaults.current[line.id]) !== undefined &&
+          /^\d+$/.test(line.emptiesCrateCount ?? crateCountDefaults.current[line.id] ?? "")
+          ? { emptiesCrateCount: Number(line.emptiesCrateCount ?? crateCountDefaults.current[line.id]) }
+          : {}),
       })),
     };
 
@@ -546,6 +575,47 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
 
     submitting.current = true;
     try {
+      if (!isMockApiMode) {
+        setEmptiesSubmitError("");
+        setCheckingEmpties(true);
+        const preview = await purchasesApi.previewEmpties({
+          amendingPurchaseId: purchase.id,
+          lines: input.lines.map((line) => ({
+            productId: line.productId,
+            unit: line.unit,
+            quantity: line.quantity,
+            ...(line.emptiesCrateCount === undefined ? {} : { emptiesCrateCount: line.emptiesCrateCount }),
+          })),
+        });
+        for (const result of preview.lines) {
+          for (const requirement of result.requirements) {
+            const line = input.lines[result.index];
+            if (requirement.manualCrateCount && line?.emptiesCrateCount === undefined) {
+              if (line?.unit === "UNIT") line.emptiesCrateCount = 0;
+              else {
+                throw new Error(`Line ${result.index + 1}: review and enter the actual whole-crate count delivered before saving.`);
+              }
+            }
+          }
+        }
+        input.emptiesResolutions = preview.totals
+          .filter((total) => total.shortage > 0)
+          .map((total) => {
+            const draft = emptiesResolutions[total.typeId] ?? {
+              suppliedFree: String(total.shortage),
+              owed: "0",
+            };
+            const split = parseEmptiesShortageResolution(draft, total.shortage);
+            if (!split) {
+              throw new Error(`Choose how to resolve all ${total.shortage} missing ${total.kind.toLowerCase()} empties.`);
+            }
+            if (split.owed > 0 && supplierId === "") {
+              throw new Error("Choose a supplier before recording empties owed to them.");
+            }
+            return { typeId: total.typeId, ...split };
+          });
+      }
+      setCheckingEmpties(false);
       const ok = await confirm({
         title: "Save these changes?",
         description:
@@ -606,7 +676,12 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
       };
       retrySubmit.current = run;
       await run();
+    } catch (cause) {
+      const message = toUserMessage(cause);
+      setEmptiesSubmitError(message);
+      toast.warning(message);
     } finally {
+      setCheckingEmpties(false);
       submitting.current = false;
     }
   }
@@ -628,6 +703,12 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
           </Link>
         }
       />
+
+      {isMockApiMode && (
+        <p role="status" className="rounded-md border border-warning/40 bg-warning-surface p-4 text-sm text-warning">
+          Demo purchases do not check or record supplier empties or empties debts.
+        </p>
+      )}
 
       <div className="rounded-md border border-warning/40 bg-warning-surface p-4 text-sm text-warning">
         Saving will <strong>void this purchase</strong> and create a{" "}
@@ -980,6 +1061,26 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
                 </div>
               );
             })}
+            <PurchaseEmptiesCheck
+              key={lines.map((line) => `${line.id}:${line.productId}:${line.unit}`).join("|")}
+              lines={lines}
+              products={productById}
+              supplierId={supplierId}
+              amendingPurchaseId={purchase.id}
+              resolutions={emptiesResolutions}
+              onCrateCountChange={changeCrateCount}
+              onResolutionChange={(typeId, value) =>
+                setEmptiesResolutions((current) => ({ ...current, [typeId]: value }))
+              }
+            />
+            {emptiesSubmitError && (
+              <p role="alert" className="text-sm text-danger">
+                {emptiesSubmitError}{" "}
+                {/Purchase empties setup|classify this product|container setup/i.test(emptiesSubmitError) && (
+                  <Link href="/empties/purchase-setup" className="font-medium underline">Open Purchase empties setup</Link>
+                )}
+              </p>
+            )}
           </CardBody>
         </Card>
 
@@ -1021,6 +1122,11 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
                     checkHref={`/purchases?date=${purchasedAt}`}
                     checkLabel="Check recent purchases"
                   />
+                  {flow.status === "failed" && /Purchase empties setup|classify this product|container setup/i.test(toUserMessage(flow.error)) && (
+                    <Link href="/empties/purchase-setup" className="mt-2 inline-block text-sm font-medium text-primary underline">
+                      Open Purchase empties setup
+                    </Link>
+                  )}
                 </div>
               )}
               {network.offline && (
@@ -1033,7 +1139,7 @@ function PurchaseEditForm({ purchase }: { purchase: PurchaseDetailDto }) {
                 type="submit"
                 size="lg"
                 className="w-full sm:w-auto"
-                loading={flow.pending}
+                loading={checkingEmpties || flow.pending}
                 disabled={network.offline || flow.status === "unknown"}
               >
                 Save changes

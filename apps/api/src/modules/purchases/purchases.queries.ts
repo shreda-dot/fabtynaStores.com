@@ -160,12 +160,30 @@ export async function getPurchaseDetail(prisma: PrismaClient, id: string) {
 
   const paymentIds = purchase.payments.map((payment) => payment.id);
   const related = [{ purchaseId: id }, ...(paymentIds.length > 0 ? [{ supplierPaymentId: { in: paymentIds } }] : [])];
-  const [supplierLedger, accountLedger] = await Promise.all([
+  const [supplierLedger, accountLedger, emptiesRequirements, emptiesEvents, emptiesObligations] = await Promise.all([
     prisma.supplierLedgerEntry.findMany({ where: { OR: related }, orderBy: [{ occurredAt: "asc" }, { id: "asc" }] }),
     prisma.accountLedgerEntry.findMany({
       where: { OR: related },
       include: { account: { select: { name: true } } },
       orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+    }),
+    prisma.purchaseEmptiesRequirement.findMany({
+      where: { purchaseLine: { purchaseId: id } },
+      include: { type: { select: { label: true } } },
+      orderBy: [{ purchaseLineId: "asc" }, { kind: "asc" }],
+    }),
+    prisma.supplierEmptiesEvent.findMany({
+      where: { purchaseId: id },
+      include: {
+        type: { select: { label: true, kind: true } },
+        reversedBy: { select: { id: true } },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
+    prisma.supplierEmptiesObligation.findMany({
+      where: { purchaseId: id },
+      include: { balance: { select: { quantity: true } }, type: { select: { label: true, kind: true } } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
   ]);
 
@@ -202,6 +220,20 @@ export async function getPurchaseDetail(prisma: PrismaClient, id: string) {
       accountName: account.name,
       reversed: reversedPaymentIds.has(payment.id),
     })),
+    empties: {
+      tracked: purchaseRow.emptiesTrackingVersion === 1,
+      requirements: emptiesRequirements.map(({ type, ...requirement }) => ({ ...requirement, label: type.label })),
+      events: emptiesEvents.map((event) => ({
+        id: event.id, eventType: event.eventType, typeId: event.typeId,
+        kind: event.type.kind, label: event.type.label, obligationId: event.obligationId,
+        quantity: event.quantity, note: event.note, reversesEntryId: event.reversesEntryId,
+        reversed: event.reversedBy.length > 0, occurredAt: event.occurredAt.toISOString(),
+      })),
+      debts: emptiesObligations.map((obligation) => ({
+        id: obligation.id, supplierId: obligation.supplierId, typeId: obligation.typeId,
+        kind: obligation.type.kind, label: obligation.type.label, quantity: obligation.balance?.quantity ?? 0,
+      })),
+    },
     moneyEntries: {
       supplierLedger: supplierLedger.map((entry) => ({
         id: entry.id,

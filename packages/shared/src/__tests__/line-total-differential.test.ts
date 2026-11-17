@@ -59,12 +59,20 @@ describe("computeSaleLineTotalKobo vs the old rounding", () => {
         // Very large quantities may be refused as too precise for a JSON number; that is the intended guard.
         continue;
       }
-      expect(parsed.scaledQuantity).toBe(scaledQuantity);
+      if (parsed.scaledQuantity !== scaledQuantity) {
+        throw new Error(`Case ${i}: parsed ${parsed.scaledQuantity} instead of ${scaledQuantity}`);
+      }
 
       const expected = oldLineTotal(scaledQuantity, price);
-      expect(computeSaleLineTotalKobo(scaledQuantity, price)).toBe(expected);
+      const actual = computeSaleLineTotalKobo(scaledQuantity, price);
+      if (actual !== expected) {
+        throw new Error(`Case ${i}: line total ${actual} differs from ${expected}`);
+      }
       if ((scaledQuantity * price) % 10000n === 5000n) {
-        expect(expected).toBe((scaledQuantity * price + 5000n) / 10000n);
+        const halfUp = (scaledQuantity * price + 5000n) / 10000n;
+        if (expected !== halfUp) {
+          throw new Error(`Case ${i}: rounding ${expected} differs from half-up ${halfUp}`);
+        }
       }
       compared += 1;
     }

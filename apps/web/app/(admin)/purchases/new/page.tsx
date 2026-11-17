@@ -31,8 +31,9 @@ import { WriteFlowStatus } from "@/components/write-flow-status";
 import { useWriteFlow } from "@/hooks/use-write-flow";
 import { useFormDraft } from "@/hooks/use-form-draft";
 import { DraftBanner } from "@/components/draft-banner";
+import { PurchaseEmptiesCheck, parseEmptiesShortageResolution, type EmptiesShortageResolution } from "@/components/purchases/purchase-empties-check";
 import { useNetworkStatus } from "@/hooks/use-network-status";
-import { accountingApi, productsApi, purchasesApi, suppliersApi } from "@/lib/api";
+import { accountingApi, isMockApiMode, productsApi, purchasesApi, suppliersApi } from "@/lib/api";
 import { toUserMessage } from "@/lib/api/client";
 import { useLagosBusinessDate } from "@/hooks/use-lagos-business-date";
 import { queryKeys } from "@/lib/query-keys";
@@ -45,6 +46,7 @@ type PurchaseLineDraft = {
   unit: Unit;
   quantity: string;
   pricePerUnitKobo: string;
+  emptiesCrateCount?: string;
 };
 
 const LOCATIONS: StockLocation[] = ["WAREHOUSE", "RETAIL_SHELF", "MARKET"];
@@ -88,8 +90,12 @@ export default function NewPurchasePage() {
   const [accountId, setAccountId] = useState("");
   const [dueDate, setDueDate] = useState<string>("");
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [emptiesResolutions, setEmptiesResolutions] = useState<Record<string, EmptiesShortageResolution>>({});
+  const [emptiesSubmitError, setEmptiesSubmitError] = useState("");
+  const [checkingEmpties, setCheckingEmpties] = useState(false);
 
   const lineSeq = useRef(1);
+  const crateCountDefaults = useRef<Record<string, string>>({});
   const submitting = useRef(false);
   const flow = useWriteFlow();
   const retrySubmit = useRef<(() => Promise<void>) | null>(null);
@@ -170,6 +176,7 @@ export default function NewPurchasePage() {
       paymentMethod,
       accountId,
       dueDate,
+      emptiesResolutions,
     },
     onRestore: (saved) => {
       setSupplierId(saved.supplierId);
@@ -187,6 +194,7 @@ export default function NewPurchasePage() {
       setPaymentMethod(saved.paymentMethod);
       setAccountId(saved.accountId);
       setDueDate(saved.dueDate);
+      setEmptiesResolutions(saved.emptiesResolutions ?? {});
     },
   });
 
@@ -202,6 +210,7 @@ export default function NewPurchasePage() {
     accountId,
     dueDate,
     lines,
+    emptiesResolutions,
   ]);
   const { edit: renewKey } = flow;
   useEffect(() => {
@@ -220,6 +229,7 @@ export default function NewPurchasePage() {
         `Purchase preview total ${previewTotal} differs from server total ${purchase.totalKobo}.`,
       );
     }
+
     void queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers.all });
@@ -227,17 +237,27 @@ export default function NewPurchasePage() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.empties.all });
     draft.clear();
     router.push(`/purchases/${purchase.id}`);
   }
 
   function updateLine(id: string, patch: Partial<PurchaseLineDraft>) {
+    setEmptiesSubmitError("");
+    if ("productId" in patch || "unit" in patch) delete crateCountDefaults.current[id];
     setLines((prev) =>
-      prev.map((line) => (line.id === id ? { ...line, ...patch } : line)),
+      prev.map((line) => (line.id === id
+        ? { ...line, ...patch, ...("productId" in patch || "unit" in patch ? { emptiesCrateCount: undefined } : {}) }
+        : line)),
     );
-    // The paid field is keyed to the total; reset it to "pay full" whenever a
-    // line changes so the input and the summary never drift apart.
-    setAmountPaidNow("");
+    if ("productId" in patch || "unit" in patch || "quantity" in patch || "pricePerUnitKobo" in patch) {
+      setAmountPaidNow("");
+    }
+  }
+
+  function changeCrateCount(lineId: string, value: string, isSuggestion: boolean) {
+    crateCountDefaults.current[lineId] = value;
+    if (!isSuggestion) updateLine(lineId, { emptiesCrateCount: value });
   }
 
   function newLineId(): string {
@@ -261,6 +281,7 @@ export default function NewPurchasePage() {
   }
 
   function removeLine(id: string) {
+    delete crateCountDefaults.current[id];
     setLines((prev) =>
       prev.length > 1 ? prev.filter((line) => line.id !== id) : prev,
     );
@@ -380,6 +401,7 @@ export default function NewPurchasePage() {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (submitting.current || flow.pending) return;
+    setEmptiesSubmitError("");
     const found = validateAll();
     setErrors(found);
     if (Object.keys(found).length > 0) {
@@ -410,6 +432,10 @@ export default function NewPurchasePage() {
           return parsed.jsonNumber;
         })(),
         lineTotalKobo: lineTotalKobo(line).toString(),
+        ...((line.emptiesCrateCount ?? crateCountDefaults.current[line.id]) !== undefined &&
+          /^\d+$/.test(line.emptiesCrateCount ?? crateCountDefaults.current[line.id] ?? "")
+          ? { emptiesCrateCount: Number(line.emptiesCrateCount ?? crateCountDefaults.current[line.id]) }
+          : {}),
       })),
     };
 
@@ -419,6 +445,47 @@ export default function NewPurchasePage() {
 
     submitting.current = true;
     try {
+      if (!isMockApiMode) {
+        setEmptiesSubmitError("");
+        setCheckingEmpties(true);
+        const preview = await purchasesApi.previewEmpties({
+          lines: input.lines.map((line) => ({
+            productId: line.productId,
+            unit: line.unit,
+            quantity: line.quantity,
+            ...(line.emptiesCrateCount === undefined ? {} : { emptiesCrateCount: line.emptiesCrateCount }),
+          })),
+        });
+        for (const result of preview.lines) {
+          for (const requirement of result.requirements) {
+            const line = input.lines[result.index];
+            if (requirement.manualCrateCount && line?.emptiesCrateCount === undefined) {
+              if (line?.unit === "UNIT") line.emptiesCrateCount = 0;
+              else {
+                throw new Error(`Line ${result.index + 1}: review and enter the actual whole-crate count delivered before saving.`);
+              }
+            }
+          }
+        }
+        const resolutions = preview.totals
+          .filter((total) => total.shortage > 0)
+          .map((total) => {
+            const draft = emptiesResolutions[total.typeId] ?? {
+              suppliedFree: String(total.shortage),
+              owed: "0",
+            };
+            const split = parseEmptiesShortageResolution(draft, total.shortage);
+            if (!split) {
+              throw new Error(`Choose how to resolve all ${total.shortage} missing ${total.kind.toLowerCase()} empties.`);
+            }
+            if (split.owed > 0 && supplierId === "") {
+              throw new Error("Choose a supplier before recording empties owed to them.");
+            }
+            return { typeId: total.typeId, ...split };
+          });
+        input.emptiesResolutions = resolutions;
+      }
+      setCheckingEmpties(false);
       const ok = await confirm({
         title: "Save this purchase?",
         description: "Confirm the details before receiving goods into stock.",
@@ -478,7 +545,12 @@ export default function NewPurchasePage() {
       };
       retrySubmit.current = run;
       await run();
+    } catch (cause) {
+      const message = toUserMessage(cause);
+      setEmptiesSubmitError(message);
+      toast.warning(message);
     } finally {
+      setCheckingEmpties(false);
       submitting.current = false;
     }
   }
@@ -500,6 +572,12 @@ export default function NewPurchasePage() {
           </Link>
         }
       />
+
+      {isMockApiMode && (
+        <p role="status" className="rounded-md border border-warning/40 bg-warning-surface p-4 text-sm text-warning">
+          Demo purchases do not check or record supplier empties or empties debts.
+        </p>
+      )}
 
       {supportQueryFailed && (
         <ErrorState
@@ -845,6 +923,25 @@ export default function NewPurchasePage() {
                 </div>
               );
             })}
+            <PurchaseEmptiesCheck
+              key={lines.map((line) => `${line.id}:${line.productId}:${line.unit}`).join("|")}
+              lines={lines}
+              products={productById}
+              supplierId={supplierId}
+              resolutions={emptiesResolutions}
+              onCrateCountChange={changeCrateCount}
+              onResolutionChange={(typeId, value) =>
+                setEmptiesResolutions((current) => ({ ...current, [typeId]: value }))
+              }
+            />
+            {emptiesSubmitError && (
+              <p role="alert" className="text-sm text-danger">
+                {emptiesSubmitError}{" "}
+                {/Purchase empties setup|classify this product|container setup/i.test(emptiesSubmitError) && (
+                  <Link href="/empties/purchase-setup" className="font-medium underline">Open Purchase empties setup</Link>
+                )}
+              </p>
+            )}
           </CardBody>
         </Card>
 
@@ -886,6 +983,11 @@ export default function NewPurchasePage() {
                     checkHref={`/purchases?date=${purchasedAt}`}
                     checkLabel="Check recent purchases"
                   />
+                  {flow.status === "failed" && /Purchase empties setup|classify this product|container setup/i.test(toUserMessage(flow.error)) && (
+                    <Link href="/empties/purchase-setup" className="mt-2 inline-block text-sm font-medium text-primary underline">
+                      Open Purchase empties setup
+                    </Link>
+                  )}
                 </div>
               )}
               {network.offline && (
@@ -898,7 +1000,7 @@ export default function NewPurchasePage() {
                 type="submit"
                 size="lg"
                 className="w-full sm:w-auto"
-                loading={flow.pending}
+                loading={checkingEmpties || flow.pending}
                 disabled={network.offline || flow.status === "unknown"}
               >
                 Receive purchase

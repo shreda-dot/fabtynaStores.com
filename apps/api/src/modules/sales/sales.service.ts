@@ -21,6 +21,7 @@ import { AppError, businessRuleError, validationError } from "../../lib/errors.j
 import { hashRequestBody } from "../../lib/idempotency.js";
 import { counted, createWriteRunner } from "../../lib/tx.js";
 import type { TxTimeouts } from "../../lib/tx-options.js";
+import { assertSalesAvailable, lockSizeClassPhase, type SizeClassPhase } from "../empties/size-class-mode.js";
 import {
   insertLaterPayment,
   insertSalePaymentReversal,
@@ -153,9 +154,66 @@ interface Locked {
 async function loadSalePackaging(
   ctx: TxContext,
   productIds: readonly string[],
+  phase: SizeClassPhase,
 ): Promise<SalePackagingRow[]> {
   const ids = [...new Set(productIds)].sort();
   if (ids.length === 0) return [];
+  if (phase === "READY") {
+    counted(ctx);
+    const rows = await ctx.tx.$queryRaw<Array<{
+      productId: string;
+      productName: string;
+      unitsPerPack: number;
+      classification: "RETURNABLE" | "NON_RETURNABLE" | null;
+      typeId: string | null;
+      label: string | null;
+      capacity: number | null;
+      countPerUnit: number | null;
+      typeActive: boolean | null;
+      ownerActive: boolean | null;
+      hasCrateMapping: boolean;
+    }>>`
+      SELECT p.id AS "productId", p.name AS "productName", p."unitsPerPack",
+             c.classification::text AS classification, mapping."typeId", t.label, t.capacity,
+             mapping."countPerUnit", t."isActive" AS "typeActive", o."isActive" AS "ownerActive",
+             EXISTS (SELECT 1 FROM purchase_empties_packaging crate
+                      WHERE crate."productId" = p.id AND crate.kind = 'CRATE') AS "hasCrateMapping"
+        FROM products p
+        LEFT JOIN purchase_empties_products c ON c."productId" = p.id
+        LEFT JOIN purchase_empties_packaging mapping
+          ON mapping."productId" = p.id AND mapping.kind = 'BOTTLE'
+        LEFT JOIN empties_types t ON t.id = mapping."typeId"
+        LEFT JOIN empties_owners o ON o.id = t."ownerId"
+       WHERE p.id = ANY(${ids}::text[]) ORDER BY p.id`;
+    const mappings: SalePackagingRow[] = [];
+    for (const row of rows) {
+      if (row.classification === null) {
+        throw businessRuleError(`Confirm the returnable size or non-returnable classification for '${row.productName}' before selling it.`, {
+          productId: row.productId,
+        });
+      }
+      if (row.classification === "NON_RETURNABLE") {
+        if (row.typeId !== null || row.hasCrateMapping) {
+          throw businessRuleError(`Remove the container mappings for non-returnable '${row.productName}'.`, {
+            productId: row.productId,
+          });
+        }
+        continue;
+      }
+      if (row.typeId === null || row.label === null || row.capacity === null ||
+          row.countPerUnit !== 1 || row.hasCrateMapping ||
+          !row.typeActive || !row.ownerActive) {
+        throw businessRuleError(`Confirm one active bottle size for '${row.productName}' before selling it.`, {
+          productId: row.productId,
+        });
+      }
+      mappings.push({
+        productId: row.productId, typeId: row.typeId, kind: "BOTTLE", label: row.label,
+        retailQuantityPerUnit: 1, wholesaleQuantityPerPack: row.unitsPerPack,
+      });
+    }
+    return mappings;
+  }
   counted(ctx);
   return ctx.tx.$queryRaw<SalePackagingRow[]>`
     SELECT ep."productId", ep."typeId", ep.kind::text AS kind, t.label,
@@ -320,6 +378,7 @@ export function createSalesService(options: SalesServiceOptions) {
       soldAt: Date;
       clientReference: string | null;
       locked: Locked;
+      phase: SizeClassPhase;
       /** Stock the sale may take, by product:location (the locked balances, plus anything a void just put back). */
       availableStock: ReadonlyMap<string, number>;
       auditMetadata: Record<string, unknown>;
@@ -517,7 +576,7 @@ export function createSalesService(options: SalesServiceOptions) {
       emptiesMovements: emptiesMovements.map(({ typeId, quantity }) => ({ typeId, quantity })),
     };
 
-    return insertSale(ctx, {
+    const stored = await insertSale(ctx, {
       sale,
       lines: result.saleLines,
       location: dto.location,
@@ -532,6 +591,12 @@ export function createSalesService(options: SalesServiceOptions) {
         metadata: { actorEmail: actor.email, ...input.auditMetadata } as Prisma.InputJsonValue,
       },
     });
+    if (input.phase === "READY") {
+      counted(ctx);
+      await ctx.tx.$executeRaw`
+        INSERT INTO empties_size_class_sales ("saleId") VALUES (${sale.id})`;
+    }
+    return stored;
   }
 
   /* ---------------------------------------------------------------- *
@@ -761,8 +826,10 @@ export function createSalesService(options: SalesServiceOptions) {
 
     return runWrite(CREATE_SALE_ROUTE, { lines: dto.lines.length }, (ctx) =>
       withIdempotency(ctx, { actorId: actor.id, route: CREATE_SALE_ROUTE, key: idempotencyKey, requestHash }, async () => {
+        const phase = await lockSizeClassPhase(ctx);
+        assertSalesAvailable(phase);
         const locked = await acquireLocks(ctx, salePlan(dto), () =>
-          loadSalePackaging(ctx, dto.lines.map((line) => line.productId)),
+          loadSalePackaging(ctx, dto.lines.map((line) => line.productId), phase),
         );
         const stored = await recordNewSale(ctx, {
           dto,
@@ -770,6 +837,7 @@ export function createSalesService(options: SalesServiceOptions) {
           soldAt,
           clientReference,
           locked,
+          phase,
           availableStock: locked.stock,
           auditMetadata: { idempotencyKey },
         });
@@ -968,6 +1036,7 @@ export function createSalesService(options: SalesServiceOptions) {
     const route = voidRoute(saleId);
     return runWrite(route, {}, (ctx) =>
       withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody({}) }, async () => {
+        assertSalesAvailable(await lockSizeClassPhase(ctx));
         const sale = await lockSale(ctx, saleId);
         if (sale === null) {
           throw new AppError(404, "NOT_FOUND", "Sale not found.", { id: saleId });
@@ -1028,6 +1097,8 @@ export function createSalesService(options: SalesServiceOptions) {
 
     return runWrite(route, { lines: dto.lines.length }, (ctx) =>
       withIdempotency(ctx, { actorId: actor.id, route, key: idempotencyKey, requestHash: hashRequestBody(dto) }, async () => {
+        const phase = await lockSizeClassPhase(ctx);
+        assertSalesAvailable(phase);
         const original = await lockSale(ctx, saleId);
         if (original === null) {
           throw new AppError(404, "NOT_FOUND", "Sale not found.", { id: saleId });
@@ -1036,7 +1107,7 @@ export function createSalesService(options: SalesServiceOptions) {
         const locked = await acquireLocks(
           ctx,
           mergePlans(voidPlan(parts, original, history), salePlan(dto)),
-          () => loadSalePackaging(ctx, dto.lines.map((line) => line.productId)),
+          () => loadSalePackaging(ctx, dto.lines.map((line) => line.productId), phase),
         );
 
         const voided = await executeVoid(ctx, {
@@ -1061,6 +1132,7 @@ export function createSalesService(options: SalesServiceOptions) {
           soldAt,
           clientReference: null,
           locked,
+          phase,
           availableStock,
           auditMetadata: { idempotencyKey, amendedFromSaleId: saleId },
         });

@@ -144,13 +144,20 @@ describe("family support contracts", () => {
   it("adds family collections to existing mock data without changing existing ledgers", () => {
     const saved = { accounts: [{ id: "cash" }], accountLedgerEntries: [{ id: "old-entry" }] };
     const migrated = migrateMockStoreData(7, saved)!;
-    expect(migrated.version).toBe(8);
+    expect(migrated.version).toBe(9);
     expect(migrated.data.accounts).toEqual(saved.accounts);
     expect(migrated.data.accountLedgerEntries).toEqual(saved.accountLedgerEntries);
     expect(migrated.data.familyMembers).toEqual([]);
     expect(migrated.data.drawings).toEqual([]);
     expect(migrated.data.familySupportWrites).toEqual([]);
+    expect(migrated.data.purchaseEmptiesClassifications).toEqual([]);
     const next = migrateMockStoreData(8, { ...migrated.data, drawings: [{ id: "existing" }] })!;
     expect(next.data.drawings).toEqual([{ id: "existing" }]);
+    expect(migrateMockStoreData(8, {
+      products: [{ id: "old-product" }],
+      purchaseEmptiesClassifications: [{ productId: "new-product", classification: "RETURNABLE" }],
+    })!.data.purchaseEmptiesClassifications).toEqual([
+      { productId: "new-product", classification: "RETURNABLE" },
+    ]);
   });
 });

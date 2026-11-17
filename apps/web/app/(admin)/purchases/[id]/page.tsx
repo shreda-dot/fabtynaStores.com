@@ -15,6 +15,7 @@ import {
   defaultAccountId,
 } from "@/components/accounting/account-select";
 import { MoneyInput } from "@/components/money-input";
+import { PurchaseEmptiesSummary } from "@/components/purchases/purchase-empties-summary";
 import { ResponsiveTable } from "@/components/responsive-table";
 import type { ResponsiveTableColumn } from "@/components/responsive-table";
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -107,6 +108,7 @@ export default function PurchaseDetailPage() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.payables.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.reports.all });
     void queryClient.invalidateQueries({ queryKey: queryKeys.accounting.all });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.empties.all });
   }
 
   if (purchase.isPending) {
@@ -555,6 +557,7 @@ export default function PurchaseDetailPage() {
             />
           </CardBody>
         </Card>
+        {p.empties && <PurchaseEmptiesSummary empties={p.empties} supplier={p.supplier} />}
       </div>
 
       <div ref={paymentsRef} className="scroll-mt-20">

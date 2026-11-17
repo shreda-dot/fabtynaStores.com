@@ -1,3 +1,5 @@
+import { purchaseEmptiesErrorMessage } from "./purchase-empties-errors.js";
+
 /**
  * Stable error envelope for every API response:
  *   { error: { code, message, details } }
@@ -76,13 +78,14 @@ export function pgErrorInfo(error: unknown): PgErrorInfo {
   const cause = asRecord(asRecord(meta?.driverAdapterError)?.cause);
   const constraint = asRecord(cause?.constraint);
 
-  const bareSqlState = prismaCode !== null && /^[0-9A-Z]{5}$/.test(prismaCode) && !/^P\d{4}$/.test(prismaCode)
+  const bareSqlState = prismaCode !== null && /^[0-9A-Z]{5}$/.test(prismaCode)
+    && (prismaCode === "P0001" || !/^P\d{4}$/.test(prismaCode))
     ? prismaCode
     : null;
 
   return {
     sqlState: asString(cause?.originalCode) ?? asString(cause?.code) ?? bareSqlState,
-    message: asString(cause?.originalMessage) ?? asString(cause?.message),
+    message: asString(cause?.originalMessage) ?? asString(cause?.message) ?? asString(top?.message),
     constraint: asString(constraint?.index) ?? asString(constraint?.name) ?? asString(top?.constraint),
     prismaCode,
   };
@@ -155,6 +158,11 @@ export function mapKnownError(error: unknown): AppError | null {
   }
 
   const info = pgErrorInfo(error);
+
+  if (info.sqlState === "P0001" || info.sqlState === "23514" || info.sqlState === "23503" || info.sqlState === "23505") {
+    const message = purchaseEmptiesErrorMessage(info.message, info.constraint);
+    if (message !== null) return businessRuleError(message);
+  }
 
   if (isRetryableError(error)) {
     return new AppError(503, "UNAVAILABLE", "The system is busy. Please try again.", null);

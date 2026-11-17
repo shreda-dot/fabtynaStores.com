@@ -77,10 +77,10 @@ export default function EmptiesCustomersPage() {
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {totals.map((total) => (
-              <Card key={total.ownerId}>
+              <Card key={`${total.ownerId}-${total.kind}`}>
                 <CardBody className="space-y-1">
                   <p className="text-sm text-muted-foreground">{total.ownerName}</p>
-                  <p className="text-2xl font-semibold tabular">{total.quantity} empties owed</p>
+                  <p className="text-2xl font-semibold tabular">{total.quantity} {total.kind === "CRATE" ? "crates" : "bottles"} owed</p>
                   {total.valueKobo !== null && <Money kobo={total.valueKobo} tone="neutral" />}
                 </CardBody>
               </Card>

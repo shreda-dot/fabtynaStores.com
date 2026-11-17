@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -94,6 +94,7 @@ export default function SuppliersPage() {
       closeForm();
     },
   });
+  const saveFieldErrors = useMemo(() => apiFieldErrors(saveMutation.error), [saveMutation.error]);
   const actionMutation = useMutation({
     mutationFn: ({
       action,
@@ -141,11 +142,15 @@ export default function SuppliersPage() {
   }
 
   async function save(input: CreateSupplierDto) {
-    await saveMutation.mutateAsync({
-      id: editingSupplier?.id,
-      input,
-      key: saveIntent.current.getKey(),
-    });
+    try {
+      await saveMutation.mutateAsync({
+        id: editingSupplier?.id,
+        input,
+        key: saveIntent.current.getKey(),
+      });
+    } catch (error) {
+      toast.error(toUserMessage(error));
+    }
   }
 
   async function setSupplierActive(row: SupplierListItemDto, active: boolean) {
@@ -345,7 +350,7 @@ export default function SuppliersPage() {
         <SupplierForm
           key={editingSupplier?.id ?? "new-supplier"}
           supplier={editingSupplier}
-          fieldErrors={apiFieldErrors(saveMutation.error)}
+          fieldErrors={saveFieldErrors}
           error={saveMutation.error ? toUserMessage(saveMutation.error) : undefined}
           pending={saveMutation.isPending}
           onCancel={closeForm}

@@ -22,6 +22,13 @@ import {
   ownerListQuerySchema,
   patchTypeSchema,
   productOwnerListQuerySchema,
+  purchaseEmptiesSetupListSchema,
+  purchaseEmptiesSetupSchema,
+  openingSupplierEmptiesDebtSchema,
+  supplierEmptiesDebtListSchema,
+  settleSupplierEmptiesDebtSchema,
+  supplierEmptiesSettlementListSchema,
+  sizeClassRecountSchema,
   renameOwnerSchema,
   reverseMovementSchema,
   reverseCustomerMovementSchema,
@@ -144,6 +151,27 @@ export function registerEmptiesRoutes(
     return reply.status(200).send(await deps.service.getOverview());
   });
 
+  app.get("/empties/size-class-recount", async (request, reply) => {
+    requireActor(request);
+    return reply.status(200).send(await deps.service.getSizeClassRecount());
+  });
+
+  app.post("/empties/size-class-recount/begin", async (request, reply) => {
+    const actor = requireActor(request);
+    if (request.body !== undefined && request.body !== null
+        && (typeof request.body !== "object" || Object.keys(request.body).length !== 0)) {
+      throw validationError("The recount start request must be empty.");
+    }
+    return send(reply, await deps.service.beginSizeClassRecount(actor, readKey(request)));
+  });
+
+  app.post("/empties/size-class-recount", async (request, reply) => {
+    const actor = requireActor(request);
+    const parsed = sizeClassRecountSchema.safeParse(request.body);
+    if (!parsed.success) throw validationError("The empties recount is not valid.", parsed.error.issues);
+    return send(reply, await deps.service.submitSizeClassRecount(parsed.data, actor, readKey(request)));
+  });
+
   app.get("/empties/product-owners", async (request, reply) => {
     requireActor(request);
     const parsed = productOwnerListQuerySchema.safeParse(request.query);
@@ -151,6 +179,57 @@ export function registerEmptiesRoutes(
       throw validationError("The product-owner filter is not valid.", parsed.error.issues);
     }
     return reply.status(200).send(await deps.service.listProductOwners(parsed.data));
+  });
+
+  app.get("/empties/purchase-setup", async (request, reply) => {
+    requireActor(request);
+    const parsed = purchaseEmptiesSetupListSchema.safeParse(request.query);
+    if (!parsed.success) throw validationError("The purchase setup filter is not valid.", parsed.error.issues);
+    return reply.status(200).send(await deps.service.listPurchaseEmptiesSetup(parsed.data));
+  });
+
+  app.put("/empties/products/:productId/purchase-setup", async (request, reply) => {
+    const actor = requireActor(request);
+    const productId = readProductId(request);
+    const parsed = purchaseEmptiesSetupSchema.safeParse(request.body);
+    if (!parsed.success) throw validationError("The purchase container setup is not valid.", parsed.error.issues);
+    return send(reply, await deps.service.setPurchaseEmptiesSetup(productId, parsed.data, actor, readKey(request)));
+  });
+
+  app.get("/empties/supplier-debts", async (request, reply) => {
+    requireActor(request);
+    const parsed = supplierEmptiesDebtListSchema.safeParse(request.query);
+    if (!parsed.success) throw validationError("The supplier empties debt filter is not valid.", parsed.error.issues);
+    return reply.status(200).send(await deps.service.listSupplierEmptiesDebts(parsed.data));
+  });
+
+  app.post("/empties/supplier-debts/opening", async (request, reply) => {
+    const actor = requireActor(request);
+    const parsed = openingSupplierEmptiesDebtSchema.safeParse(request.body);
+    if (!parsed.success) throw validationError("The opening empties debt is not valid.", parsed.error.issues);
+    return send(reply, await deps.service.createOpeningSupplierEmptiesDebt(parsed.data, actor, readKey(request)));
+  });
+
+  app.post("/empties/supplier-debts/settle", async (request, reply) => {
+    const actor = requireActor(request);
+    const parsed = settleSupplierEmptiesDebtSchema.safeParse(request.body);
+    if (!parsed.success) throw validationError("The empties settlement is not valid.", parsed.error.issues);
+    return send(reply, await deps.service.settleSupplierEmptiesDebt(parsed.data, actor, readKey(request)));
+  });
+
+  app.get("/empties/supplier-debts/settlements", async (request, reply) => {
+    requireActor(request);
+    const parsed = supplierEmptiesSettlementListSchema.safeParse(request.query);
+    if (!parsed.success) throw validationError("The settlement filter is not valid.", parsed.error.issues);
+    return reply.status(200).send(await deps.service.listSupplierEmptiesSettlements(parsed.data));
+  });
+
+  app.post("/empties/supplier-debts/settlements/:id/reverse", async (request, reply) => {
+    const actor = requireActor(request);
+    const id = readId(request);
+    const parsed = reverseMovementSchema.safeParse(request.body);
+    if (!parsed.success) throw validationError("The settlement correction is not valid.", parsed.error.issues);
+    return send(reply, await deps.service.reverseSupplierEmptiesSettlement(id, parsed.data.reason, actor, readKey(request)));
   });
 
   app.put("/empties/product-owners/:productId", async (request, reply) => {

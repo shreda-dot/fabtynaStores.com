@@ -174,7 +174,10 @@ describe("customer crate deposits", () => {
 
     const list = await h.app.inject({ method: "GET", url: `/empties/deposits?customerId=${customer.id}` });
     expect(list.statusCode, list.body).toBe(200);
-    const balances = await h.app.inject({ method: "GET", url: "/empties/deposit-balances" });
+    const balances = await h.app.inject({
+      method: "GET",
+      url: `/empties/deposit-balances?q=${encodeURIComponent(customer.name)}`,
+    });
     expect(balances.statusCode, balances.body).toBe(200);
     expect(balances.body).toContain(customer.id);
   }, 300_000);

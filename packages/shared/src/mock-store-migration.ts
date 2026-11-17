@@ -7,7 +7,7 @@
  * are created empty, and new fields are back-filled only when absent.
  */
 
-export const MOCK_STORE_CURRENT_VERSION = 8;
+export const MOCK_STORE_CURRENT_VERSION = 9;
 export const ACCOUNT_MIGRATION_RECONCILIATION_NOTICE_ID =
   "mock-migration-v7-account-reconciliation";
 
@@ -36,6 +36,7 @@ const ACCOUNT_LEDGER_SOURCE_KEYS = [
 
 const ALL_COLLECTIONS = [
   "products",
+  "purchaseEmptiesClassifications",
   "suppliers",
   "customers",
   "purchases",

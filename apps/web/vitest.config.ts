@@ -11,6 +11,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    maxWorkers: 2,
     clearMocks: true,
     restoreMocks: true,
   },

@@ -103,6 +103,30 @@ describe("customer-owned empties query strings", () => {
     );
   });
 
+  it("keeps supplier debt and settlement filters valid for their distinct endpoints", async () => {
+    const previousBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+    process.env.NEXT_PUBLIC_API_BASE_URL = "http://api.test";
+    const fetchMock = vi.fn().mockImplementation(
+      async () => new Response(JSON.stringify({ items: [], nextCursor: null }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await emptiesRealApi.listSupplierDebts({ supplierId: "supplier-1", includeSettled: false, limit: 25 });
+      await emptiesRealApi.listSupplierSettlements({ supplierId: "supplier-1", limit: 25 });
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+        "http://api.test/empties/supplier-debts?supplierId=supplier-1&includeSettled=false&limit=25",
+        "http://api.test/empties/supplier-debts/settlements?supplierId=supplier-1&limit=25",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+      if (previousBaseUrl === undefined) delete process.env.NEXT_PUBLIC_API_BASE_URL;
+      else process.env.NEXT_PUBLIC_API_BASE_URL = previousBaseUrl;
+    }
+  });
+
   it("encodes movement date, customer, type, cursor and limit filters", () => {
     expect(
       customerMovementsQuery({

@@ -199,6 +199,19 @@ enum EmptiesKind {
   CRATE
 }
 
+enum PurchaseEmptiesClassification {
+  RETURNABLE
+  NON_RETURNABLE
+}
+
+enum SupplierEmptiesEventType {
+  RETURNED_FOR_PURCHASE
+  SUPPLIED_FREE
+  PURCHASE_DEBT
+  OPENING_DEBT
+  DEBT_SETTLEMENT
+}
+
 /// `OPENING` is the starting count (at most one live per type);
 /// `RECEIVED` records containers returned by a sale or customer; `ISSUED_TO_CUSTOMER`
 /// removes empties taken by a customer; `RETURNED_TO_OWNER` sends empties back
@@ -253,6 +266,8 @@ model AdminUser {
   emptiesMovements         EmptiesMovement[]
   emptiesCustomerMovements EmptiesCustomerMovement[]
   emptiesDepositMovements  EmptiesDepositMovement[]
+  supplierEmptiesObligations SupplierEmptiesObligation[]
+  supplierEmptiesEvents      SupplierEmptiesEvent[]
   drawings                 Drawing[]
 
   @@map("admin_users")
@@ -361,6 +376,7 @@ model Product {
   transferLines      StockTransferLine[]
   adjustmentLines    StockAdjustmentLine[]
   emptiesOwner       EmptiesProductOwner?
+  purchaseEmpties    PurchaseEmptiesProduct?
 
   // Partial unique index on (sku) WHERE deletedAt IS NULL and the
   // `sku = upper(trim(sku))` CHECK live in the hand-written SQL migrations;
@@ -384,6 +400,7 @@ model Supplier {
   purchases     Purchase[]
   payments      SupplierPayment[]
   ledgerEntries SupplierLedgerEntry[]
+  emptiesObligations SupplierEmptiesObligation[]
 
   @@index([name])
   @@index([deletedAt])
@@ -438,12 +455,18 @@ model Purchase {
   receivedAt            DateTime?
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
+  emptiesTrackingVersion Int?                 @default(1)
+  emptiesCreationTxid    BigInt?              @default(dbgenerated("txid_current()"))
+  emptiesReceiptTxid     BigInt?
   supplier              Supplier?             @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   createdBy             AdminUser             @relation(fields: [createdById], references: [id], onDelete: Restrict)
   lines                 PurchaseLine[]
   payments              SupplierPayment[]
   supplierLedgerEntries SupplierLedgerEntry[]
   accountLedgerEntries  AccountLedgerEntry[]
+  emptiesChecks         PurchaseEmptiesCheck[]
+  emptiesObligations    SupplierEmptiesObligation[]
+  emptiesEvents         SupplierEmptiesEvent[]
 
   // Hand-written SQL, not Prisma constraints:
   //   * `paidKobo <= totalKobo` (migration `20261017000500_value_checks`);
@@ -470,8 +493,11 @@ model PurchaseLine {
   purchase             Purchase        @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
   product              Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
   stockMovements       StockMovement[]
+  emptiesSnapshot      PurchaseEmptiesLineSnapshot?
+  emptiesRequirements  PurchaseEmptiesRequirement[]
 
   @@index([productId])
+  @@index([purchaseId], map: "purchase_lines_purchase_id_idx")
   @@map("purchase_lines")
 }
 
@@ -676,6 +702,7 @@ model StockBalance {
 
 model Sale {
   id                    String                @id @default(cuid())
+  sizeClassMarker       EmptiesSizeClassSale?
   createdById           String
   customerId            String?
   /// Optional denormalised display name for ad-hoc customers. The application
@@ -1128,10 +1155,11 @@ model EmptiesProductOwner {
   productId String       @id(map: "empties_product_owners_pkey")
   ownerId   String
   createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
-  product   Product      @relation(fields: [productId], references: [id], onDelete: Restrict, map: "fk_empties_product_owners_product")
-  owner     EmptiesOwner @relation(fields: [ownerId], references: [id], onDelete: Restrict, map: "fk_empties_product_owners_owner")
+  updatedAt DateTime     @default(now()) @updatedAt
+  product   Product      @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_empties_product_owners_product")
+  owner     EmptiesOwner @relation(fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_empties_product_owners_owner")
   packaging EmptiesProductPackaging[]
+  purchasePackaging PurchaseEmptiesPackaging[]
 
   @@unique([productId, ownerId], map: "empties_product_owners_product_owner_key")
   @@index([ownerId], map: "empties_product_owners_ownerId_idx")
@@ -1147,7 +1175,7 @@ model EmptiesProductPackaging {
   retailQuantityPerUnit   Int
   wholesaleQuantityPerPack Int
   createdAt               DateTime       @default(now())
-  updatedAt               DateTime       @updatedAt
+  updatedAt               DateTime       @default(now()) @updatedAt
   productOwner            EmptiesProductOwner @relation(fields: [productId, ownerId], references: [productId, ownerId], onDelete: Cascade, onUpdate: Cascade, map: "fk_empties_product_packaging_product_owner")
   type                    EmptiesType    @relation(fields: [ownerId, typeId, kind], references: [ownerId, id, kind], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_product_packaging_type")
 
@@ -1156,9 +1184,34 @@ model EmptiesProductPackaging {
   @@map("empties_product_packaging")
 }
 
+/// Approved bottle counts per crate. Existing rows cannot be changed or deleted;
+/// additional sizes may be approved without reinterpreting historical counts.
+model EmptiesApprovedCapacity {
+  capacity Int           @id(map: "empties_approved_capacities_pkey")
+  types    EmptiesType[]
+
+  @@map("empties_approved_capacities")
+}
+
+model EmptiesSizeClassMode {
+  id    Int    @id(map: "empties_size_class_mode_pkey") @default(1)
+  phase String @default("LEGACY")
+
+  @@map("empties_size_class_mode")
+}
+
+model EmptiesSizeClassSale {
+  saleId        String @id(map: "empties_size_class_sales_pkey")
+  recordedOrder BigInt @default(dbgenerated("nextval('empties_size_class_order_seq'::regclass)"))
+  sale          Sale   @relation(fields: [saleId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_empties_size_class_sales_sale")
+
+  @@map("empties_size_class_sales")
+}
+
 /// One kind of empties for an owner (a crate, a bottle size, ...).
 /// `unitValueKobo` is display-only and optional. `ownerId` and `kind` are
-/// immutable once created (`trg_empties_type_guard`).
+/// immutable once created (`trg_empties_type_guard`). Capacity is immutable
+/// and nullable for legacy types. Sized types are BOTTLE counts.
 ///
 /// Uniqueness is per (ownerId, kind, case/space-insensitive label) and is a
 /// hand-written EXPRESSION index (`empties_types_owner_kind_label_key`), which
@@ -1168,17 +1221,25 @@ model EmptiesType {
   ownerId           String
   kind              EmptiesKind
   label             String
+  capacity          Int?
   unitValueKobo     BigInt?
   isActive          Boolean                   @default(true)
   createdAt         DateTime                  @default(now())
   owner             EmptiesOwner              @relation(fields: [ownerId], references: [id], onDelete: Restrict, map: "fk_empties_types_owner")
+  approvedCapacity  EmptiesApprovedCapacity?  @relation(fields: [capacity], references: [capacity], onDelete: Restrict, onUpdate: NoAction, map: "fk_empties_types_capacity")
   movements         EmptiesMovement[]
   balance           EmptiesBalance?
   customerMovements EmptiesCustomerMovement[]
   customerBalances  EmptiesCustomerBalance[]
   productPackaging EmptiesProductPackaging[]
+  purchasePackaging PurchaseEmptiesPackaging[]
+  purchaseRequirements PurchaseEmptiesRequirement[]
+  purchaseChecks PurchaseEmptiesCheck[]
+  supplierObligations SupplierEmptiesObligation[]
+  supplierEvents SupplierEmptiesEvent[]
 
   @@unique([ownerId, id, kind], map: "empties_types_owner_id_kind_key")
+  // Sized types are unique per owner, kind and capacity via a partial index.
   // `char_length(btrim(label)) BETWEEN 1 AND 40` and
   // `"unitValueKobo" IS NULL OR "unitValueKobo" >= 0` are hand-written CHECKs.
   @@map("empties_types")
@@ -1201,10 +1262,12 @@ model EmptiesMovement {
   occurredAt      DateTime                  @default(now())
   createdById     String
   saleId          String?
+  supplierEmptiesEventId String?
   reversesEntryId String?
   createdAt       DateTime                  @default(now())
   type            EmptiesType               @relation(fields: [typeId], references: [id], onDelete: Restrict, map: "fk_empties_movements_type")
   sale            Sale?                     @relation(fields: [saleId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_empties_movements_sale")
+  supplierEmptiesEvent SupplierEmptiesEvent? @relation(fields: [supplierEmptiesEventId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_empties_movements_supplier_event")
   createdBy       AdminUser                 @relation(fields: [createdById], references: [id], onDelete: Restrict, map: "fk_empties_movements_created_by")
   reversesEntry   EmptiesMovement?          @relation("EmptiesMovementReversals", fields: [reversesEntryId], references: [id], onDelete: Restrict)
   reversedBy      EmptiesMovement[]         @relation("EmptiesMovementReversals")
@@ -1238,6 +1301,119 @@ model EmptiesBalance {
   @@map("empties_balances")
 }
 
+model PurchaseEmptiesProduct {
+  productId      String                         @id(map: "purchase_empties_products_pkey")
+  classification PurchaseEmptiesClassification
+  product        Product                        @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_purchase_empties_products_product")
+
+  @@map("purchase_empties_products")
+}
+
+model PurchaseEmptiesPackaging {
+  productId    String
+  ownerId      String
+  typeId       String
+  kind         EmptiesKind
+  countPerUnit Int?
+  countPerPack Int?
+  cratesPerPack Int?
+  confirmationOrder BigInt @default(dbgenerated("nextval('empties_size_class_order_seq'::regclass)"))
+  productOwner EmptiesProductOwner @relation(fields: [productId, ownerId], references: [productId, ownerId], onDelete: Restrict, onUpdate: NoAction, map: "fk_purchase_empties_packaging_owner")
+  type         EmptiesType         @relation(fields: [ownerId, typeId, kind], references: [ownerId, id, kind], onDelete: Restrict, onUpdate: NoAction, map: "fk_purchase_empties_packaging_type")
+
+  @@id([productId, kind], map: "purchase_empties_packaging_pkey")
+  @@map("purchase_empties_packaging")
+}
+
+model PurchaseEmptiesLineSnapshot {
+  purchaseLineId String                         @id(map: "purchase_empties_line_snapshots_pkey")
+  classification PurchaseEmptiesClassification
+  purchaseLine   PurchaseLine                   @relation(fields: [purchaseLineId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_purchase_empties_line_snapshots_line")
+
+  @@map("purchase_empties_line_snapshots")
+}
+
+model PurchaseEmptiesRequirement {
+  purchaseLineId       String
+  typeId               String
+  kind                 EmptiesKind
+  quantity             Int
+  manualCrateCount     Boolean      @default(false)
+  countPerUnitSnapshot Int?
+  countPerPackSnapshot Int?
+  crateCountSnapshot Int?
+  cratesPerPackSnapshot Int?
+  purchaseLine         PurchaseLine @relation(fields: [purchaseLineId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_purchase_empties_requirements_line")
+  type                 EmptiesType  @relation(fields: [typeId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_purchase_empties_requirements_type")
+
+  @@id([purchaseLineId, kind], map: "purchase_empties_requirements_pkey")
+  @@map("purchase_empties_requirements")
+}
+
+model PurchaseEmptiesCheck {
+  purchaseId        String
+  typeId            String
+  availableQuantity Int
+  capturedTxid      BigInt
+  purchase          Purchase    @relation(fields: [purchaseId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_purchase_empties_checks_purchase")
+  type              EmptiesType @relation(fields: [typeId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_purchase_empties_checks_type")
+
+  @@id([purchaseId, typeId], map: "purchase_empties_checks_pkey")
+  @@map("purchase_empties_checks")
+}
+
+model SupplierEmptiesObligation {
+  id          String   @id(map: "supplier_empties_obligations_pkey")
+  supplierId  String
+  typeId      String
+  purchaseId  String?
+  createdById String
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  supplier    Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_supplier_empties_obligations_supplier")
+  type        EmptiesType @relation(fields: [typeId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_supplier_empties_obligations_type")
+  purchase    Purchase? @relation(fields: [purchaseId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_supplier_empties_obligations_purchase")
+  createdBy   AdminUser @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_supplier_empties_obligations_actor")
+  events      SupplierEmptiesEvent[]
+  balance     SupplierEmptiesObligationBalance?
+
+  @@index([supplierId, typeId, createdAt, id], map: "supplier_empties_obligations_supplier_type_created_idx")
+  @@map("supplier_empties_obligations")
+}
+
+model SupplierEmptiesEvent {
+  id              String                   @id(map: "supplier_empties_events_pkey")
+  eventType       SupplierEmptiesEventType
+  typeId          String
+  purchaseId      String?
+  obligationId    String?
+  quantity        Int
+  reversesEntryId String?
+  note            String?
+  createdById     String
+  occurredAt      DateTime                 @default(now()) @db.Timestamptz(3)
+  createdAt       DateTime                 @default(now()) @db.Timestamptz(3)
+  type            EmptiesType              @relation(fields: [typeId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_supplier_empties_events_type")
+  purchase        Purchase?                @relation(fields: [purchaseId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_supplier_empties_events_purchase")
+  obligation      SupplierEmptiesObligation? @relation(fields: [obligationId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_supplier_empties_events_obligation")
+  reversesEntry   SupplierEmptiesEvent?    @relation("SupplierEmptiesEventReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_supplier_empties_events_reversal")
+  reversedBy      SupplierEmptiesEvent[]   @relation("SupplierEmptiesEventReversal")
+  createdBy       AdminUser                @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_supplier_empties_events_actor")
+  movements       EmptiesMovement[]
+
+  @@index([obligationId, createdAt, id], map: "supplier_empties_events_obligation_created_idx")
+  @@index([purchaseId, typeId], map: "supplier_empties_events_purchase_type_idx")
+  @@map("supplier_empties_events")
+}
+
+model SupplierEmptiesObligationBalance {
+  obligationId String                    @id(map: "supplier_empties_obligation_balances_pkey")
+  quantity     Int
+  updatedAt    DateTime                  @default(now()) @db.Timestamptz(3)
+  obligation   SupplierEmptiesObligation @relation(fields: [obligationId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_supplier_empties_balances_obligation")
+
+  @@map("supplier_empties_obligation_balances")
+}
+
 /// Customer-side crate ledger. A TAKEN or RETURNED row links to the matching
 /// inventory movement; both are inserted atomically.
 model EmptiesCustomerMovement {
@@ -1247,7 +1423,7 @@ model EmptiesCustomerMovement {
   movementType      EmptiesCustomerMovementType
   quantity          Int
   note              String?
-  occurredAt        DateTime                    @db.Timestamptz(3)
+  occurredAt        DateTime                    @default(now()) @db.Timestamptz(3)
   createdById       String
   emptiesMovementId String?
   reversesEntryId   String?
@@ -1292,7 +1468,7 @@ model EmptiesDepositMovement {
   accountTransferId  String?
   customerMovementId String?
   note               String?
-  occurredAt         DateTime                   @db.Timestamptz(3)
+  occurredAt         DateTime                   @default(now()) @db.Timestamptz(3)
   createdById        String
   reversesEntryId    String?
   createdAt          DateTime                   @default(now()) @db.Timestamptz(3)

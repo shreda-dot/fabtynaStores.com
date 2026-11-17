@@ -98,6 +98,7 @@ export const createPurchaseLineDtoSchema = z
      */
     quantity: z.number().positive(),
     lineTotalKobo: nonnegativeKoboStringSchema,
+    emptiesCrateCount: z.number().int().safe().min(0).max(2_147_483_647).optional(),
   })
   .strict();
 
@@ -120,8 +121,18 @@ export const createPurchaseDtoSchema = z
     /** The account the up-front payment left. Required by the domain when paid. */
     accountId: idSchema.nullable().optional(),
     lines: z.array(createPurchaseLineDtoSchema).min(1),
+    emptiesResolutions: z.array(z.object({
+      typeId: idSchema,
+      suppliedFree: z.number().int().safe().min(0).max(2_147_483_647),
+      owed: z.number().int().safe().min(0).max(2_147_483_647),
+    }).strict()).optional(),
   })
-  .strict();
+  .strict()
+  .refine((body) => body.emptiesResolutions === undefined
+    || new Set(body.emptiesResolutions.map((entry) => entry.typeId)).size === body.emptiesResolutions.length, {
+    message: "Each container type can only have one shortage resolution.",
+    path: ["emptiesResolutions"],
+  });
 
 export const recordPurchasePaymentDtoSchema = z
   .object({

@@ -1,3 +1,5 @@
+import type { Unit } from "@fabtyna/shared";
+
 export type EmptiesKind = "BOTTLE" | "CRATE";
 
 export type EmptiesMovementType =
@@ -30,6 +32,7 @@ export type EmptiesTypeDto = {
   ownerName: string;
   kind: EmptiesKind;
   label: string;
+  capacity: number | null;
   /** Display-only unit value in kobo, or null when the type has no value. */
   unitValueKobo: string | null;
   isActive: boolean;
@@ -60,6 +63,7 @@ export type EmptiesBalanceDto = {
   ownerName: string;
   kind: EmptiesKind;
   label: string;
+  capacity: number | null;
   unitValueKobo: string | null;
   quantity: number;
   /** `quantity * unitValueKobo`, or null when the type has no display value. */
@@ -73,7 +77,7 @@ export type EmptiesBalanceTotalsDto = {
 
 export type EmptiesBalancesDto = {
   items: EmptiesBalanceDto[];
-  totalsByOwner: Array<EmptiesBalanceTotalsDto & { ownerId: string; ownerName: string }>;
+  totalsByOwner: Array<EmptiesBalanceTotalsDto & { ownerId: string; ownerName: string; kind: EmptiesKind }>;
   totalsByKind: Array<EmptiesBalanceTotalsDto & { kind: EmptiesKind }>;
 };
 
@@ -99,6 +103,18 @@ export type EmptiesOverviewOwnerDto = {
   bottlesOnShelfAndMarket: number;
   totalCrates: number;
   emptyValueKobo: string | null;
+  sizeClasses: Array<{
+    typeId: string;
+    capacity: number;
+    label: string;
+    stockBottles: number;
+    emptyBottles: number;
+    emptyCrates: number;
+    looseEmptyBottles: number;
+    totalBottles: number;
+    totalCrates: number;
+    looseTotalBottles: number;
+  }>;
   products: EmptiesProductOverviewDto[];
 };
 
@@ -120,7 +136,29 @@ export type EmptiesOverviewDto = {
     productsWithoutBrewery: EmptiesStockWarningDto[];
     assignedCans: EmptiesStockWarningDto[];
     productsAssignedToInactiveOwner: EmptiesStockWarningDto[];
+    productsWithoutConfirmedSize: EmptiesStockWarningDto[];
   };
+};
+
+export type SizeClassRecountDto = {
+  phase: "LEGACY" | "RECOUNT_PENDING" | "READY";
+  classes: Array<{
+    typeId: string;
+    ownerId: string;
+    ownerName: string;
+    label: string;
+    capacity: number;
+    quantity: number;
+  }>;
+};
+
+export type SizeClassRecountInput = {
+  counts: Array<{
+    typeId: string;
+    emptyCrates: number;
+    looseBottles: number;
+  }>;
+  reason: string;
 };
 
 export type ProductOwnerDto = {
@@ -146,6 +184,127 @@ export type EmptiesProductPackagingInput = {
     kind: EmptiesKind;
     retailQuantityPerUnit: number;
     wholesaleQuantityPerPack: number;
+  }>;
+};
+
+export type PurchaseEmptiesSetupMapping = {
+  typeId: string;
+  kind: EmptiesKind;
+  label: string;
+  countPerUnit: number | null;
+  countPerPack: number | null;
+  cratesPerPack: number | null;
+  capacity: number | null;
+};
+
+export type PurchaseEmptiesSetupItem = {
+  productId: string;
+  productName: string;
+  sku: string | null;
+  unitsPerPack: number;
+  isActive: boolean;
+  ownerId: string | null;
+  ownerName: string | null;
+  ownerIsActive: boolean | null;
+  classification: "RETURNABLE" | "NON_RETURNABLE" | null;
+  mappings: PurchaseEmptiesSetupMapping[];
+  salePackagingSuggestions: Array<{
+    typeId: string;
+    kind: EmptiesKind;
+    label: string;
+    retailQuantityPerUnit: number;
+    wholesaleQuantityPerPack: number;
+  }>;
+};
+
+export type PurchaseEmptiesSetupPage = {
+  items: PurchaseEmptiesSetupItem[];
+  nextCursor: string | null;
+};
+
+export type PurchaseEmptiesSetupInput = {
+  classification: "RETURNABLE" | "NON_RETURNABLE";
+  mappings: Array<
+    | { kind: "CRATE"; typeId: string; countPerPack: number }
+    | { kind: "BOTTLE"; typeId: string; countPerUnit: number; cratesPerPack?: number | null }
+  >;
+};
+
+export type SupplierEmptiesDebtDto = {
+  id: string;
+  supplierId: string;
+  supplierName: string;
+  typeId: string;
+  ownerName: string;
+  kind: EmptiesKind;
+  typeLabel: string;
+  purchaseId: string | null;
+  purchaseReference: string | null;
+  originalQuantity: number;
+  quantity: number;
+  createdAt: string;
+};
+
+export type SupplierEmptiesDebtPage = {
+  items: SupplierEmptiesDebtDto[];
+  nextCursor: string | null;
+};
+
+export type SupplierEmptiesSettlementDto = {
+  id: string;
+  supplierId: string | null;
+  typeId: string;
+  kind: EmptiesKind;
+  label: string;
+  purchaseId: string | null;
+  obligationId: string | null;
+  quantity: number;
+  note: string | null;
+  occurredAt: string;
+  reversed: boolean;
+};
+
+export type SupplierEmptiesSettlementPage = {
+  items: SupplierEmptiesSettlementDto[];
+  nextCursor: string | null;
+};
+
+export type SupplierEmptiesListOptions = {
+  supplierId?: string;
+  typeId?: string;
+  includeSettled?: boolean;
+  cursor?: string | null;
+  limit?: number;
+};
+
+export type PurchaseEmptiesPreviewInput = {
+  lines: Array<{
+    productId: string;
+    unit: Unit;
+    quantity: number;
+    emptiesCrateCount?: number;
+  }>;
+  amendingPurchaseId?: string;
+};
+
+export type PurchaseEmptiesPreviewDto = {
+  lines: Array<{
+    index: number;
+    requirements: Array<{
+      typeId: string;
+      kind: EmptiesKind;
+      quantity: number;
+      manualCrateCount: boolean;
+      suggestedCrateCount: number | null;
+    }>;
+  }>;
+  totals: Array<{
+    typeId: string;
+    kind: EmptiesKind;
+    label: string;
+    required: number;
+    available: number;
+    shortage: number;
   }>;
 };
 
@@ -220,6 +379,7 @@ export type EmptiesCustomerBalanceListPage = {
   totalsByOwner: Array<{
     ownerId: string;
     ownerName: string;
+    kind: EmptiesKind;
     quantity: number;
     valueKobo: string | null;
   }>;
@@ -347,6 +507,7 @@ export type CreateEmptiesTypeInput = {
   ownerId: string;
   kind: EmptiesKind;
   label: string;
+  capacity?: 12 | 20 | 24 | null;
   unitValueKobo?: string | null;
 };
 
@@ -380,6 +541,21 @@ export type CreateEmptiesCustomerMovementInput = {
 
 export interface EmptiesApi {
   getOverview(): Promise<EmptiesOverviewDto>;
+  getSizeClassRecount(): Promise<SizeClassRecountDto>;
+  beginSizeClassRecount(idempotencyKey?: string): Promise<{ phase: "RECOUNT_PENDING" }>;
+  submitSizeClassRecount(
+    input: SizeClassRecountInput,
+    idempotencyKey?: string,
+  ): Promise<{ phase: "READY"; changes: Array<{
+    typeId: string;
+    ownerName: string;
+    label: string;
+    capacity: number;
+    previousBottles: number;
+    countedBottles: number;
+    delta: number;
+    movementId: string | null;
+  }> }>;
   listProductOwners(options?: ProductOwnerListOptions): Promise<ProductOwnerListPage>;
   assignProductOwner(
     productId: string,
@@ -391,6 +567,28 @@ export interface EmptiesApi {
     input: EmptiesProductPackagingInput,
     idempotencyKey?: string,
   ): Promise<unknown>;
+  listPurchaseSetup(options?: { cursor?: string | null; limit?: number }): Promise<PurchaseEmptiesSetupPage>;
+  setPurchaseSetup(
+    productId: string,
+    input: PurchaseEmptiesSetupInput,
+    idempotencyKey?: string,
+  ): Promise<unknown>;
+  listSupplierDebts(options?: SupplierEmptiesListOptions): Promise<SupplierEmptiesDebtPage>;
+  listSupplierSettlements(options?: SupplierEmptiesListOptions & { obligationId?: string }): Promise<SupplierEmptiesSettlementPage>;
+  createOpeningSupplierDebt(
+    input: { supplierId: string; typeId: string; quantity: number; note: string },
+    idempotencyKey?: string,
+  ): Promise<unknown>;
+  settleSupplierDebt(
+    input: {
+      supplierId: string;
+      typeId: string;
+      quantity: number;
+      note?: string;
+    },
+    idempotencyKey?: string,
+  ): Promise<unknown>;
+  reverseSupplierSettlement(id: string, reason: string, idempotencyKey?: string): Promise<unknown>;
 
   listOwners(options?: EmptiesOwnerListOptions): Promise<EmptiesOwnerDto[]>;
   createOwner(input: CreateEmptiesOwnerInput, idempotencyKey?: string): Promise<EmptiesOwnerDto>;

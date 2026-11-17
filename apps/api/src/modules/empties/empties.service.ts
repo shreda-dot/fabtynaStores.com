@@ -1,3 +1,4 @@
+import { calculateSizeClassTotals } from "@fabtyna/shared";
 import { Prisma, type PrismaClient } from "../../../generated/prisma/client.js";
 import type { Actor } from "../../auth/actor.js";
 import { AppError, businessRuleError, validationError } from "../../lib/errors.js";
@@ -22,6 +23,9 @@ import type { TxTimeouts } from "../../lib/tx-options.js";
 import { assertNotInFuture } from "../sales/sales.validation.js";
 import { createEmptiesCustomerService } from "./empties-customer.service.js";
 import { createEmptiesDepositService } from "./empties-deposit.service.js";
+import { createPurchaseEmptiesSetupService } from "./purchase-empties-setup.service.js";
+import { createSupplierEmptiesService } from "./supplier-empties.service.js";
+import { createSizeClassRecountService } from "./size-class-recount.service.js";
 import type {
   CreateMovementBody,
   CreateOwnerBody,
@@ -74,6 +78,7 @@ interface TypeRow {
   ownerName: string;
   kind: EmptiesKind;
   label: string;
+  capacity: number | null;
   unitValueKobo: bigint | null;
   isActive: boolean;
   createdAt: Date;
@@ -90,6 +95,7 @@ interface MovementRow {
   saleId: string | null;
   reversesEntryId: string | null;
   customerReturnMovementId?: string | null;
+  supplierEmptiesEventId?: string | null;
   createdAt: Date;
 }
 
@@ -99,6 +105,7 @@ interface BalanceRow {
   ownerName: string;
   kind: EmptiesKind;
   label: string;
+  capacity: number | null;
   unitValueKobo: bigint | null;
   quantity: number;
 }
@@ -123,6 +130,18 @@ interface ProductStockRow {
   warehouseUnits: bigint;
   shelfUnits: bigint;
   marketUnits: bigint;
+  classification: "RETURNABLE" | "NON_RETURNABLE" | null;
+  sizeClassTypeId: string | null;
+  sizeClassCapacity: number | null;
+}
+
+interface SizeClassBalanceRow {
+  ownerId: string;
+  ownerName: string;
+  typeId: string;
+  capacity: number;
+  quantity: bigint;
+  label: string;
 }
 
 interface ProductOwnerRow {
@@ -161,6 +180,7 @@ export interface EmptiesTypeDto {
   ownerName: string;
   kind: EmptiesKind;
   label: string;
+  capacity: number | null;
   unitValueKobo: string | null;
   isActive: boolean;
   createdAt: string;
@@ -186,6 +206,7 @@ export interface EmptiesBalanceDto {
   ownerName: string;
   kind: EmptiesKind;
   label: string;
+  capacity: number | null;
   unitValueKobo: string | null;
   quantity: number;
   /** `quantity * unitValueKobo`, or null when the type has no display value. */
@@ -199,7 +220,7 @@ export interface EmptiesBalanceTotalsDto {
 
 export interface EmptiesBalancesDto {
   items: EmptiesBalanceDto[];
-  totalsByOwner: Array<EmptiesBalanceTotalsDto & { ownerId: string; ownerName: string }>;
+  totalsByOwner: Array<EmptiesBalanceTotalsDto & { ownerId: string; ownerName: string; kind: EmptiesKind }>;
   totalsByKind: Array<EmptiesBalanceTotalsDto & { kind: EmptiesKind }>;
 }
 
@@ -225,7 +246,21 @@ export interface EmptiesOverviewOwnerDto {
   bottlesOnShelfAndMarket: number;
   totalCrates: number;
   emptyValueKobo: string | null;
+  sizeClasses: EmptiesSizeClassOverviewDto[];
   products: EmptiesProductOverviewDto[];
+}
+
+export interface EmptiesSizeClassOverviewDto {
+  typeId: string;
+  capacity: number;
+  label: string;
+  stockBottles: number;
+  emptyBottles: number;
+  emptyCrates: number;
+  looseEmptyBottles: number;
+  totalBottles: number;
+  totalCrates: number;
+  looseTotalBottles: number;
 }
 
 export interface EmptiesStockWarningDto {
@@ -246,6 +281,7 @@ export interface EmptiesOverviewDto {
     productsWithoutBrewery: EmptiesStockWarningDto[];
     assignedCans: EmptiesStockWarningDto[];
     productsAssignedToInactiveOwner: EmptiesStockWarningDto[];
+    productsWithoutConfirmedSize: EmptiesStockWarningDto[];
   };
 }
 
@@ -306,6 +342,7 @@ function toTypeDto(type: Omit<TypeRow, "ownerName">, ownerName: string): Empties
     ownerName,
     kind: type.kind,
     label: type.label,
+    capacity: type.capacity,
     unitValueKobo: type.unitValueKobo === null ? null : type.unitValueKobo.toString(),
     isActive: type.isActive,
     createdAt: type.createdAt.toISOString(),
@@ -358,6 +395,9 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
   });
   const customerService = createEmptiesCustomerService(options);
   const depositService = createEmptiesDepositService(options);
+  const purchaseSetupService = createPurchaseEmptiesSetupService(options);
+  const supplierEmptiesService = createSupplierEmptiesService(options);
+  const sizeClassRecountService = createSizeClassRecountService(options);
 
   // ---------- locks ----------
   async function lockOwner(ctx: TxContext, id: string): Promise<OwnerRow> {
@@ -379,7 +419,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
     counted(ctx);
     const rows = await ctx.tx.$queryRaw<TypeRow[]>`
       SELECT t.id, t."ownerId", o.name AS "ownerName", t.kind::text AS kind, t.label,
-             t."unitValueKobo", t."isActive", t."createdAt"
+             t.capacity, t."unitValueKobo", t."isActive", t."createdAt"
         FROM empties_types t
         JOIN empties_owners o ON o.id = t."ownerId"
        WHERE t.id = ${id}
@@ -428,6 +468,9 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
   return {
     ...customerService,
     ...depositService,
+    ...purchaseSetupService,
+    ...supplierEmptiesService,
+    ...sizeClassRecountService,
     // ================================================================
     // Owners
     // ================================================================
@@ -605,6 +648,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
                 ownerId: input.ownerId,
                 kind: input.kind,
                 label: input.label.trim(),
+                capacity: input.capacity ?? null,
                 unitValueKobo:
                   input.unitValueKobo === undefined || input.unitValueKobo === null
                     ? null
@@ -732,7 +776,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
     async listBalances(query: ListBalancesQuery): Promise<EmptiesBalancesDto> {
       const rows = await prisma.$queryRaw<BalanceRow[]>`
         SELECT t.id AS "typeId", t."ownerId", o.name AS "ownerName", t.kind::text AS kind, t.label,
-               t."unitValueKobo", COALESCE(b.quantity, 0)::int AS quantity
+               t.capacity, t."unitValueKobo", COALESCE(b.quantity, 0)::int AS quantity
           FROM empties_types t
           JOIN empties_owners o ON o.id = t."ownerId"
           LEFT JOIN empties_balances b ON b."typeId" = t.id
@@ -745,6 +789,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
         ownerName: row.ownerName,
         kind: row.kind,
         label: row.label,
+        capacity: row.capacity,
         unitValueKobo: row.unitValueKobo === null ? null : row.unitValueKobo.toString(),
         quantity: row.quantity,
         valueKobo:
@@ -753,18 +798,20 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
             : (BigInt(row.quantity) * row.unitValueKobo).toString(),
       }));
 
-      const ownerTotals = new Map<string, EmptiesBalanceTotalsDto & { ownerId: string; ownerName: string }>();
+      const ownerTotals = new Map<string, EmptiesBalanceTotalsDto & { ownerId: string; ownerName: string; kind: EmptiesKind }>();
       const kindTotals = new Map<EmptiesKind, EmptiesBalanceTotalsDto & { kind: EmptiesKind }>();
       for (const item of items) {
-        const owner = ownerTotals.get(item.ownerId) ?? {
+        const ownerKey = `${item.ownerId}\u0000${item.kind}`;
+        const owner = ownerTotals.get(ownerKey) ?? {
           ownerId: item.ownerId,
           ownerName: item.ownerName,
+          kind: item.kind,
           quantity: 0,
           valueKobo: "0",
         };
         owner.quantity += item.quantity;
         owner.valueKobo = (BigInt(owner.valueKobo) + BigInt(item.valueKobo ?? "0")).toString();
-        ownerTotals.set(item.ownerId, owner);
+        ownerTotals.set(ownerKey, owner);
 
         const kind = kindTotals.get(item.kind) ?? { kind: item.kind, quantity: 0, valueKobo: "0" };
         kind.quantity += item.quantity;
@@ -783,6 +830,9 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
     // Product ownership and brewery crate overview
     // ================================================================
     async getOverview(): Promise<EmptiesOverviewDto> {
+      const modeRows = await prisma.$queryRaw<Array<{ phase: string }>>`
+        SELECT phase FROM empties_size_class_mode WHERE id = 1`;
+      const sizeClassMode = modeRows[0]?.phase === "READY";
       // Statement 1: empties quantities and display-only values per active owner.
       const ownerRows = await prisma.$queryRaw<OverviewOwnerRow[]>`
         SELECT o.id AS "ownerId", o.name AS "ownerName",
@@ -808,6 +858,8 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
         SELECT p.id AS "productId", p.name AS "productName", p.sku,
                (p."deletedAt" IS NULL) AS "isActive", p."unitsPerPack",
                po."ownerId", o.name AS "ownerName", o."isActive" AS "ownerIsActive",
+               c.classification::text AS classification, mapped.id AS "sizeClassTypeId",
+               mapped.capacity AS "sizeClassCapacity",
                COALESCE(SUM(sb."quantityUnits")
                  FILTER (WHERE sb.location = 'WAREHOUSE'::"StockLocation"), 0)::bigint AS "warehouseUnits",
                COALESCE(SUM(sb."quantityUnits")
@@ -817,13 +869,41 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
           FROM products p
           LEFT JOIN empties_product_owners po ON po."productId" = p.id
           LEFT JOIN empties_owners o ON o.id = po."ownerId"
+          LEFT JOIN purchase_empties_products c ON c."productId" = p.id
+          LEFT JOIN purchase_empties_packaging pp
+            ON pp."productId" = p.id AND pp.kind = 'BOTTLE'
+          LEFT JOIN empties_types mapped
+            ON mapped.id = pp."typeId" AND mapped."ownerId" = po."ownerId"
+               AND mapped.capacity IS NOT NULL
           LEFT JOIN stock_balances sb ON sb."productId" = p.id
          GROUP BY p.id, p.name, p.sku, p."deletedAt", p."unitsPerPack",
-                  po."ownerId", o.name, o."isActive"
+                  po."ownerId", o.name, o."isActive", c.classification, mapped.id, mapped.capacity
          ORDER BY p.name ASC, p.id ASC`;
+
+      const sizeClassRows = await prisma.$queryRaw<SizeClassBalanceRow[]>`
+        SELECT o.id AS "ownerId", o.name AS "ownerName", t.id AS "typeId",
+               t.capacity, t.label, COALESCE(b.quantity, 0)::bigint AS quantity
+          FROM empties_types t
+          JOIN empties_owners o ON o.id = t."ownerId"
+          LEFT JOIN empties_balances b ON b."typeId" = t.id
+         WHERE t.kind = 'BOTTLE'::"EmptiesKind" AND t.capacity IS NOT NULL
+           AND o."isActive" = TRUE
+         ORDER BY o.name, t.capacity, t.id`;
 
       const owners = new Map<string, EmptiesOverviewOwnerDto>();
       const totals = new Map<string, { fullCrates: bigint; looseUnits: bigint; shelfMarket: bigint }>();
+      const sizeClassBalances = new Map<string, { typeId: string; capacity: number; label: string; emptyBottles: bigint; stockBottles: bigint }>();
+      const sizeClassByType = new Map<string, { ownerId: string; capacity: number }>();
+      for (const row of sizeClassRows) {
+        sizeClassBalances.set(row.typeId, {
+          typeId: row.typeId,
+          capacity: row.capacity,
+          label: row.label,
+          emptyBottles: row.quantity,
+          stockBottles: 0n,
+        });
+        sizeClassByType.set(row.typeId, { ownerId: row.ownerId, capacity: row.capacity });
+      }
       for (const row of ownerRows) {
         owners.set(row.ownerId, {
           ownerId: row.ownerId,
@@ -835,6 +915,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
           bottlesOnShelfAndMarket: 0,
           totalCrates: 0,
           emptyValueKobo: row.emptyValueKobo,
+          sizeClasses: [],
           products: [],
         });
         totals.set(row.ownerId, { fullCrates: 0n, looseUnits: 0n, shelfMarket: 0n });
@@ -844,6 +925,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
         productsWithoutBrewery: [],
         assignedCans: [],
         productsAssignedToInactiveOwner: [],
+        productsWithoutConfirmedSize: [],
       };
 
       for (const row of stockRows) {
@@ -906,6 +988,35 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
         ownerTotal.fullCrates += fullCrates;
         ownerTotal.looseUnits += looseUnits;
         ownerTotal.shelfMarket += BigInt(shelfUnits) + BigInt(marketUnits);
+        if (row.sizeClassTypeId !== null && row.sizeClassCapacity !== null
+            && row.classification === "RETURNABLE"
+            && sizeClassByType.get(row.sizeClassTypeId)?.ownerId === row.ownerId) {
+          sizeClassBalances.get(row.sizeClassTypeId)!.stockBottles += totalUnits;
+        } else if (sizeClassMode && totalUnits > 0n
+            && row.classification !== "NON_RETURNABLE") {
+          warnings.productsWithoutConfirmedSize.push({
+            ...stockWarning,
+            ownerId: row.ownerId,
+            ownerName: row.ownerName ?? "",
+          });
+        }
+      }
+
+      for (const [typeId, balance] of sizeClassBalances) {
+        const owner = owners.get(sizeClassByType.get(typeId)!.ownerId);
+        if (owner === undefined) continue;
+        const totals = calculateSizeClassTotals(
+          balance.capacity,
+          [safeCount(balance.stockBottles, "sizeClassStockBottles")],
+          safeCount(balance.emptyBottles, "sizeClassEmptyBottles"),
+        );
+        owner.sizeClasses.push({
+          typeId,
+          capacity: balance.capacity,
+          label: balance.label,
+          emptyBottles: safeCount(balance.emptyBottles, "sizeClassEmptyBottles"),
+          ...totals,
+        });
       }
 
       for (const [ownerId, owner] of owners) {
@@ -1039,6 +1150,17 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
             }
 
             if (product.ownerId !== input.ownerId) {
+              counted(ctx);
+              const purchasePackaging = await ctx.tx.purchaseEmptiesPackaging.findFirst({
+                where: { productId },
+                select: { productId: true },
+              });
+              if (purchasePackaging !== null) {
+                throw businessRuleError(
+                  "Remove this product's purchase container setup before changing its brewery, then set it up again.",
+                  { productId },
+                );
+              }
               counted(ctx);
               await ctx.tx.$executeRaw`
                 DELETE FROM empties_product_packaging WHERE "productId" = ${productId}`;
@@ -1276,6 +1398,19 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
               },
             });
             const after = toMovementDto(movement);
+            let warning: string | null = null;
+            if (input.movementType === "RETURNED_TO_OWNER") {
+              counted(ctx);
+              const outstanding = await ctx.tx.$queryRaw<Array<{ exists: boolean }>>`
+                SELECT EXISTS (
+                  SELECT 1 FROM supplier_empties_obligations o
+                  JOIN supplier_empties_obligation_balances b ON b."obligationId" = o.id
+                  WHERE o."typeId" = ${type.id} AND b.quantity > 0
+                ) AS exists`;
+              if (outstanding[0]?.exists) {
+                warning = "This return did not settle supplier empties debt. Use supplier empties settlement to record returns against a debt.";
+              }
+            }
             await insertAuditLog(ctx, "EmptiesMovement", {
               actorId: actor.id,
               action: "EMPTIES_MOVEMENT_RECORDED",
@@ -1287,7 +1422,7 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
                 note: input.note ?? null,
               },
             });
-            return { status: 201, body: after };
+            return { status: 201, body: warning === null ? after : { ...after, warning } };
           },
         ),
       );
@@ -1367,7 +1502,8 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
             counted(ctx);
             const targets = await ctx.tx.$queryRaw<MovementRow[]>`
               SELECT m.id, m."typeId", m."movementType"::text AS "movementType", m.quantity, m.note,
-                     m."occurredAt", m."createdById", m."saleId", m."reversesEntryId", m."createdAt"
+                     m."occurredAt", m."createdById", m."saleId", m."reversesEntryId", m."createdAt",
+                     m."supplierEmptiesEventId"
                 FROM empties_movements m
                WHERE m.id = ${id}
                FOR UPDATE`;
@@ -1385,6 +1521,20 @@ export function createEmptiesService(options: EmptiesServiceOptions) {
               throw businessRuleError(
                 "Sale-linked empties are reversed together with their sale. Void or amend the sale instead.",
                 { movementId: id, saleId: target.saleId },
+              );
+            }
+            if (target.supplierEmptiesEventId != null) {
+              counted(ctx);
+              const event = await ctx.tx.supplierEmptiesEvent.findUnique({
+                where: { id: target.supplierEmptiesEventId },
+                select: { eventType: true },
+              });
+              if (event === null) throw new Error("Supplier-linked empties movement is missing its event.");
+              throw businessRuleError(
+                event.eventType === "DEBT_SETTLEMENT"
+                  ? "Correct this return through supplier empties settlements, not the manual movement history."
+                  : "This return belongs to a purchase. Void or amend the purchase to correct it.",
+                { movementId: id },
               );
             }
             counted(ctx);

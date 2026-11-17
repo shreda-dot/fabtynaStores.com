@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -12,6 +12,7 @@ import Link from "next/link";
 import type { CreateProductDto } from "@fabtyna/shared";
 import type {
   ProductFormDto,
+  PurchaseEmptiesClassification,
   ProductRecordDto,
 } from "@/lib/api/products.api";
 import { ProductForm } from "@/components/products/product-form";
@@ -100,11 +101,17 @@ export default function ProductsPage() {
       id,
       input,
       key,
+      classification,
     }: {
       id?: string;
       input: CreateProductDto;
       key: string;
-    }) => (id ? productsApi.update(id, input, key) : productsApi.create(input, key)),
+      classification?: PurchaseEmptiesClassification;
+    }) => {
+      if (id) return productsApi.update(id, input, key);
+      if (!classification) throw new Error("Choose whether this product uses returnable containers.");
+      return productsApi.create({ ...input, emptiesClassification: classification }, key);
+    },
     onSuccess: async (product, variables) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
       saveIntent.current.markSucceeded();
@@ -114,6 +121,7 @@ export default function ProductsPage() {
       closeForm();
     },
   });
+  const saveFieldErrors = useMemo(() => apiFieldErrors(saveMutation.error), [saveMutation.error]);
 
   const actionMutation = useMutation({
     mutationFn: ({
@@ -160,12 +168,17 @@ export default function ProductsPage() {
     }
   }
 
-  async function save(input: CreateProductDto) {
-    await saveMutation.mutateAsync({
-      id: editingProduct?.id,
-      input,
-      key: saveIntent.current.getKey(),
-    });
+  async function save(input: CreateProductDto, classification?: PurchaseEmptiesClassification) {
+    try {
+      await saveMutation.mutateAsync({
+        id: editingProduct?.id,
+        input,
+        classification,
+        key: saveIntent.current.getKey(),
+      });
+    } catch (error) {
+      toast.error(toUserMessage(error));
+    }
   }
 
   async function runAction(action: "delete" | "restore", product: ProductRecordDto) {
@@ -399,9 +412,9 @@ export default function ProductsPage() {
         <ProductForm
           key={editingProduct?.id ?? "new-product"}
           product={editingProduct}
-          fieldErrors={apiFieldErrors(saveMutation.error)}
+          fieldErrors={saveFieldErrors}
           error={
-            saveMutation.error && Object.keys(apiFieldErrors(saveMutation.error)).length === 0
+            saveMutation.error && Object.keys(saveFieldErrors).length === 0
               ? toUserMessage(saveMutation.error)
               : undefined
           }

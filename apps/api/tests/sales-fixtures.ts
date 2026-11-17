@@ -137,10 +137,15 @@ export async function seedProduct(
   const id = newId("sales_product");
   const name = input.name ?? `Product ${id}`;
   await pg.query(
-    `INSERT INTO products
-       (id, name, category, "unitsPerPack", "saleChannel", "retailPriceKobo", "wholesalePriceKobo",
-        "averageCostKobo", "deletedAt", "updatedAt")
-     VALUES ($1, $2, 'OTHER', $3, $4::"SaleChannel", 10000, 9000, $5::bigint, $6, now())`,
+    `WITH product AS (
+       INSERT INTO products
+         (id, name, category, "unitsPerPack", "saleChannel", "retailPriceKobo", "wholesalePriceKobo",
+          "averageCostKobo", "deletedAt", "updatedAt")
+       VALUES ($1, $2, 'OTHER', $3, $4::"SaleChannel", 10000, 9000, $5::bigint, $6, now())
+       RETURNING id
+     )
+     INSERT INTO purchase_empties_products ("productId", classification)
+     SELECT id, 'NON_RETURNABLE' FROM product`,
     [
       id,
       name,
@@ -346,7 +351,13 @@ export interface PurchaseBodyInput {
   reference?: string | null;
   purchasedAt?: string;
   dueDate?: string | null;
-  lines?: Array<{ productId: string; unit?: "UNIT" | "PACK"; quantity: number; lineTotalKobo: string }>;
+  lines?: Array<{
+    productId: string;
+    unit?: "UNIT" | "PACK";
+    quantity: number;
+    lineTotalKobo: string;
+    emptiesCrateCount?: number;
+  }>;
 }
 
 export function purchaseBody(input: PurchaseBodyInput): Record<string, unknown> {
@@ -373,6 +384,7 @@ export function purchaseBody(input: PurchaseBodyInput): Record<string, unknown> 
       unit: line.unit ?? "UNIT",
       quantity: line.quantity,
       lineTotalKobo: line.lineTotalKobo,
+      ...(line.emptiesCrateCount === undefined ? {} : { emptiesCrateCount: line.emptiesCrateCount }),
     })),
   };
 }

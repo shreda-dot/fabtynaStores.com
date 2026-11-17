@@ -4,6 +4,8 @@ import type {
   EmptiesBalanceListOptions,
   EmptiesBalancesDto,
   EmptiesOverviewDto,
+  SizeClassRecountDto,
+  SizeClassRecountInput,
   EmptiesMovementDto,
   EmptiesMovementListOptions,
   EmptiesMovementListPage,
@@ -27,6 +29,11 @@ import type {
   EmptiesDepositDto,
   CreateEmptiesDepositInput,
   EmptiesProductPackagingInput,
+  PurchaseEmptiesSetupInput,
+  PurchaseEmptiesSetupPage,
+  SupplierEmptiesDebtPage,
+  SupplierEmptiesListOptions,
+  SupplierEmptiesSettlementPage,
 } from "./empties.api";
 
 function query(values: Record<string, string | undefined>): string {
@@ -114,6 +121,17 @@ export function depositBalancesQuery(options: EmptiesDepositBalanceListOptions =
   });
 }
 
+function supplierEmptiesQuery(options: SupplierEmptiesListOptions & { obligationId?: string } = {}): string {
+  return query({
+    supplierId: options.supplierId,
+    typeId: options.typeId,
+    includeSettled: options.includeSettled === undefined ? undefined : String(options.includeSettled),
+    obligationId: options.obligationId,
+    cursor: options.cursor ?? undefined,
+    limit: String(options.limit ?? 100),
+  });
+}
+
 export function depositsQuery(options: EmptiesDepositListOptions = {}): string {
   return query({
     from: options.from,
@@ -127,6 +145,25 @@ export function depositsQuery(options: EmptiesDepositListOptions = {}): string {
 export const emptiesRealApi: EmptiesApi = {
   async getOverview() {
     return requestJson<EmptiesOverviewDto>("/empties/overview");
+  },
+
+  async getSizeClassRecount() {
+    return requestJson<SizeClassRecountDto>("/empties/size-class-recount");
+  },
+
+  async beginSizeClassRecount(idempotencyKey) {
+    return requestJson<{ phase: "RECOUNT_PENDING" }>("/empties/size-class-recount/begin", {
+      method: "POST",
+      body: {},
+      idempotencyKey,
+    });
+  },
+
+  async submitSizeClassRecount(input: SizeClassRecountInput, idempotencyKey) {
+    return requestJson<Awaited<ReturnType<EmptiesApi["submitSizeClassRecount"]>>>(
+      "/empties/size-class-recount",
+      { method: "POST", body: input, idempotencyKey },
+    );
   },
 
   async listProductOwners(options = {}) {
@@ -146,6 +183,57 @@ export const emptiesRealApi: EmptiesApi = {
     return requestJson(
       `/empties/products/${encodeURIComponent(productId)}/packaging`,
       { method: "PUT", body: input, idempotencyKey },
+    );
+  },
+
+  async listPurchaseSetup(options = {}) {
+    return requestJson<PurchaseEmptiesSetupPage>(
+      `/empties/purchase-setup${query({
+        cursor: options.cursor ?? undefined,
+        limit: String(options.limit ?? 200),
+      })}`,
+    );
+  },
+
+  async setPurchaseSetup(productId, input: PurchaseEmptiesSetupInput, idempotencyKey) {
+    return requestJson(
+      `/empties/products/${encodeURIComponent(productId)}/purchase-setup`,
+      { method: "PUT", body: input, idempotencyKey },
+    );
+  },
+
+  async listSupplierDebts(options = {}) {
+    return requestJson<SupplierEmptiesDebtPage>(
+      `/empties/supplier-debts${supplierEmptiesQuery(options)}`,
+    );
+  },
+
+  async listSupplierSettlements(options = {}) {
+    return requestJson<SupplierEmptiesSettlementPage>(
+      `/empties/supplier-debts/settlements${supplierEmptiesQuery(options)}`,
+    );
+  },
+
+  async createOpeningSupplierDebt(input, idempotencyKey) {
+    return requestJson("/empties/supplier-debts/opening", {
+      method: "POST",
+      body: input,
+      idempotencyKey,
+    });
+  },
+
+  async settleSupplierDebt(input, idempotencyKey) {
+    return requestJson("/empties/supplier-debts/settle", {
+      method: "POST",
+      body: input,
+      idempotencyKey,
+    });
+  },
+
+  async reverseSupplierSettlement(id, reason, idempotencyKey) {
+    return requestJson(
+      `/empties/supplier-debts/settlements/${encodeURIComponent(id)}/reverse`,
+      { method: "POST", body: { reason }, idempotencyKey },
     );
   },
 

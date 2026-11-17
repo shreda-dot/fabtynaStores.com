@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   createPurchaseDtoSchema,
+  createPurchaseLineDtoSchema,
   idSchema,
   lagosDateStringSchema,
   recordPurchasePaymentDtoSchema,
@@ -13,6 +14,12 @@ export type { ReversePaymentBody } from "../sales/sales.schemas.js";
 
 export { createPurchaseDtoSchema };
 export type CreatePurchaseDto = z.infer<typeof createPurchaseDtoSchema>;
+
+export const purchaseEmptiesPreviewSchema = z.object({
+  lines: z.array(createPurchaseLineDtoSchema.omit({ lineTotalKobo: true })).min(1),
+  amendingPurchaseId: idSchema.optional(),
+}).strict();
+export type PurchaseEmptiesPreviewBody = z.infer<typeof purchaseEmptiesPreviewSchema>;
 
 export const purchaseIdParamsSchema = z.object({ id: z.string().min(1) }).strict();
 

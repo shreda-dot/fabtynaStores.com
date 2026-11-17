@@ -6,7 +6,7 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Plus, Search, Users } from "lucide-react";
 import Link from "next/link";
 import {
@@ -96,6 +96,7 @@ export default function CustomersPage() {
       closeForm();
     },
   });
+  const saveFieldErrors = useMemo(() => apiFieldErrors(saveMutation.error), [saveMutation.error]);
 
   const actionMutation = useMutation({
     mutationFn: ({
@@ -144,11 +145,15 @@ export default function CustomersPage() {
   }
 
   async function save(input: CreateCustomerDto) {
-    await saveMutation.mutateAsync({
-      id: editingCustomer?.id,
-      input,
-      key: saveIntent.current.getKey(),
-    });
+    try {
+      await saveMutation.mutateAsync({
+        id: editingCustomer?.id,
+        input,
+        key: saveIntent.current.getKey(),
+      });
+    } catch (error) {
+      toast.error(toUserMessage(error));
+    }
   }
 
   async function deleteCustomer(customer: CustomerListItemDto) {
@@ -425,9 +430,9 @@ export default function CustomersPage() {
         <CustomerForm
           key={editingCustomer?.id ?? "new-customer"}
           customer={editingCustomer}
-          fieldErrors={apiFieldErrors(saveMutation.error)}
+          fieldErrors={saveFieldErrors}
           error={
-            saveMutation.error && Object.keys(apiFieldErrors(saveMutation.error)).length === 0
+            saveMutation.error && Object.keys(saveFieldErrors).length === 0
               ? toUserMessage(saveMutation.error)
               : undefined
           }

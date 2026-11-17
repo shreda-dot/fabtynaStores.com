@@ -116,6 +116,10 @@ dev --create-only` diffs the schema against the database. The one surviving
 | `20261031000000_empties_product_owners`       | Adds `empties_product_owners`, a mutable product-to-brewery mapping with product PK and RESTRICT FKs to products and empties owners, plus the owner index. It does not change products, stock, financial data, or shared trigger functions.                                                                                                                                                                                                                                                                                                      |
 | `20261101000000_empties_customer_movements`  | Adds immutable customer-owned empties movements and the trigger-derived customer/type balance cache. Adds table-specific sign/note/link checks, RESTRICT FKs, reverse-once and live-return-link partial indexes, immutable/reversal/balance triggers, and six new functions. It does not replace shared reversal functions or depend on product ownership. |
 | `20261103000000_empties_customer_deposits`   | Adds `accounts."isHolding"` (at most one holding account, guarded against rename, retype, deactivation and non-ADJUSTMENT/TRANSFER_OUT entries), the immutable `empties_deposit_movements` log and the trigger-derived `empties_deposit_balances` cache. Eight new functions; no existing function is replaced. See §4.9. |
+| `20261113000000_purchase_empties`            | Adds explicit product purchase-container classification and packaging, purchase snapshots and availability checks, and an immutable supplier-empties event ledger with derived non-negative debt balances. Existing products and purchases are not backfilled. See §4.9. |
+| `20261116010000_empties_size_classes`         | Adds approved bottle capacities and nullable immutable type capacity. Sized BOTTLE types are unique per brewery and capacity; legacy types remain NULL. No balance or product mapping is backfilled. Applied to dev and test. |
+| `20261117000000_size_class_mode`             | Adds the size-class rollout and recount mode. Applied to dev and test. |
+| `20261117000100_size_class_purchase_rules`   | Adds size-class purchase rules. Applied to dev and test. |
 
 ## 3. Tables
 
@@ -550,6 +554,69 @@ its target on type and every source column (account_ledger_entries)`, which
   position (they are simply excluded from cash); the holding account is hidden
   from the web account lists; a client that posts the holding account to another
   module directly gets a raw database error rather than a friendly message.
+
+**Purchase-linked supplier empties** (`20261113000000`):
+
+- `purchase_empties_products` holds the explicit returnable/non-returnable
+  classification; `purchase_empties_packaging` identifies the exact
+  brewery-owned crate and/or bottle type and count. Existing products are not
+  classified by the migration. New products require a classification in their
+  creation transaction; unclassified or incompletely configured returnable
+  products cannot be received.
+- Immutable line snapshots and requirements preserve what was checked on each
+  purchase. Checks capture the locked on-hand balance in the receipt
+  transaction. Deferred guards require the physical return and any free supply
+  plus supplier debt to cover the exact requirement, separately by type.
+  Requirements are aggregated by exact brewery-owned type; crates and bottles
+  are checked separately. For partial packs the actual whole-crate count is
+  supplied, with a rounded-up suggestion in the UI; for single units the crate
+  count is optional and defaults to zero. Bottles are counted in whole units.
+- A shortage may be split between free supply and debt, and the two counts
+  must equal the shortage. For example, a requirement of 80 with 75 on hand,
+  2 free and 3 owed returns 75 physical empties, records 2 free in supplier
+  history, and creates debt of 3; it does not invent an on-hand receipt.
+  Debt requires a supplier; free supply alone does not. Preview is advisory:
+  the receipt transaction locks and rechecks the balances.
+- `supplier_empties_obligations` identifies each opening or purchase debt;
+  immutable `supplier_empties_events` record returns, free supply, debt,
+  settlements and reversals. `supplier_empties_obligation_balances` is a
+  trigger-maintained, non-negative cache, using the UPDATE-first pattern
+  described above. Supplier empties debt is a container count, not money debt.
+- Settlement consumes on-hand empties and cannot exceed either on-hand stock
+  or outstanding debt. It reduces selected obligations; absent explicit API
+  allocations, opening debts are allocated first, then oldest purchases.
+  Correct linked settlements before voiding or amending their purchase.
+  An amendment preview includes the empties that the original purchase return
+  would restore; the commit still locks and rechecks the actual balances.
+  A manual `RETURNED_TO_OWNER` movement changes on-hand stock only; it does not
+  settle supplier debt. Opening debt is entered explicitly, never inferred.
+- The database rejects unchecked new purchase receipts, including old-API
+  writes. The web provides product setup at `/empties/purchase-setup`, purchase
+  shortage checks and detail, supplier debt and settlement on `/empties` and
+  `/suppliers/[id]/empties`. Manual returned-to-brewery movements do not settle
+  debt; use the supplier settlement action. Demo purchases explicitly skip
+  these checks.
+- API routes: `POST /purchases/empties-preview`,
+  `GET /empties/purchase-setup`,
+  `PUT /empties/products/:productId/purchase-setup`,
+  `GET /empties/supplier-debts`, `POST /empties/supplier-debts/opening`,
+  `POST /empties/supplier-debts/settle`,
+  `GET /empties/supplier-debts/settlements` and
+  `POST /empties/supplier-debts/settlements/:id/reverse`.
+- Applied to `fabtyna_test` and `fabtyna_dev`; both passed `db:verify` and
+  subsequently returned zero audit rows. Production deployment and a fresh
+  production-copy rehearsal remain outstanding. Follow the coordinated
+  purchase-write pause and setup sequence in [DEPLOY.md](./DEPLOY.md).
+
+**Size-class schema foundation** (`20261116010000`): approved capacities are
+positive integers greater than one, initially 12, 20 and 24. Approved rows
+cannot be changed or deleted; a new size can be inserted as configuration,
+but no management API or screen exists yet. A non-NULL `empties_types.capacity`
+must reference an approved value, belongs only to a BOTTLE type and is immutable
+from creation. The partial unique index includes inactive types, preventing
+multiple balances for the same brewery and size. Existing types remain NULL;
+no movement, balance or product mapping changes. These database guards alone
+do not implement size-class sales, purchases, counts or totals.
 
 ---
 

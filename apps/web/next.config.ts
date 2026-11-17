@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import { PHASE_PRODUCTION_BUILD } from "next/constants";
 
 const baseConfig: NextConfig = {
+  experimental: { agentUpgrade: "security" },
   transpilePackages: ["@fabtyna/shared"],
   allowedDevOrigins: ["127.0.0.1"],
   // `build:verify` sets NEXT_DIST_DIR so it never writes into the folder a running `next dev` uses

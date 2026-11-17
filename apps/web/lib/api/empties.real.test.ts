@@ -35,6 +35,29 @@ describe("empties types query string", () => {
   });
 });
 
+describe("empties type creation", () => {
+  it("sends the crate capacity in the request body", async () => {
+    const previousBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+    process.env.NEXT_PUBLIC_API_BASE_URL = "http://api.test";
+    const fetchMock = vi.fn().mockImplementation(
+      async () => new Response(JSON.stringify({ id: "type-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await emptiesRealApi.createType({ ownerId: "owner-1", kind: "BOTTLE", label: "Guinness 24", capacity: 24 });
+      const init = fetchMock.mock.calls[0][1] as { body: string };
+      expect(JSON.parse(init.body)).toMatchObject({ ownerId: "owner-1", kind: "BOTTLE", capacity: 24 });
+    } finally {
+      vi.unstubAllGlobals();
+      if (previousBaseUrl === undefined) delete process.env.NEXT_PUBLIC_API_BASE_URL;
+      else process.env.NEXT_PUBLIC_API_BASE_URL = previousBaseUrl;
+    }
+  });
+});
+
 describe("empties balances query string", () => {
   it("omits includeInactive when false and sends it when true", () => {
     expect(balancesQuery({})).toBe("");

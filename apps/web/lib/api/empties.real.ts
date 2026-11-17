@@ -276,6 +276,7 @@ export const emptiesRealApi: EmptiesApi = {
         ownerId: input.ownerId,
         kind: input.kind,
         label: input.label,
+        ...(input.capacity == null ? {} : { capacity: input.capacity }),
         ...(unitValueKobo === undefined ? {} : { unitValueKobo }),
       },
       idempotencyKey,

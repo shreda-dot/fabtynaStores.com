@@ -25,6 +25,9 @@ import { toast } from "@/stores/toast-store";
 
 const KIND_LABEL: Record<EmptiesKind, string> = { BOTTLE: "Bottle", CRATE: "Crate" };
 
+type Capacity = 12 | 20 | 24;
+const CAPACITIES: Capacity[] = [12, 20, 24];
+
 type OwnerOperation =
   | { kind: "create"; name: string }
   | { kind: "rename"; id: string; name: string }
@@ -36,6 +39,7 @@ type TypeOperation =
       ownerId: string;
       typeKind: EmptiesKind;
       label: string;
+      capacity: Capacity | null;
       unitValueKobo: string | null;
     }
   | { kind: "patch"; id: string; label: string; unitValueKobo: string | null }
@@ -290,6 +294,7 @@ function TypesSection({
     ownerName: string;
     kind: EmptiesKind;
     label: string;
+    capacity: number | null;
     unitValueKobo: string | null;
     isActive: boolean;
   }[];
@@ -305,6 +310,7 @@ function TypesSection({
   const [ownerId, setOwnerId] = useState("");
   const [typeKind, setTypeKind] = useState<EmptiesKind>("CRATE");
   const [label, setLabel] = useState("");
+  const [capacity, setCapacity] = useState<Capacity | "">("");
   const [unitValueKobo, setUnitValueKobo] = useState("");
   const [lastOperation, setLastOperation] = useState<TypeOperation | null>(null);
 
@@ -331,6 +337,7 @@ function TypesSection({
               ownerId: operation.ownerId,
               kind: operation.typeKind,
               label: operation.label,
+              capacity: operation.capacity,
               unitValueKobo: operation.unitValueKobo,
             },
             key,
@@ -355,6 +362,7 @@ function TypesSection({
       await onChanged();
       setEditingId("");
       setLabel("");
+      setCapacity("");
       setUnitValueKobo("");
     },
     onError: (cause) => toast.error(toUserMessage(cause)),
@@ -377,6 +385,7 @@ function TypesSection({
       ownerId,
       typeKind,
       label: trimmedLabel,
+      capacity: typeKind === "BOTTLE" && capacity !== "" ? capacity : null,
       unitValueKobo: value,
     });
   }
@@ -427,7 +436,9 @@ function TypesSection({
                 disabled={editing !== null}
                 onChange={(event) => {
                   flow.edit();
-                  setTypeKind(event.target.value as EmptiesKind);
+                  const next = event.target.value as EmptiesKind;
+                  setTypeKind(next);
+                  if (next !== "BOTTLE") setCapacity("");
                 }}
               >
                 <option value="CRATE">Crate</option>
@@ -435,6 +446,29 @@ function TypesSection({
               </Select>
             </FormField>
           </div>
+          {!editing && typeKind === "BOTTLE" && (
+            <FormField
+              id="empties-type-capacity"
+              label="Bottles per crate (size)"
+              hint="Set this for the size classes you count and trade. It cannot be changed later."
+            >
+              <Select
+                id="empties-type-capacity"
+                value={capacity === "" ? "" : String(capacity)}
+                onChange={(event) => {
+                  flow.edit();
+                  setCapacity(event.target.value === "" ? "" : (Number(event.target.value) as Capacity));
+                }}
+              >
+                <option value="">No size (legacy type)</option>
+                {CAPACITIES.map((size) => (
+                  <option key={size} value={size}>
+                    {size} bottles per crate
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+          )}
           <FormField id="empties-type-label" label="Label" required hint="1 to 40 characters.">
             <Input
               id="empties-type-label"
@@ -506,6 +540,7 @@ function TypesSection({
                 <span className="flex flex-wrap items-center gap-2">
                   {type.label}
                   <Badge tone="info">{KIND_LABEL[type.kind]}</Badge>
+                  {type.capacity !== null && <Badge tone="info">{type.capacity} per crate</Badge>}
                   <span className="text-xs text-muted-foreground">{type.ownerName}</span>
                   {type.unitValueKobo !== null && (
                     <span className="text-xs text-muted-foreground">

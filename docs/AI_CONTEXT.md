@@ -18,10 +18,9 @@ this file does not change code, migrations or `.env`.
 > migrations matched exactly. No reset was run on dev or test. Production was
 > not accessed; the owner-run rollout remains gated by [DEPLOY.md](./DEPLOY.md).
 
-> **Purchase-linked empties status:** purchase work is being integrated
-> uncommitted onto current main as the starting point for the approved
-> size-class redesign. The existing purchase workflow is not the final
-> size-class behavior and must not be deployed as that feature. Migration
+> **Purchase-linked empties status:** purchase work is included in the
+> approved size-class redesign. Production rollout requires the coordinated
+> setup, reset and count in [DEPLOY.md](./DEPLOY.md). Migration
 > `20261113000000_purchase_empties` is applied to `fabtyna_test` and
 > `fabtyna_dev`; never edit it. Both databases passed `db:verify` and, after
 > testing, `db:audit` with zero rows. One full `pnpm verify` passed before the

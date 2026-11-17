@@ -603,10 +603,11 @@ its target on type and every source column (account_ledger_entries)`, which
   `POST /empties/supplier-debts/settle`,
   `GET /empties/supplier-debts/settlements` and
   `POST /empties/supplier-debts/settlements/:id/reverse`.
-- Applied to `fabtyna_test` and `fabtyna_dev`; both passed `db:verify` and
-  subsequently returned zero audit rows. Production deployment and a fresh
-  production-copy rehearsal remain outstanding. Follow the coordinated
-  purchase-write pause and setup sequence in [DEPLOY.md](./DEPLOY.md).
+- Applied to `fabtyna_test` and `fabtyna_dev`. Their latest audits passed;
+  verification found all expected objects but failed on 24 existing
+  CRLF/LF checksum differences. Production deployment remains owner-run.
+  Follow the coordinated purchase-write pause and setup sequence in
+  [DEPLOY.md](./DEPLOY.md).
 
 **Size-class schema foundation** (`20261116010000`): approved capacities are
 positive integers greater than one, initially 12, 20 and 24. Approved rows

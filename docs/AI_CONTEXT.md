@@ -22,8 +22,9 @@ this file does not change code, migrations or `.env`.
 > approved size-class redesign. Production rollout requires the coordinated
 > setup, reset and count in [DEPLOY.md](./DEPLOY.md). Migration
 > `20261113000000_purchase_empties` is applied to `fabtyna_test` and
-> `fabtyna_dev`; never edit it. Both databases passed `db:verify` and, after
-> testing, `db:audit` with zero rows. One full `pnpm verify` passed before the
+> `fabtyna_dev`; never edit it. At the time of the earlier purchase work, both
+> databases passed `db:verify` and, after testing, `db:audit` with zero rows.
+> One full `pnpm verify` passed before the
 > later optional-SKU product fix: 262 shared, 351 API, 216 web tests and the
 > web build, in about 74 minutes. Lint reported two existing warnings.
 > These historical results do not verify this integration. This does not establish

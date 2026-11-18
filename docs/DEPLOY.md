@@ -412,6 +412,12 @@ The reset changes only legacy `empties_balances` by inserting
   displayed total is derived from mapped stock only. Unmapped stock is not a
   confirmed size-class total.
 
+  On the Empties overview, after the recount starts, each brewery shows separate
+  size-class totals: mapped stock plus empty bottles, expressed as crates and
+  loose bottles. Totals remain incomplete until the recount is confirmed and
+  products without a confirmed size are reviewed using the warning on that page.
+  Before the recount starts, the overview labels the old figures as legacy totals.
+
 The API remains in legacy mode until a recount completes. Before
 `RECOUNT_PENDING`, the application does not block all legacy sales, voids, or
 returnable purchases, and the new shortage check is not enabled. The external

@@ -52,6 +52,10 @@ const PAGE_SIZE = 50;
 
 const KIND_LABEL: Record<EmptiesKind, string> = { BOTTLE: "Bottle", CRATE: "Crate" };
 
+function formatCratesAndBottles(crates: number, bottles: number): string {
+  return `${formatEmptiesCount(crates)} ${crates === 1 ? "crate" : "crates"} + ${formatEmptiesCount(bottles)} ${bottles === 1 ? "bottle" : "bottles"}`;
+}
+
 const MOVEMENT_LABEL: Record<EmptiesMovementType, string> = {
   OPENING: "Opening count",
   RECEIVED: "Received from customers",
@@ -540,7 +544,7 @@ export default function EmptiesPage() {
               </CardBody>
             </Card>
           )}
-          {overview.isPending ? (
+          {overview.isPending || recount.isPending ? (
             <Skeleton variant="stat" count={4} />
           ) : overview.isError ? (
             <ErrorState
@@ -548,8 +552,19 @@ export default function EmptiesPage() {
               message={toUserMessage(overview.error)}
               onRetry={() => void overview.refetch()}
             />
+          ) : recount.isError ? (
+            <ErrorState
+              title="Empties count status could not be loaded"
+              message={toUserMessage(recount.error)}
+              onRetry={() => void recount.refetch()}
+            />
           ) : (
             <>
+              {recount.data.phase === "RECOUNT_PENDING" && (
+                <p className="text-sm text-warning">
+                  Size totals are incomplete until the recount is confirmed.
+                </p>
+              )}
               {overview.data.owners.length === 0 ? (
                 <EmptyState
                   icon={Boxes}
@@ -570,36 +585,72 @@ export default function EmptiesPage() {
                     <Card key={owner.ownerId}>
                       <CardHeader
                         title={owner.ownerName}
-                        description="Full crates count warehouse packs only. Shelf and market stock is shown as loose bottles."
+                        description={recount.data.phase === "LEGACY"
+                          ? "Legacy totals: full crates count warehouse packs only."
+                          : "Totals combine mapped stock in all locations and empty bottles, separately for each size."}
                       />
                       <CardBody className="space-y-4">
-                        <div className="rounded-md bg-muted p-4">
-                          <p className="text-sm font-medium text-muted-foreground">Total crates</p>
-                          <p className="mt-1 text-4xl font-semibold tabular text-foreground">
-                            {formatEmptiesCount(owner.totalCrates)}
-                          </p>
-                        </div>
-                        <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          {overviewCountRows(owner).map((row) => (
-                            <div key={row.label} className="rounded-md border border-border p-3">
-                              <dt className="text-sm text-muted-foreground">{row.label}</dt>
-                              <dd className="mt-1 font-semibold tabular">
-                                {formatEmptiesCount(row.value)}
-                              </dd>
+                        {recount.data.phase === "LEGACY" ? (
+                          <>
+                            <div className="rounded-md bg-muted p-4">
+                              <p className="text-sm font-medium text-muted-foreground">Legacy total crates</p>
+                              <p className="mt-1 text-4xl font-semibold tabular text-foreground">
+                                {formatEmptiesCount(owner.totalCrates)}
+                              </p>
                             </div>
-                          ))}
-                          <div className="rounded-md border border-border p-3">
-                            <dt className="text-sm text-muted-foreground">Empty bottles</dt>
-                            <dd className="mt-1 font-semibold tabular">
-                              {formatEmptiesCount(owner.emptyBottles)}
-                            </dd>
+                            <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                              {overviewCountRows(owner).map((row) => (
+                                <div key={row.label} className="rounded-md border border-border p-3">
+                                  <dt className="text-sm text-muted-foreground">{row.label}</dt>
+                                  <dd className="mt-1 font-semibold tabular">
+                                    {formatEmptiesCount(row.value)}
+                                  </dd>
+                                </div>
+                              ))}
+                              <div className="rounded-md border border-border p-3">
+                                <dt className="text-sm text-muted-foreground">Empty bottles</dt>
+                                <dd className="mt-1 font-semibold tabular">
+                                  {formatEmptiesCount(owner.emptyBottles)}
+                                </dd>
+                              </div>
+                            </dl>
+                            {owner.emptyValueKobo !== null && (
+                              <p className="text-sm text-muted-foreground">
+                                Display value of empties:{" "}
+                                <Money kobo={owner.emptyValueKobo} tone="neutral" />
+                              </p>
+                            )}
+                          </>
+                        ) : owner.sizeClasses.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No bottle sizes configured for this brewery.</p>
+                        ) : (
+                          <div className="space-y-3">
+                            {owner.sizeClasses.map((size) => (
+                              <section key={size.typeId} className="space-y-3 rounded-md border border-border p-3">
+                                <h3 className="font-medium">
+                                  {size.label} · {formatEmptiesCount(size.capacity)} bottles per crate
+                                  {typeById.get(size.typeId)?.isActive === false && " (inactive)"}
+                                </h3>
+                                <div className="rounded-md bg-muted p-3">
+                                  <p className="text-sm text-muted-foreground">Total stock and empties</p>
+                                  <p className="mt-1 text-xl font-semibold tabular">
+                                    {formatCratesAndBottles(size.totalCrates, size.looseTotalBottles)}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">{formatEmptiesCount(size.totalBottles)} bottles in total</p>
+                                </div>
+                                <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                                  <div>
+                                    <dt className="text-muted-foreground">Empty bottles</dt>
+                                    <dd className="font-semibold tabular">{formatCratesAndBottles(size.emptyCrates, size.looseEmptyBottles)} ({formatEmptiesCount(size.emptyBottles)} bottles)</dd>
+                                  </div>
+                                  <div>
+                                    <dt className="text-muted-foreground">Stock bottles</dt>
+                                    <dd className="font-semibold tabular">{formatEmptiesCount(size.stockBottles)}</dd>
+                                  </div>
+                                </dl>
+                              </section>
+                            ))}
                           </div>
-                        </dl>
-                        {owner.emptyValueKobo !== null && (
-                          <p className="text-sm text-muted-foreground">
-                            Display value of empties:{" "}
-                            <Money kobo={owner.emptyValueKobo} tone="neutral" />
-                          </p>
                         )}
                         <details className="rounded-md border border-border p-3">
                           <summary className="cursor-pointer font-medium">
@@ -660,11 +711,12 @@ export default function EmptiesPage() {
 
               {(overview.data.warnings.productsWithoutBrewery.length > 0 ||
                 overview.data.warnings.assignedCans.length > 0 ||
-                overview.data.warnings.productsAssignedToInactiveOwner.length > 0) && (
+                overview.data.warnings.productsAssignedToInactiveOwner.length > 0 ||
+                overview.data.warnings.productsWithoutConfirmedSize.length > 0) && (
                 <Card>
                   <CardHeader
                     title="Products to review"
-                    description="These warnings do not add crates to an active brewery total."
+                    description="Check these products before relying on brewery totals."
                   />
                   <CardBody className="space-y-4">
                     {overview.data.warnings.productsWithoutBrewery.length > 0 && (
@@ -707,6 +759,21 @@ export default function EmptiesPage() {
                             </li>
                           ))}
                         </ul>
+                      </div>
+                    )}
+                    {overview.data.warnings.productsWithoutConfirmedSize.length > 0 && (
+                      <div>
+                        <h3 className="font-medium">Products with stock but no confirmed size (not included in size totals)</h3>
+                        <ul className="mt-2 space-y-1 text-sm">
+                          {overview.data.warnings.productsWithoutConfirmedSize.map((product) => (
+                            <li key={product.productId}>
+                              {product.productName} · {product.ownerName} · {formatEmptiesCount(product.totalUnits)} units
+                            </li>
+                          ))}
+                        </ul>
+                        <Link href="/empties/purchase-setup" className="mt-3 inline-block text-sm font-medium text-primary underline">
+                          Confirm product sizes
+                        </Link>
                       </div>
                     )}
                   </CardBody>
